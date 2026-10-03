@@ -1564,6 +1564,25 @@ fn redact_beginner_master_report(report: &mut BeginnerMasterReport, case: &Asses
         group.rationale = "[redacted grouping rationale]".into();
         group.actor = "[redacted]".into();
     }
+    for group in &mut report.problem_groups {
+        if group.policy_name.is_some() {
+            group.policy_name = report
+                .findings
+                .iter()
+                .find(|finding| finding.finding_id == group.representative_finding_id)
+                .and_then(|finding| {
+                    finding.evidence_references.iter().find_map(|reference| {
+                        reference
+                            .scanner_details
+                            .as_ref()?
+                            .aws_iam_policy
+                            .as_ref()
+                            .map(|policy| policy.policy_name.clone())
+                    })
+                });
+        }
+        group.title = group.title_english();
+    }
     let redacted_finding_steps = report
         .findings
         .iter()

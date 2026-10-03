@@ -262,6 +262,8 @@ The report retains original scanner identity, rule ID, version, severity, locati
 
 Related findings may be grouped for presentation, but original observations remain accessible. Unknown severity or confidence stays unknown. Machine-readable exports derive from the same report model rather than becoming separate interpretations.
 
+Related AWS checks share one first-layer problem card only within the same terminal run and approved account: the reviewed Prowler and ScoutSuite IAM password-policy checks, their recent root-usage checks, and Cloudsplaining resource-exposure or infrastructure-modification actions on the exact same IAM policy. Policy display names alone never establish identity. Root credential management, user MFA, long-lived user credentials, and a role's unused permissions retain separate cards. A group displays the highest member severity and its original-finding count; Results and readable exports use the same problem counts. Every original title, severity, scanner time window, remediation, evidence pointer, and workflow decision remains available individually. Grouping does not raise confidence or change stored findings and correlation decisions. Missing identity or unfrozen legacy evidence stays ungrouped.
+
 External framework references, when the product team wants them, are optional context after the actionable report. They do not start, block, rank, or complete a scan and do not define the roadmap.
 
 ## 7. Recovery, data, and safety

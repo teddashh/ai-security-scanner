@@ -34,7 +34,7 @@ const caseService = read("../../src-tauri/src/case_service.rs");
 // slicing on the attribute drops 27,000 lines including everything asserted
 // below -- and would do it silently if the remaining text happened to match.
 const production = (rust: string) => {
-  const index = rust.indexOf("#[cfg(test)]\nmod tests {");
+  const index = rust.search(/#\[cfg\(test\)\]\s+(?:pub\(crate\)\s+)?mod tests\s*\{/);
   assert.notEqual(index, -1, "the test module marker was not found; this slice is stale");
   return rust.slice(0, index);
 };

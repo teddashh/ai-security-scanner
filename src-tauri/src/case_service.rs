@@ -16,7 +16,7 @@ use crate::artifact_store::{
 #[cfg(test)]
 use crate::beginner_report::ReportLifecycle;
 use crate::beginner_report::{
-    ActualCheck, BEGINNER_MASTER_REPORT_SCHEMA_VERSION, BeginnerInventoryItem,
+    ActualCheck, BEGINNER_MASTER_REPORT_SCHEMA_VERSION, BeginnerFinding, BeginnerInventoryItem,
     BeginnerInventoryItemKind, BeginnerMasterReport, BeginnerReportSummary, CheckResultKind,
     CoverageDimensionStatus, CoverageGap, CoverageGapClass, CoverageGapKind, DataAvailability,
     FindingSnapshotSource, NextActionCode, ReportScanStage, RequestedLimitSource,
@@ -15334,12 +15334,13 @@ fn html_executive_summary(
                     .find(|finding| finding.finding_id == finding_id)
             })
             .and_then(|finding| {
-                let title = finding.title.trim();
+                let title = html_problem_title(report, finding, catalog);
+                let title = title.trim();
                 let title = title
                     .strip_suffix('.')
                     .or_else(|| title.strip_suffix('。'))
                     .unwrap_or(title);
-                (!title.is_empty()).then_some(title)
+                (!title.is_empty()).then(|| title.to_owned())
             });
         match (catalog.locale, named_problem) {
             (crate::export::ReportLocale::ZhHant, Some(title)) => {
@@ -15452,7 +15453,7 @@ fn html_executive_summary(
 fn problem_severity_counts(report: &BeginnerMasterReport) -> Vec<(crate::domain::Severity, usize)> {
     use crate::domain::Severity;
     let mut counts = BTreeMap::new();
-    for finding in &report.findings {
+    for finding in report.problem_findings() {
         if finding
             .severity_basis_code
             .is_some_and(|code| code.is_exposure_observation())
@@ -16269,7 +16270,7 @@ fn asset_severity_counts(
 ) -> Vec<(crate::domain::Severity, usize)> {
     let mut seen = BTreeSet::new();
     let mut counts = BTreeMap::new();
-    for finding in &report.findings {
+    for finding in report.problem_findings() {
         if finding
             .severity_basis_code
             .is_some_and(|basis| basis.is_exposure_observation())
@@ -17902,6 +17903,130 @@ fn html_confidence_legend(
     )
 }
 
+fn html_problem_title(
+    report: &BeginnerMasterReport,
+    finding: &BeginnerFinding,
+    catalog: HtmlReportCatalog,
+) -> String {
+    report.problem_group(&finding.finding_id).map_or_else(
+        || finding.title.clone(),
+        |group| match catalog.locale {
+            crate::export::ReportLocale::En => group.title_english(),
+            crate::export::ReportLocale::ZhHant => group.title_zh_hant(),
+        },
+    )
+}
+
+fn html_problem_anchor(report: &BeginnerMasterReport, finding_id: &str) -> Option<String> {
+    if let Some(group) = report.problem_group(finding_id) {
+        return report
+            .problem_findings()
+            .iter()
+            .position(|finding| finding.finding_id == group.representative_finding_id)
+            .map(|index| format!("problem{}", index + 1));
+    }
+    report
+        .findings
+        .iter()
+        .position(|finding| finding.finding_id == finding_id)
+        .map(|index| format!("f{}", index + 1))
+}
+
+fn html_grouped_problem_cards(
+    report: &BeginnerMasterReport,
+    original_cards: &BTreeMap<Id, String>,
+    target_labels: &BTreeMap<Id, String>,
+    catalog: HtmlReportCatalog,
+) -> (String, String, usize) {
+    let mut cards = String::new();
+    let mut rows = String::new();
+    let mut count = 0;
+    for finding in report.problem_findings() {
+        if finding
+            .severity_basis_code
+            .is_some_and(|basis| basis.is_exposure_observation())
+        {
+            continue;
+        }
+        count += 1;
+        let title = html_problem_title(report, finding, catalog);
+        let anchor = html_problem_anchor(report, &finding.finding_id).unwrap();
+        let severity = catalog.identifier(&enum_key(&finding.severity));
+        let unconfirmed = finding_unconfirmed_by_coverage(finding, &report.actual);
+        let action = match catalog.locale {
+            crate::export::ReportLocale::En => {
+                crate::finding_narrative::finding_next_action_english(
+                    &finding.next_step,
+                    finding.family,
+                    beginner_aws_iam_policy(finding),
+                    unconfirmed,
+                )
+            }
+            crate::export::ReportLocale::ZhHant => {
+                crate::finding_narrative::finding_next_action_zh_hant(
+                    &finding.next_step,
+                    &finding.recommended_expert_type,
+                    finding.family,
+                    beginner_aws_iam_policy(finding),
+                    unconfirmed,
+                )
+            }
+        };
+        let action = report
+            .problem_group(&finding.finding_id)
+            .and_then(|group| match catalog.locale {
+                crate::export::ReportLocale::En => group.next_step_english(),
+                crate::export::ReportLocale::ZhHant => group.next_step_zh_hant(),
+            })
+            .map(str::to_owned)
+            .unwrap_or(action);
+        let targets = breakable_target_list(&finding.target_asset_ids, target_labels, catalog);
+        rows.push_str(&format!("<tr><td class=\"numeric\"><a href=\"#{anchor}\">{count}</a></td><td><span class=\"pill pill--{}\">{}</span></td><td>{}</td><td>{}</td><td>{}</td></tr>",
+            severity_slug(&finding.severity), html_escape(&severity), html_escape(&title), targets, html_escape(&action)));
+        if let Some(group) = report.problem_group(&finding.finding_id) {
+            let members = group
+                .finding_ids
+                .iter()
+                .filter_map(|id| original_cards.get(id))
+                .cloned()
+                .collect::<String>();
+            let impact = match catalog.locale {
+                crate::export::ReportLocale::En => crate::finding_narrative::impact_english(
+                    &finding.possible_impact,
+                    finding.family,
+                    &finding.context_factors,
+                ),
+                crate::export::ReportLocale::ZhHant => crate::finding_narrative::impact_zh_hant(
+                    &finding.possible_impact,
+                    &finding.severity,
+                    &severity,
+                    finding.severity_basis_code,
+                    finding.family,
+                    &finding.context_factors,
+                ),
+            };
+            let impact = match catalog.locale {
+                crate::export::ReportLocale::En => group.impact_english(),
+                crate::export::ReportLocale::ZhHant => group.impact_zh_hant(),
+            }
+            .map(str::to_owned)
+            .unwrap_or(impact);
+            cards.push_str(&format!(concat!(
+                "<article class=\"finding\" id=\"{}\"><h3>{} <span class=\"finding-asset\">— {}</span></h3><p><span class=\"pill pill--{}\">{}</span> · {} {}</p>",
+                "<p>{}</p><p>{}{}</p><p>{}{}</p>",
+                "<details class=\"technical finding-problem-group\"><summary>{} ({})</summary>{}</details></article>"),
+                anchor, html_escape(&title), targets, severity_slug(&finding.severity), html_escape(&severity),
+                catalog.format_number(group.finding_ids.len()), catalog.text("original findings", "筆原始發現"), html_escape(&impact),
+                catalog.strong_label(catalog.text("Target", "目標")), targets,
+                catalog.strong_label(catalog.text("What to do next", "下一步怎麼做")), html_escape(&action),
+                catalog.text("Related checks", "相關檢查"), catalog.format_number(group.finding_ids.len()), members));
+        } else if let Some(card) = original_cards.get(&finding.finding_id) {
+            cards.push_str(card);
+        }
+    }
+    (cards, rows, count)
+}
+
 fn html_report_bytes(
     case: &AssessmentCase,
     run_id: &str,
@@ -18462,26 +18587,40 @@ fn html_report_bytes(
             let reason = if step.also_resolves.is_empty() {
                 reason
             } else {
-                let count = step.also_resolves.len() + 1;
-                match catalog.locale {
-                    crate::export::ReportLocale::En => {
-                        format!("{count} problems name this same fix. The first is {reason}")
+                let count = step
+                    .also_resolves
+                    .iter()
+                    .chain(step.finding_id.iter())
+                    .map(|id| {
+                        report
+                            .problem_group(id)
+                            .map(|group| group.group_id.as_str())
+                            .unwrap_or(id.as_str())
+                    })
+                    .collect::<BTreeSet<_>>()
+                    .len();
+                if count > 1 {
+                    match catalog.locale {
+                        crate::export::ReportLocale::En => {
+                            format!("{count} problems name this same fix. The first is {reason}")
+                        }
+                        crate::export::ReportLocale::ZhHant => {
+                            format!("有 {count} 項問題指向同一個修復方式，第一項是 {reason}")
+                        }
                     }
-                    crate::export::ReportLocale::ZhHant => {
-                        format!("有 {count} 項問題指向同一個修復方式，第一項是 {reason}")
-                    }
+                } else {
+                    reason
                 }
             };
             // Intra-document only: the problems table and finding cards already
             // emit `#f{n}` for this same finding. Scanner-supplied URLs stay
             // inert text; this is a link to this report's own card.
-            let reason_html = match step.finding_id.as_ref().and_then(|finding_id| {
-                report
-                    .findings
-                    .iter()
-                    .position(|finding| finding.finding_id == *finding_id)
-            }) {
-                Some(index) => format!("<a href=\"#f{}\">{}</a>", index + 1, html_escape(&reason),),
+            let reason_html = match step
+                .finding_id
+                .as_ref()
+                .and_then(|finding_id| html_problem_anchor(&report, finding_id))
+            {
+                Some(anchor) => format!("<a href=\"#{anchor}\">{}</a>", html_escape(&reason)),
                 None => html_escape(&reason),
             };
             // A Chinese action that ends its own sentence takes no dash: the
@@ -18578,6 +18717,7 @@ fn html_report_bytes(
     let mut confidence_bases_used: Vec<crate::domain::ConfidenceBasisCode> = Vec::new();
     let mut confidence_basis_counts: Vec<(crate::domain::ConfidenceBasisCode, usize)> = Vec::new();
     let mut observations = String::new();
+    let mut original_finding_cards = BTreeMap::<Id, String>::new();
     let mut problem_count = 0usize;
     for (index, finding) in report.findings.iter().enumerate() {
         let priority = finding
@@ -18970,7 +19110,7 @@ fn html_report_bytes(
                 )
                 .to_owned(),
         };
-        findings.push_str(&format!(
+        let finding_card = format!(
             concat!(
                 // The asset belongs in the heading, not four items into the
                 // identifier line below it. On a mixed run two scanners find
@@ -19038,10 +19178,7 @@ fn html_report_bytes(
             // capture hashes, and the same catalog rationale and mapping
             // provenance repeated once per reference -- read before the
             // reader reached the next problem. All of it is still here.
-            catalog.text(
-                "Evidence and framework references",
-                "證據與框架參照",
-            ),
+            catalog.text("Evidence and framework references", "證據與框架參照",),
             // The identity line and the ranking rationale moved in here with
             // it. A forty-character fingerprint and a restatement of the two
             // ratings already shown as pills are how the report knows, not
@@ -19056,7 +19193,13 @@ fn html_report_bytes(
             evidence,
             catalog.text("Related framework references", "相關框架參考"),
             frameworks,
-        ));
+        );
+        original_finding_cards.insert(finding.finding_id.clone(), finding_card.clone());
+        findings.push_str(&finding_card);
+    }
+    if !report.problem_groups.is_empty() {
+        (findings, index_rows, problem_count) =
+            html_grouped_problem_cards(&report, &original_finding_cards, &target_labels, catalog);
     }
     if findings.is_empty() {
         findings.push_str(catalog.text(
@@ -19123,6 +19266,26 @@ fn html_report_bytes(
     // reader that confidence describes evidence strength; this is the rest of
     // that sentence, and the table itself has no confidence column to explain.
     let finding_index = confidence_legend + finding_index.as_str();
+    let finding_index = if report.problem_groups.is_empty() {
+        finding_index
+    } else {
+        format!(
+            "<p>{} {} · {} {}</p>{}",
+            catalog.format_number(problem_count),
+            catalog.text("problems", "項問題"),
+            catalog.format_number(
+                report
+                    .findings
+                    .iter()
+                    .filter(|finding| !finding
+                        .severity_basis_code
+                        .is_some_and(|basis| basis.is_exposure_observation()))
+                    .count()
+            ),
+            catalog.text("original findings", "筆原始發現"),
+            finding_index
+        )
+    };
 
     // Twenty-four task records carried the same four lines about the same
     // diagnostic log. Whether a run's scanner log can be read back is a
@@ -19632,7 +19795,7 @@ fn html_report_bytes(
         ".finding-asset{font-weight:400;color:var(--muted)}",
         "details.finding-technical{margin-top:.55rem;padding-top:.35rem}",
         "details.finding-technical>summary{cursor:pointer;color:var(--muted)}",
-        "@media(max-width:760px){body{padding:1.25rem}.report-grid{grid-template-columns:1fr}table{display:block;overflow-x:auto}}",
+        "@media(max-width:760px){body{padding:1.25rem;overflow-wrap:anywhere}.report-grid{grid-template-columns:minmax(0,1fr)}.report-card{min-width:0}table{display:block;overflow-x:auto}}",
         ".pill{display:inline-block;border:1px solid currentColor;border-radius:1rem;padding:.08rem .6rem;font-size:.82rem;white-space:nowrap}",
         ".finding-meta{display:flex;flex-wrap:wrap;gap:.3rem .45rem;align-items:center;color:var(--muted);font-size:.85rem}",
         ".finding-index{font-size:.85rem;table-layout:fixed}",
@@ -36716,6 +36879,70 @@ mod tests {
             .unwrap(),
         )
         .unwrap()
+    }
+
+    #[test]
+    fn html_report_groups_related_checks_and_keeps_all_original_evidence_cards() {
+        let case = crate::report_problem_groups::tests::approved_case();
+        for locale in [
+            crate::export::ReportLocale::En,
+            crate::export::ReportLocale::ZhHant,
+        ] {
+            let html = String::from_utf8(
+                html_report_bytes(
+                    &case,
+                    "run-1",
+                    &ExportOptions {
+                        redaction: RedactionProfile::None,
+                        include_raw_artifacts: false,
+                        locale,
+                    },
+                )
+                .unwrap(),
+            )
+            .unwrap();
+            let index = html
+                .split("<table class=\"finding-index\">")
+                .nth(1)
+                .unwrap()
+                .split("</table>")
+                .next()
+                .unwrap();
+            assert_eq!(index.matches("<tr>").count(), 14); // heading + 13 problem rows
+            assert!(!index.contains("Original"));
+            for (offset, finding) in case.findings.iter().enumerate() {
+                assert!(html.contains(&format!("id=\"f{}\"", offset + 1)));
+                assert!(html.contains(&html_escape(&finding.title)));
+                assert!(html.contains(&finding.evidence[0].artifact_sha256));
+            }
+            assert!(html.contains(match locale {
+                crate::export::ReportLocale::En => "31 original findings",
+                crate::export::ReportLocale::ZhHant => "31 筆原始發現",
+            }));
+            let report =
+                crate::beginner_report::build_beginner_master_report(&case, "run-1").unwrap();
+            assert_eq!(
+                problem_severity_counts(&report)
+                    .iter()
+                    .map(|(_, count)| count)
+                    .sum::<usize>(),
+                13
+            );
+            assert_eq!(
+                asset_severity_counts(&report, &"localhost-asset".into())
+                    .iter()
+                    .map(|(_, count)| count)
+                    .sum::<usize>(),
+                13
+            );
+            for group in &report.problem_groups {
+                let anchor = html_problem_anchor(&report, &group.finding_ids[0]).unwrap();
+                assert!(html.contains(&format!("id=\"{anchor}\"")));
+                assert!(
+                    html.contains("<details class=\"technical finding-problem-group\"><summary>")
+                );
+            }
+        }
     }
 
     fn html_report_for_rated_httpx_finding(

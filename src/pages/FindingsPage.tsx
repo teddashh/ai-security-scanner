@@ -13,6 +13,7 @@ import {
 } from "../findingsReportAvailability";
 import { localizedCoverageDimension } from "../coverageDimensionPresentation";
 import { projectVisibleFindingGroups } from "../findingGroupPresentation";
+import { problemGroupAction, problemGroupImpact, problemGroupTitle, projectProblemRows } from "../reportProblemPresentation";
 import { isExposureObservation, isSecurityFinding } from "../findingClassification";
 import {
   awsIamPolicySourceLabel,
@@ -502,6 +503,8 @@ const copy = {
   rankAria: { en: "Handoff priority {rank}", zhTW: "交接優先順序第 {rank} 位" },
   rank: { en: "#{rank}", zhTW: "第 {rank}" },
   evidenceCount: { en: "Evidence records: {count}", zhTW: "{count} 份證據" },
+  originalFindingCount: { en: "{count} original findings", zhTW: "{count} 筆原始發現" },
+  relatedChecks: { en: "Related checks ({count})", zhTW: "相關檢查（{count} 筆）" },
   // Ordering by confidence cannot explain who made a rating. Keep the engine
   // and product-derived marker visible on the row where a beginner first sees
   // the finding.
@@ -1257,11 +1260,12 @@ function AssetResultBoard({
   if (report.requested.targets.length === 0) return null;
 
   const securityFindings = report.findings.filter(isSecurityFinding);
+  const problemRows = projectProblemRows(securityFindings, report.problemGroups);
   const rows = report.requested.targets.map((target) => {
     const findingCount = new Set(
-      securityFindings
-        .filter((finding) => finding.targetAssetIds.includes(target.assetId))
-        .map((finding) => finding.findingId),
+      problemRows
+        .filter(({finding}) => finding.targetAssetIds.includes(target.assetId))
+        .map(({finding}) => finding.findingId),
     ).size;
     const checks = report.actual.checks.filter((check) =>
       check.targetAssetIds.includes(target.assetId));
@@ -1602,7 +1606,7 @@ function BeginnerReportOverview({ report, run }: { report: BeginnerMasterReport;
   const securityFindingIds = new Set(
     report.findings.filter(isSecurityFinding).map((finding) => finding.findingId),
   );
-  const problemCount = securityFindingIds.size;
+  const problemCount = projectProblemRows(report.findings.filter(isSecurityFinding), report.problemGroups).length;
   const localhostSummary = run && isExactBuiltInLocalhostQuickScanRun(run)
     ? localhostTcpBeginnerSummary(run.engineRuns[0]!)
     : undefined;
@@ -2214,7 +2218,8 @@ function BeginnerReportOverview({ report, run }: { report: BeginnerMasterReport;
       {orderedNextSteps.length > 0 ? (
         <ol className="detail-list">
           {orderedNextSteps.map((step, index) => {
-            const covers = (step.alsoResolves?.length ?? 0) + 1;
+            const covers = new Set([step.findingId, ...(step.alsoResolves ?? [])].filter(Boolean).map(id =>
+              report.problemGroups?.find(group => group.findingIds.includes(id!))?.groupId ?? id)).size;
             const closes = stepCoverageNames(step, report, locale, run);
             return (
               <li key={`${step.code}-${step.findingId ?? step.taskId ?? index}`}>
@@ -2407,9 +2412,13 @@ export function FindingsPage({
       : [...findings].sort((a, b) => b.priority - a.priority || a.title.localeCompare(b.title, collationLocale)),
     [collationLocale, findings, report],
   );
+  const orderedProblems = useMemo(
+    () => projectProblemRows(ordered, report?.problemGroups),
+    [ordered, report?.problemGroups],
+  );
   const displayRankByFindingId = useMemo(
-    () => new Map(ordered.map((finding, index) => [finding.id, index + 1])),
-    [ordered],
+    () => new Map(orderedProblems.flatMap((row, index) => row.members.map(finding => [finding.id, index + 1] as const))),
+    [orderedProblems],
   );
   const expertTypes = useMemo(
     () => [...new Set(findings.map((finding) => finding.expertType).filter(Boolean))].sort((a, b) => a.localeCompare(b, collationLocale)),
@@ -2438,6 +2447,7 @@ export function FindingsPage({
       const matchesAsset = selectedAssetId === undefined || findingAssetIds.includes(selectedAssetId);
       const matchesQuery = !normalizedQuery || [
         finding.title,
+        ...report?.problemGroups?.filter(group => group.findingIds.includes(finding.id)).map(group => problemGroupTitle(group, locale)) ?? [],
         finding.assetName,
         finding.summary,
         finding.expertType,
@@ -2448,9 +2458,18 @@ export function FindingsPage({
       ].join(" ").toLocaleLowerCase(collationLocale).includes(normalizedQuery);
       return matchesSeverity && matchesWorkflow && matchesExpert && matchesControl && matchesAsset && matchesQuery;
     });
-  }, [collationLocale, control, expertType, ordered, query, selectedAssetId, severity, workflow]);
+  }, [collationLocale, control, expertType, locale, ordered, query, report?.problemGroups, selectedAssetId, severity, workflow]);
 
+  const filteredProblems = useMemo(
+    () => projectProblemRows(filtered, report?.problemGroups),
+    [filtered, report?.problemGroups],
+  );
   const selected = filtered.find((finding) => finding.id === selectedId);
+  const selectedProblem = orderedProblems.find(row => row.members.some(member => member.id === selectedId));
+  const selectedProblemGroup = selectedProblem?.group;
+  const selectedProblemMembers = selectedProblemGroup
+    ? selectedProblem!.members
+    : [];
   const selectedScannerRemediations = selected
     ? uniqueScannerRemediations(selected.evidence)
     : [];
@@ -2468,7 +2487,11 @@ export function FindingsPage({
   const selectedEvents = workflowEvents
     .filter((event) => event.findingId === selectedId)
     .sort((left, right) => right.decidedAt.localeCompare(left.decidedAt));
-  const topFindings = ordered.filter((finding) => finding.workflowState !== "verified_resolved" && finding.workflowState !== "false_positive").slice(0, 3);
+  const activeProblems = useMemo(() => projectProblemRows(
+    ordered.filter((finding) => finding.workflowState !== "verified_resolved" && finding.workflowState !== "false_positive"),
+    report?.problemGroups,
+  ), [ordered, report?.problemGroups]);
+  const topFindings = activeProblems.slice(0, 3);
   const affectedAssetSummaries = useMemo(() => {
     const targetById = new Map(
       (report?.requested.targets ?? []).map((target) => [target.assetId, target]),
@@ -2481,8 +2504,7 @@ export function FindingsPage({
       topFindingId: string;
       topFindingTitle: string;
     }>();
-    for (const finding of ordered) {
-      if (finding.workflowState === "verified_resolved" || finding.workflowState === "false_positive") continue;
+    for (const {finding, group} of activeProblems) {
       const assetIds = finding.assetIds?.length ? finding.assetIds : [finding.assetId];
       for (const assetId of new Set(assetIds)) {
         const existing = summaries.get(assetId);
@@ -2506,7 +2528,7 @@ export function FindingsPage({
           findingCount: 1,
           highestSeverity: finding.severity,
           topFindingId: finding.id,
-          topFindingTitle: finding.title,
+          topFindingTitle: group ? problemGroupTitle(group, locale) : finding.title,
         });
       }
     }
@@ -2514,7 +2536,7 @@ export function FindingsPage({
       severityOrder.indexOf(left.highestSeverity) - severityOrder.indexOf(right.highestSeverity)
       || right.findingCount - left.findingCount
       || left.label.localeCompare(right.label, collationLocale));
-  }, [collationLocale, locale, ordered, report?.requested.targets]);
+  }, [activeProblems, collationLocale, locale, report?.requested.targets]);
   // Evidence carried over from an earlier run names an engine run of that
   // run, so every run the page holds is searched, not only the one on screen.
   const engineNameByEngineRunId = new Map(runs.flatMap((run) =>
@@ -2527,9 +2549,9 @@ export function FindingsPage({
       .filter((location): location is string => Boolean(location))
       .map((location) => findingLocationText(locale, location))),
   ];
-  const criticalCount = findings.filter((finding) => finding.severity === "critical").length;
-  const highCount = findings.filter((finding) => finding.severity === "high").length;
-  const needsReview = findings.filter((finding) => ["unreviewed", "unconfirmed", "expert_review_requested"].includes(finding.workflowState)).length;
+  const criticalCount = orderedProblems.filter(({finding}) => finding.severity === "critical").length;
+  const highCount = orderedProblems.filter(({finding}) => finding.severity === "high").length;
+  const needsReview = orderedProblems.filter(({members}) => members.some(finding => ["unreviewed", "unconfirmed", "expert_review_requested"].includes(finding.workflowState))).length;
   const affectedAssets = new Set(findings.flatMap((finding) => finding.assetIds ?? [finding.assetId])).size;
   const selectedAssetLabel = affectedAssetSummaries.find((asset) => asset.assetId === selectedAssetId)?.label
     ?? selectedAssetId;
@@ -3052,10 +3074,10 @@ export function FindingsPage({
             <h2>{text(copy.priorityTitle)}</h2>
           </div>
           <div className="priority-grid">
-            {topFindings.map((finding, index) => {
-              const scannerRemediations = uniqueScannerRemediations(finding.evidence);
-              const scannerFixedVersions = uniqueScannerFixedVersions(finding.evidence);
-              const locations = locationsFor(finding);
+            {topFindings.map(({finding, group, members}, index) => {
+              const scannerRemediations = group ? [] : uniqueScannerRemediations(finding.evidence);
+              const scannerFixedVersions = group ? [] : uniqueScannerFixedVersions(finding.evidence);
+              const locations = group ? [] : locationsFor(finding);
               return (
               <button
                 key={finding.id}
@@ -3066,10 +3088,11 @@ export function FindingsPage({
                 <span className="priority-card__number">{String(index + 1).padStart(2, "0")}</span>
                 <span className="priority-card__status">
                   <StatusPill label={severityLabelFor(finding)} tone={severityMeta[finding.severity].tone} />
-                  <StatusPill label={confidenceMeta[finding.confidence]} tone="neutral" />
+                  {!group && <StatusPill label={confidenceMeta[finding.confidence]} tone="neutral" />}
+                  {group && <span>{text(copy.originalFindingCount, {count: formatNumber(members.length)})}</span>}
                 </span>
-                <h3>{finding.title}</h3>
-                <p className="priority-card__impact">{findingImpactSentence(locale, {
+                <h3>{group ? problemGroupTitle(group, locale) : finding.title}</h3>
+                <p className="priority-card__impact">{problemGroupImpact(group, locale) ?? findingImpactSentence(locale, {
                   englishFallback: finding.impact,
                   severity: finding.severity,
                   severityLabel: severityMeta[finding.severity].label,
@@ -3087,7 +3110,7 @@ export function FindingsPage({
                 <span className="priority-card__guidance">
                   <span>
                     <strong>{text(copy.nextActionNow)}</strong>
-                    {findingActionSentence(locale, {
+                    {problemGroupAction(group, locale) ?? findingActionSentence(locale, {
                       englishFallback: finding.recommendation,
                       family: finding.family,
                       awsIamPolicy: finding.awsIamPolicy,
@@ -3103,7 +3126,7 @@ export function FindingsPage({
                   {scannerFixedVersions.length > 0 && (
                     <span><strong>{text(copy.fixedVersion)}</strong>{scannerFixedVersions.join(" · ")}</span>
                   )}
-                  {finding.verificationGuidance && (
+                  {!group && finding.verificationGuidance && (
                     <span>
                       <strong>{text(copy.verifyFix)}</strong>
                       {findingVerificationSentence(locale, finding.verificationGuidance, finding.title)}
@@ -3419,7 +3442,7 @@ export function FindingsPage({
         <div className="finding-browser__list">
           <div className="section-heading section-heading--row finding-toolbar-heading">
             <div><p className="eyebrow">{text(copy.allProblems)}</p><h2>{text(copy.completeList)}</h2></div>
-            <span className="count-label">{formatNumber(filtered.length)} / {formatNumber(findings.length)}</span>
+            <span className="count-label">{formatNumber(filteredProblems.length)} / {formatNumber(orderedProblems.length)}{report?.problemGroups?.length ? ` · ${text(copy.originalFindingCount, {count: formatNumber(findings.length)})}` : ""}</span>
           </div>
 
           <div className="finding-filter-stack">
@@ -3477,11 +3500,11 @@ export function FindingsPage({
               <li className="finding-list__empty">
                 <EmptyState icon="search" title={text(copy.noMatches)} description={text(copy.noMatchesDescription)} action={<button className="button button--ghost button--small" type="button" onClick={clearFilters}>{text(copy.clearFilters)}</button>} />
               </li>
-            ) : filtered.map((finding) => (
+            ) : filteredProblems.map(({finding, group, members}) => (
               <li key={finding.id}>
                 <button
                   type="button"
-                  className={selectedId === finding.id ? "finding-row finding-row--active" : "finding-row"}
+                  className={members.some(member => member.id === selectedId) ? "finding-row finding-row--active" : "finding-row"}
                   onClick={() => revealFinding(finding.id, { preserveFilters: true, scrollOnWideLayout: false })}
                 >
                   <span className="finding-row__priority" aria-label={text(copy.rankAria, { rank: displayRankByFindingId.get(finding.id) ?? "—" })}>
@@ -3495,9 +3518,10 @@ export function FindingsPage({
                           {text(copy.ratedByProduct)}
                         </span>
                       )}
-                      <StatusPill label={workflowMeta[finding.workflowState]} tone={workflowTone(finding.workflowState)} />
+                      {!group && <StatusPill label={workflowMeta[finding.workflowState]} tone={workflowTone(finding.workflowState)} />}
+                      {group && <span>{text(copy.originalFindingCount, {count: formatNumber(members.length)})}</span>}
                     </span>
-                    <strong>{finding.title}</strong>
+                    <strong>{group ? problemGroupTitle(group, locale) : finding.title}</strong>
                     <span>
                       {[
                         finding.assetName,
@@ -3505,14 +3529,15 @@ export function FindingsPage({
                         // wrote. Without it every finding on one repository reads
                         // as the repository name: engine runs are single-asset,
                         // so `assetName` is the same target label on every row.
-                        engineNameFrom(finding.summary),
-                        text(copy.evidenceCount, { count: formatNumber(finding.evidence.length) }),
-                        findingConfidencePresentation(
+                        group ? [...new Set(members.flatMap(member => member.evidence.map(evidence =>
+                          engineNameByEngineRunId.get(evidence.engineRunId ?? "") ?? evidence.sourceEngine)))].join(" · ") : engineNameFrom(finding.summary),
+                        text(copy.evidenceCount, { count: formatNumber(members.reduce((count, member) => count + member.evidence.length, 0)) }),
+                        !group ? findingConfidencePresentation(
                           locale,
                           confidenceMeta[finding.confidence],
                           finding.confidenceBasisCode,
                           finding.priorityReasons ?? [],
-                        ),
+                        ) : undefined,
                       ].filter(Boolean).join(" · ")}
                     </span>
                   </span>
@@ -3526,6 +3551,25 @@ export function FindingsPage({
         <section className={`finding-detail${selected ? "" : " finding-detail--empty"}`} aria-live="polite">
           {selected ? (
             <>
+              {selectedProblemGroup && selectedProblemMembers.length > 1 && (
+                <details key={selectedProblemGroup.groupId} className="detail-section page-secondary-feature" open>
+                  <summary>{problemGroupTitle(selectedProblemGroup, locale)} · {text(copy.relatedChecks, {count: formatNumber(selectedProblemMembers.length)})}</summary>
+                  {problemGroupAction(selectedProblemGroup, locale) && <p>{problemGroupAction(selectedProblemGroup, locale)}</p>}
+                  <ul className="detail-list problem-group-members">
+                    {selectedProblemMembers.map(member => (
+                      <li key={member.id}>
+                        <button className="button button--ghost button--small" type="button" aria-current={member.id === selected.id ? "true" : undefined} onClick={() => revealFinding(member.id)}>
+                          {member.title}
+                        </button>
+                        <span className="tag-row">
+                          <StatusPill label={severityLabelFor(member)} tone={severityMeta[member.severity].tone} />
+                          <span>{[...new Set(member.evidence.map(evidence => evidence.sourceEngine))].join(" · ")}</span>
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                </details>
+              )}
               <div className="finding-detail__header">
                 <div className="tag-row">
                   <StatusPill label={severityLabelFor(selected)} tone={severityMeta[selected.severity].tone} />

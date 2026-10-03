@@ -2732,10 +2732,17 @@ fn every_integrated_engine_lands_in_one_terminal_report() {
             // from it. The cards are titled identically by upstream, so with the asset
             // four items into the identifier line the reader sees the same heading
             // twice in a row and reads it as the report duplicating one problem.
-            let headings = problems
-                .match_indices("<h3>")
-                .map(|(at, _)| {
-                    let rest = &problems[at + "<h3>".len()..];
+            // Presentation groups can move originals into related-check
+            // details. Verify every original by its durable anchor, rather
+            // than treating group headings as additional scanner findings.
+            let headings = report
+                .findings
+                .iter()
+                .enumerate()
+                .map(|(index, _)| {
+                    let anchor = format!("<article id=\"f{}\">", index + 1);
+                    let card = &problems[problems.find(&anchor).expect("original finding card")..];
+                    let rest = &card[card.find("<h3>").expect("original heading") + "<h3>".len()..];
                     rest[..rest.find("</h3>").expect("heading end")].to_owned()
                 })
                 .collect::<Vec<_>>();
@@ -2775,7 +2782,13 @@ fn every_integrated_engine_lands_in_one_terminal_report() {
             let grype_card_at = problems[..grype_impact_at]
                 .rfind("<article id=\"f")
                 .expect("Grype finding card");
-            let grype_finding_index = problems[..grype_card_at].matches("<article id=\"f").count();
+            let grype_finding_index = problems[grype_card_at + "<article id=\"f".len()..]
+                .split('"')
+                .next()
+                .expect("original finding ordinal")
+                .parse::<usize>()
+                .unwrap()
+                - 1;
             let grype_finding = &report.findings[grype_finding_index];
             assert!(
                 !grype_finding.target_asset_ids.is_empty()

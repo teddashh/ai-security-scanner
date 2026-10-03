@@ -18,6 +18,7 @@ use crate::execution_coverage::{
     CumulativeNaabuCoverage, WorkUnitOutcome, reduce_naabu_attempt_coverage,
 };
 use crate::naabu_work_plan::{NAABU_ENGINE_ID, NaabuWorkStage};
+pub use crate::report_problem_groups::{ReportProblemGroup, ReportProblemKind};
 use chrono::{DateTime, NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -120,10 +121,65 @@ pub struct BeginnerMasterReport {
     pub findings: Vec<BeginnerFinding>,
     #[serde(default)]
     pub finding_groups: Vec<BeginnerFindingGroup>,
+    /// Related selected-run checks, grouped only for report presentation.
+    /// Every original observation remains in `findings`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub problem_groups: Vec<ReportProblemGroup>,
     pub next_steps: Vec<BeginnerNextStep>,
     pub technical_details: TechnicalDetails,
     pub framework_notice: FrameworkNotice,
     pub data_quality_warnings: Vec<String>,
+}
+
+impl BeginnerMasterReport {
+    /// One first-layer row per problem. Group members retain their original
+    /// fields in `findings`; the representative carries the highest severity.
+    pub fn problem_findings(&self) -> Vec<&BeginnerFinding> {
+        let by_id = self
+            .findings
+            .iter()
+            .map(|finding| (finding.finding_id.as_str(), finding))
+            .collect::<BTreeMap<_, _>>();
+        let mut membership = BTreeMap::new();
+        for group in &self.problem_groups {
+            if group.finding_ids.len() < 2
+                || !group.finding_ids.contains(&group.representative_finding_id)
+                || !group.finding_ids.iter().all(|id| {
+                    by_id.get(id.as_str()).is_some_and(|finding| {
+                        finding.target_asset_ids.as_slice() == [group.target_asset_id.clone()]
+                    })
+                })
+                || group
+                    .finding_ids
+                    .iter()
+                    .any(|id| membership.contains_key(id.as_str()))
+            {
+                continue;
+            }
+            for id in &group.finding_ids {
+                membership.insert(id.as_str(), group);
+            }
+        }
+        let mut emitted = BTreeSet::new();
+        self.findings
+            .iter()
+            .filter_map(
+                |finding| match membership.get(finding.finding_id.as_str()) {
+                    Some(group) if emitted.insert(group.group_id.as_str()) => {
+                        by_id.get(group.representative_finding_id.as_str()).copied()
+                    }
+                    Some(_) => None,
+                    None => Some(finding),
+                },
+            )
+            .collect()
+    }
+
+    pub fn problem_group(&self, finding_id: &str) -> Option<&ReportProblemGroup> {
+        self.problem_groups
+            .iter()
+            .find(|group| group.finding_ids.iter().any(|id| id == finding_id))
+    }
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -836,6 +892,7 @@ pub fn build_beginner_master_report(
     let (mut findings, finding_warnings) = project_findings(case, run);
     apply_coverage_constrained_finding_actions(&mut findings, &actual);
     let finding_groups = project_finding_groups(case, &findings);
+    let problem_groups = crate::report_problem_groups::build_problem_groups(&findings, run);
     data_quality_warnings.extend(finding_warnings);
     debug_assert!(data_quality_warnings.iter().all(|warning| {
         crate::finding_narrative::data_quality_warning_zh_hant(warning).is_some()
@@ -930,6 +987,7 @@ pub fn build_beginner_master_report(
         inventory,
         findings,
         finding_groups,
+        problem_groups,
         next_steps,
         technical_details,
         framework_notice: FrameworkNotice {
@@ -5001,7 +5059,7 @@ fn gap_rank(kind: CoverageGapKind) -> u8 {
     }
 }
 
-fn severity_rank(severity: &Severity) -> u8 {
+pub(crate) fn severity_rank(severity: &Severity) -> u8 {
     match severity {
         Severity::Informational => 0,
         Severity::Unknown => 1,
@@ -5023,7 +5081,7 @@ fn confidence_rank(confidence: &Confidence) -> u8 {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     #[test]
     fn legacy_coverage_gap_without_class_defaults_to_conservative_coverage_loss() {
         let legacy = serde_json::json!({
@@ -5264,6 +5322,36 @@ mod tests {
                 error_message: None,
             }],
         });
+        case
+    }
+
+    pub(crate) fn aws_grouping_case() -> AssessmentCase {
+        let mut case = localhost_case(
+            LocalhostTcpOutcome::Reachable,
+            EngineRunStatus::Completed,
+            true,
+        );
+        let asset = &mut case.assets[0];
+        asset.kind = AssetKind::CloudAccount;
+        asset.name = "Example AWS account".into();
+        asset.provider = Some("aws".into());
+        asset.identifiers = vec![AssetIdentifier {
+            namespace: "aws_account_id".into(),
+            value: "123456789012".into(),
+        }];
+        case.scan_runs[0].report_asset_snapshots = vec![ReportAssetSnapshot {
+            asset: asset.clone(),
+            disposition: crate::domain::ReportAssetDisposition::RequestedForScan,
+        }];
+        case.scan_runs[0].engine_runs = ["prowler", "scoutsuite", "cloudsplaining"]
+            .into_iter()
+            .map(|engine| {
+                let mut task = catalog_task(engine, EngineRunStatus::Completed);
+                task.engine_id = engine.into();
+                task.asset_ids = vec!["localhost-asset".into()];
+                task
+            })
+            .collect();
         case
     }
 
@@ -9103,7 +9191,7 @@ mod tests {
         assert!(decoded_evidence.redacted.is_none());
     }
 
-    fn frozen_finding(
+    pub(crate) fn frozen_finding(
         case: &AssessmentCase,
         id: &str,
         priority: u8,
@@ -9165,7 +9253,7 @@ mod tests {
         }
     }
 
-    fn observation(
+    pub(crate) fn observation(
         finding: &Finding,
         run_id: &str,
         observed_at: DateTime<Utc>,

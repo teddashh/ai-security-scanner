@@ -47,6 +47,16 @@ const {
   `data:text/javascript;base64,${Buffer.from(source).toString("base64")}`
 );
 
+test("native report carries presentation groups while retaining original finding IDs", () => {
+  const group = {group_id:"group-1",rule_version:"aws-related-checks-1",kind:"iam_policy_permissions",
+    title:"Review IAM policy permissions: Policy 1",target_asset_id:"asset-status",
+    representative_finding_id:"finding-high",finding_ids:["finding-low","finding-high"],policy_name:"Policy 1"};
+  const report = adaptBeginnerMasterReport({...beginnerStatusReportFixture(),problem_groups:[group]});
+  assert.deepEqual(report.problemGroups,[{groupId:"group-1",ruleVersion:"aws-related-checks-1",kind:"iam_policy_permissions",
+    title:group.title,targetAssetId:"asset-status",representativeFindingId:"finding-high",
+    findingIds:["finding-low","finding-high"],policyName:"Policy 1"}]);
+  assert.deepEqual(adaptBeginnerMasterReport(beginnerStatusReportFixture()).problemGroups,[]);
+});
 const nativeExportPreview = (locale: string) => ({
   case_id: "case-1",
   run_id: "run-1",

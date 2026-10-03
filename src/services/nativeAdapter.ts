@@ -553,6 +553,16 @@ export interface NativeBeginnerMasterReport {
       observed_in_selected_run: boolean;
     }>;
   }>;
+  problem_groups?: Array<{
+    group_id: string;
+    rule_version: string;
+    kind: "iam_password_policy" | "root_account_usage" | "iam_policy_permissions";
+    title: string;
+    target_asset_id: string;
+    representative_finding_id: string;
+    finding_ids: string[];
+    policy_name?: string | null;
+  }>;
   next_steps: Array<{
     priority: number;
     code: BeginnerMasterReport["nextSteps"][number]["code"];
@@ -3254,6 +3264,16 @@ export const adaptBeginnerMasterReport = (
       findingId: member.finding_id,
       observedInSelectedRun: member.observed_in_selected_run,
     })),
+  })),
+  problemGroups: (report.problem_groups ?? []).map((group) => ({
+    groupId: group.group_id,
+    ruleVersion: group.rule_version,
+    kind: group.kind,
+    title: group.title,
+    targetAssetId: group.target_asset_id,
+    representativeFindingId: group.representative_finding_id,
+    findingIds: [...group.finding_ids],
+    policyName: group.policy_name ?? undefined,
   })),
   nextSteps: report.next_steps.map((step) => ({
     priority: step.priority,

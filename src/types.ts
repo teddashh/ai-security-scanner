@@ -1352,6 +1352,8 @@ export interface BeginnerMasterReport {
   findings: BeginnerReportFinding[];
   /** Current-case presentation groups projected onto this selected run. */
   findingGroups: BeginnerReportFindingGroup[];
+  /** Selected-run related checks; original observations remain in findings. */
+  problemGroups?: BeginnerReportProblemGroup[];
   nextSteps: BeginnerNextStep[];
   /** Expert-only, redacted execution records. The Results page keeps these collapsed. */
   technicalDetails: {
@@ -1363,6 +1365,17 @@ export interface BeginnerMasterReport {
     aidefendMappingStatus: string;
   };
   dataQualityWarnings: string[];
+}
+
+export interface BeginnerReportProblemGroup {
+  groupId: string;
+  ruleVersion: string;
+  kind: "iam_password_policy" | "root_account_usage" | "iam_policy_permissions";
+  title: string;
+  targetAssetId: string;
+  representativeFindingId: string;
+  findingIds: string[];
+  policyName?: string;
 }
 
 export type ScanReadinessState =
