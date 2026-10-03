@@ -203,6 +203,36 @@ Two fixture-wiring details matter when repeating this probe. To add a rule under
 
 An initial direct four-product-rule ARM64 scan completed with **10 results and empty errors**. The separate full-upstream pass hit its **600-second outer test timeout** during per-file rule checks, without a result JSON; the harness removed only its own named container. Combined/managed passes in that first attempt did not run. Evidence: `arm64-runtime-probe/product/semgrep.json`, per-pass logs and `arm64-runtime-probe.log`. Do not describe this as an ARM64 complete-result union pass.
 
+The subsequent **single managed ARM64 run completed successfully**. Its outer allowance was 3,600 seconds, matching the managed launcher's existing one-hour limit; Semgrep's two jobs, 10-second per-rule timeout with threshold 3, 2 GiB ceiling and target-size limit remained unchanged. Containers retained two CPUs, 2 GiB memory, network off, a read-only root/workspace/configs, caller UID, dropped capabilities, no-new-privileges, 256 PIDs, a 512 MiB file-size cap and a 512 MiB noexec temporary filesystem.
+
+| Subsequent actual scan / report check | Verified result |
+| --- | --- |
+| ARM64 CE through the candidate's fixed managed launcher | **22 results, `errors=[]`**, CE 1.174.0 |
+| Complete result objects | Exact multiset equality with the verified amd64 managed JSON, SHA-256 `861140fd126a1ad251f89198302034e3c945c091896fe2f05b2f8b4f5ed2f5bb`; that baseline already equals the separate 10-product + 12-upstream union |
+| Real shared normalizer on actual ARM64 JSON | **22 findings, no warnings**; all source IDs, snapshot-relative coordinates, native severity mapping, bounded titles and raw-evidence SHA preserved; two full messages remain beyond the 512-character display-title bound |
+| Actual ARM64 managed JSON SHA-256 | `9459c3647238f9709c5d28b1141e2149afbe9eaf8eada9f641eec039dae33996` |
+| Verification record SHA-256 | `934eb1b06a28593a5bfb8c8b7b50ad295ce986fb8f1340db0c1b5fe55ecafd55` |
+
+This proves the candidate inputs/launcher can produce the same complete fixture results with the **reused published ARM64 CE binary under this helper**. It does not prove the stopped new ARM64 image build completed, native ARM64 execution/performance, or broad project/language coverage. No public artifact or live case changed.
+
+Evidence is retained under `~/.cache/aiss-semgrep-combined/`: `arm64-managed-runtime-probe-v3/verification.json`, its boundary record, actual managed JSON and individual logs; `arm64-managed-runtime-probe-v3.log`; `arm64-managed-runtime-probe-v3-adapter.log`. The private runtime-probe implementation is commit **`0a350e4812b17a0389c8dc1bbd0e3a41d56eb356`**; it changes only the experimental runner and is not pushed. The Dockerfile, detector, launcher and attached-source inputs remain unchanged.
+
+To repeat the successful comparison in that private worktree, keep the exact helper, exported ARM64 launcher and minimal statfs probe together. The runner accepts only their recorded hashes and the pinned successful amd64 reference. Pull the fixed public ARM64 manifest separately with a **new empty** task-local Docker config if absent; the runner itself uses `--pull never`. Use a fresh output directory:
+
+```sh
+PYTHONDONTWRITEBYTECODE=1 nice -n 10 python3 \
+  engines/images/semgrep/run_arm64_runtime_probe.py \
+  --archive /absolute/path/to/semgrep-rules-0f5a85c.tar.gz \
+  --output /absolute/path/to/new-arm64-runtime-probe \
+  --helper /absolute/path/to/qemu-helper-glibc/qemu-aarch64 \
+  --launcher /absolute/path/to/arm64-input-export/ai-security-scanner-engine-entrypoint \
+  --statfs /absolute/path/to/statfs-probes/statfs-arm64 \
+  --mode managed \
+  --reference /absolute/path/to/managed-verification-native-v2/managed/semgrep.json
+```
+
+`--mode boundaries` repeats only the mount/input/child-status controls and makes no security-scan claim. `--mode all` still uses 600 seconds per pass; its initial full-upstream emulated pass is the timeout recorded above, not a successfully repeated four-pass ARM64 union. Never relabel either mode as a fresh or native image build.
+
 ## Overlap review
 
 These are observed similarities and differences, not approved suppression or grouping rules. All source records stay available. Rating pairs below mean **native severity / native confidence**, for example `ERROR / LOW`; `LOW` is not a lowered severity. The existing adapter maps `ERROR` to High, `WARNING` to Medium and `INFO` to Informational while preserving the separate source confidence.
@@ -219,7 +249,7 @@ No changes to shared report grouping or severity/confidence policy were made for
 
 ## Repeat the local preview
 
-The experiment is kept on the **local-only** branch `semgrep-combined-local`, image integration commit `afdafb00dd3df3cab67566a33d4bc9c385f99c71` and verification-script commit `11967e8d5190553551d00559e77ca06343d9ebf0`, in the sibling worktree `../ai-security-scanner-semgrep-local`. The latter changes only the test runner, not Dockerfile, detector, launcher or source-attachment bytes. It is deliberately absent from `main`'s image build inputs because changing those inputs can automatically publish all six local/k8s engines. The branch contains:
+The experiment is kept on the **local-only** branch `semgrep-combined-local`, image integration commit `afdafb00dd3df3cab67566a33d4bc9c385f99c71`, native verification-script commit `11967e8d5190553551d00559e77ca06343d9ebf0` and ARM64 runtime-probe commit `0a350e4812b17a0389c8dc1bbd0e3a41d56eb356`, in the sibling worktree `../ai-security-scanner-semgrep-local`. The latter two change only test runners, not Dockerfile, detector, launcher or source-attachment bytes. It is deliberately absent from `main`'s image build inputs because changing those inputs can automatically publish all six local/k8s engines. The branch contains:
 
 - `engines/images/semgrep/build_rule_pack.py`: shared candidate/preview acquisition and license checks, collision-free IDs, original bytes, provenance and manifest; `preview_combined_pack.py` delegates to it.
 - `prepare_source_bundle.py`, `test_source_bundle.py` and candidate `SOURCE-OFFER.md`: selected original sources, unchanged compiler/parser closure, reproducible attachment and rejected unintended source files.
@@ -228,6 +258,7 @@ The experiment is kept on the **local-only** branch `semgrep-combined-local`, im
 - `test_combined_preview.py`: reproducibility/provenance, rejected wrong archive, rejected changed product detector, and no overwrite of an existing pack.
 - `run_combined_preview.py`: exact bounded Docker invocations, isolated anonymous image pull, all three passes, native JSON/log preservation and complete-result union check.
 - `run_managed_combination.py`: local candidate only, no pull; repeats the separate/combined passes, compares full native results with the fixed launcher, and checks altered configs/provenance or extra rules are refused before output.
+- `run_arm64_runtime_probe.py`: separate reused-binary/QEMU probe, exact helper/launcher/statfs/reference hashes, mount and input controls, actual managed results compared with the verified amd64 baseline; explicitly not a new/native ARM64 candidate build.
 - `testdata/combination-review/`: six synthetic fixture files.
 - `src-tauri/examples/semgrep_combination_smoke.rs`: normalization-only check; no scanner startup, live cases or credentials.
 
