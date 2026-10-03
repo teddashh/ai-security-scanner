@@ -1376,6 +1376,69 @@ test("a readiness reading taken before Start does not ask to finish setup while 
   expect(finished.container.textContent).toContain("Choose the exact target you want to check");
 });
 
+test.each([
+  ["provider_source_required", "Connect cloud account", "連接雲端帳號"],
+  ["provider_capability_unavailable", "Reconnect account", "重新連接帳號"],
+  ["provider_source_ambiguous", "Choose connection", "選擇連線"],
+  ["provider_authorization_binding_mismatch", "Review connection", "檢查連線"],
+  ["provider_target_binding_mismatch", "Review target", "檢查目標"],
+] as const)("%s directs empty and interrupted scans to setup before starting or retrying", (blockerCode, enAction, zhAction) => {
+  for (const locale of ["en", "zh-TW"] as const) {
+    for (const hasRun of [false, true]) {
+      window.localStorage.setItem(localeStorageKey, locale);
+      const onFixSetup = vi.fn();
+      const onStart = vi.fn(() => Promise.resolve());
+      const onResume = vi.fn(() => Promise.resolve());
+      const interrupted = run([engine("prowler", "partial", {
+        resumable: true,
+        recoveryAction: "restart_check",
+      })], "partial");
+      const {queryByRole, getByRole} = render(
+        <I18nProvider>
+          <ProgressPage caseId="case-1" assets={[asset()]} runs={hasRun ? [interrupted] : []}
+            findings={[]} readiness={{caseId:"case-1", checkedAt:"2026-10-02T19:00:00Z",
+              ready:false, state:"provider_review_required", authorizedTargetCount:1,
+              pendingTargetCount:0, compatibleEngineCount:1, runnableEngineCount:1,
+              blockerCode, nextStep:"coverage"}}
+            onStart={onStart} onRetryLocalhostQuickScan={() => Promise.resolve()}
+            onFixSetup={onFixSetup} onPause={() => Promise.resolve()}
+            onResume={onResume} onCancel={() => Promise.resolve()}/>
+        </I18nProvider>,
+      );
+      const action = blockerCode === "provider_capability_unavailable" && hasRun
+        ? locale === "en" ? "Reconnect to scan again" : "重新連接後再掃描"
+        : locale === "en" ? enAction : zhAction;
+      expect(queryByRole("button", {name:locale === "en" ? "Start scan" : "開始掃描"})).toBeNull();
+      expect(queryByRole("button", {name:/Resume scan run|續跑掃描輪次/u})).toBeNull();
+      fireEvent.click(getByRole("button", {name:action}));
+      expect(onFixSetup).toHaveBeenCalledTimes(1);
+      expect(onStart).not.toHaveBeenCalled();
+      expect(onResume).not.toHaveBeenCalled();
+      cleanup();
+    }
+  }
+});
+
+test("a stale provider setup reading does not block pausing or resuming an active scan", () => {
+  const onResume = vi.fn(() => Promise.resolve());
+  const {getByRole, queryByRole} = render(
+    <I18nProvider>
+      <ProgressPage caseId="case-1" assets={[asset()]}
+        runs={[run([engine("prowler", "paused", {resumable:true})], "paused")]}
+        findings={[]} readiness={{caseId:"case-1", checkedAt:"2026-10-02T19:00:00Z",
+          ready:false, state:"provider_capability_required", authorizedTargetCount:1,
+          pendingTargetCount:0, compatibleEngineCount:1, runnableEngineCount:1,
+          blockerCode:"provider_capability_unavailable", nextStep:"coverage"}}
+        onStart={() => Promise.resolve()} onRetryLocalhostQuickScan={() => Promise.resolve()}
+        onFixSetup={() => {}} onPause={() => Promise.resolve()}
+        onResume={onResume} onCancel={() => Promise.resolve()}/>
+    </I18nProvider>,
+  );
+  expect(queryByRole("button", {name:"Reconnect to scan again"})).toBeNull();
+  fireEvent.click(getByRole("button", {name:"Resume scan run run-1"}));
+  expect(onResume).toHaveBeenCalledWith("run-1");
+});
+
 test("a finished cloud scan offers a reconnect for the next scan instead of an expired-connection warning", () => {
   // Observed on the desktop after live AWS and Microsoft 365 scans: the scan had
   // spent its read-only connection, and the page that had just finished it

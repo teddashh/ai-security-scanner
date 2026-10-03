@@ -3830,7 +3830,7 @@ test("scanner HTML descriptions remain complete visible text and never become ac
 
   openFirstFinding(container);
   const description = container.querySelector<HTMLElement>(
-    ".scanner-evidence-description p",
+    ".scanner-evidence-description .scanner-markdown",
   );
   expect(description).not.toBeNull();
   expect(description!.textContent).toBe(upstreamDescription);

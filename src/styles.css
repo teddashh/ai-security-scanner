@@ -2666,7 +2666,7 @@ button.history-row:hover, .history-row--active { background: #f2f8f5; }
 }
 
 .priority-card__target strong,
-.priority-card__guidance strong {
+.priority-card__guidance > span > strong {
   display: block;
   margin-bottom: 2px;
   color: #fff;
@@ -3029,6 +3029,23 @@ button.history-row:hover, .history-row--active { background: #f2f8f5; }
   color: var(--muted);
   font-size: 0.78rem;
 }
+.scanner-markdown { min-width: 0; overflow-wrap: anywhere; }
+.scanner-evidence-description .scanner-markdown,
+.scanner-evidence-remediation .scanner-markdown { color: var(--muted); font-size: 0.78rem; line-height: 1.5; }
+.scanner-markdown :is(p, ul, ol, pre, blockquote) { margin: 8px 0; }
+.scanner-markdown > :first-child { margin-top: 0; }
+.scanner-markdown > :last-child { margin-bottom: 0; }
+.scanner-markdown :is(ul, ol) { padding-left: 20px; }
+.scanner-markdown pre { max-width: 100%; overflow-x: auto; }
+.scanner-markdown__heading,
+.scanner-markdown__block { display: block; }
+.scanner-markdown__block + .scanner-markdown__block { margin-top: 4px; }
+.scanner-markdown--compact strong { color: inherit; font-size: inherit; }
+.scanner-markdown--compact code,
+.evidence-item .scanner-markdown code { display: inline; color: inherit; font-size: inherit; }
+.scanner-remediation-advice { margin: 8px 0; }
+.scanner-remediation-advice .scanner-markdown > p:first-child { display: inline; }
+.scanner-remediation-advice .scanner-markdown { display: inline; }
 .evidence-item code,
 .export-row code {
   display: block;

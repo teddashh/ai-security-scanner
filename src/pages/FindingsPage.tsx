@@ -1,4 +1,5 @@
 import { type FormEvent, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
+import { ScannerMarkdown } from "../components/ScannerMarkdown";
 
 import {
   confidenceMeta,
@@ -3110,17 +3111,17 @@ export function FindingsPage({
                 <span className="priority-card__guidance">
                   <span>
                     <strong>{text(copy.nextActionNow)}</strong>
-                    {problemGroupAction(group, locale) ?? findingActionSentence(locale, {
+                    <ScannerMarkdown compact text={problemGroupAction(group, locale) ?? findingActionSentence(locale, {
                       englishFallback: finding.recommendation,
                       family: finding.family,
                       awsIamPolicy: finding.awsIamPolicy,
                       unconfirmedByCoverage: actionUnconfirmedByCoverage(finding),
-                    })}
+                    })} />
                   </span>
                   {scannerRemediations.map((remediation) => (
                     <span key={remediation}>
                       <strong>{text(copy.scannerRemediation)}</strong>
-                      {remediation}
+                      <ScannerMarkdown text={remediation} compact />
                     </span>
                   ))}
                   {scannerFixedVersions.length > 0 && (
@@ -3673,17 +3674,17 @@ export function FindingsPage({
 
               <section className="detail-section detail-section--advice">
                 <h3>{text(copy.recommendation)}</h3>
-                <p>{findingActionSentence(locale, {
+                <ScannerMarkdown text={findingActionSentence(locale, {
                   englishFallback: selected.recommendation,
                   family: selected.family,
                   awsIamPolicy: selected.awsIamPolicy,
                   unconfirmedByCoverage: actionUnconfirmedByCoverage(selected),
-                })}</p>
+                })} />
                 {selectedScannerRemediations.map((remediation) => (
-                  <p key={remediation}>
+                  <div key={remediation} className="scanner-remediation-advice">
                     {adviceLabel(locale, text(copy.scannerRemediation))}
-                    {remediation}
-                  </p>
+                    <ScannerMarkdown text={remediation} />
+                  </div>
                 ))}
                 {selectedScannerFixedVersions.length > 0 && (
                   <p>
@@ -3746,7 +3747,7 @@ export function FindingsPage({
                         {evidence.scannerDetails?.description && (
                           <div className="scanner-evidence-description">
                             <strong>{text(copy.scannerDescription)}</strong>
-                            <p>{evidence.scannerDetails.description}</p>
+                            <ScannerMarkdown text={evidence.scannerDetails.description} />
                           </div>
                         )}
                         {evidence.scannerDetails?.awsIamPolicy && (
@@ -3782,7 +3783,7 @@ export function FindingsPage({
                         {evidence.scannerDetails?.remediation && (
                           <div className="scanner-evidence-remediation">
                             <strong>{text(copy.scannerRemediation)}</strong>
-                            <p>{evidence.scannerDetails.remediation}</p>
+                            <ScannerMarkdown text={evidence.scannerDetails.remediation} />
                           </div>
                         )}
                         <details className="page-technical-details">

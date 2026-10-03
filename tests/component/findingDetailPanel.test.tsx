@@ -152,6 +152,51 @@ test("the advice section's run-in labels carry exactly one colon, set per langua
   expect(zhText).not.toContain("考量：：");
 });
 
+test.each(["en", "zh-TW"] as const)("scanner Markdown reads as formatted evidence and advice in %s", (locale) => {
+  window.localStorage.setItem(localeStorageKey, locale);
+  const description = "**IAM passwords** need *strong settings*.\n\n- Require uppercase characters.\n- Require lowercase characters.";
+  const remediation = "Set **MinimumPasswordLength** to `14`.\n\n1. Review the current policy.\n2. Read [AWS documentation](https://docs.aws.amazon.com/IAM/latest/UserGuide/id_credentials_passwords_account-policy.html).\n\n```sh\naws iam get-account-password-policy\n```";
+  const finding = baseFinding({
+    recommendation: remediation,
+    evidence: [{id:"evidence-markdown", sourceEngine:"Prowler",
+      observedAt:"2026-10-02T12:00:00Z", summary:"IAM password policy check",
+      rawArtifactHash:"hash-markdown", scannerDetails:{description, remediation}}],
+  });
+  const original = JSON.stringify(finding);
+  const {container} = renderPage([finding]);
+  const descriptionBlock = container.querySelector(".scanner-evidence-description")!;
+  const remediationBlock = container.querySelector(".scanner-evidence-remediation")!;
+  expect(descriptionBlock.querySelector(".scanner-markdown strong")?.textContent).toBe("IAM passwords");
+  expect(descriptionBlock.querySelector("em")?.textContent).toBe("strong settings");
+  expect(descriptionBlock.querySelectorAll("ul > li")).toHaveLength(2);
+  expect(remediationBlock.querySelectorAll("ol > li")).toHaveLength(2);
+  expect(remediationBlock.querySelector("pre > code")?.textContent).toBe("aws iam get-account-password-policy\n");
+  const link = remediationBlock.querySelector("a")!;
+  expect(link.getAttribute("href")).toBe("https://docs.aws.amazon.com/IAM/latest/UserGuide/id_credentials_passwords_account-policy.html");
+  expect(link.getAttribute("rel")).toBe("noopener noreferrer");
+  expect(adviceSection(container).textContent).not.toContain("**");
+  const priorityCard = container.querySelector(".priority-card")!;
+  expect(priorityCard.textContent).not.toContain("**");
+  expect(priorityCard.querySelector(".scanner-markdown strong")?.textContent).toBe("MinimumPasswordLength");
+  expect(priorityCard.querySelector("a, button, p .scanner-markdown")).toBeNull();
+  expect(JSON.stringify(finding)).toBe(original);
+});
+
+test("scanner Markdown cannot execute HTML, follow unsafe links, or load remote images", () => {
+  const unsafe = "[run](javascript:alert%281%29) [local](file:///etc/passwd) [relative](/scan) ![remote image](https://unapproved.example.test/pixel.png)\n\n<script>alert('x')</script><img src='https://unapproved.example.test/pixel.png' onerror='alert(1)'>";
+  const {container} = renderPage([baseFinding({recommendation:unsafe, evidence:[{
+    id:"evidence-unsafe", sourceEngine:"Prowler", observedAt:"2026-10-02T12:00:00Z",
+    summary:"Scanner wording", rawArtifactHash:"hash-unsafe",
+    scannerDetails:{description:unsafe, remediation:unsafe},
+  }]})]);
+  const markdown = [...container.querySelectorAll(".scanner-markdown")];
+  expect(markdown.length).toBeGreaterThan(1);
+  for (const block of markdown) {
+    expect(block.querySelector("script, img, iframe, a")).toBeNull();
+    expect(block.textContent).toContain("remote image");
+  }
+});
+
 test("a finding without references still shows the empty-state paragraph", () => {
   window.localStorage.setItem(localeStorageKey, "en");
   const { container } = renderPage([baseFinding({ officialReferences: [] })]);

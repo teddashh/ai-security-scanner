@@ -38,7 +38,7 @@ import {
   engineRecoveryModeFor,
   skippedChecksNextStepFor,
 } from "../scanPresentation";
-import { isCapturedEvidenceBlocker } from "../scanReadiness";
+import { isCapturedEvidenceBlocker, isProviderConfigurationBlocker } from "../scanReadiness";
 import { isSettledSkippedCheck } from "../settledSkippedChecks";
 import {
   canStartPreparedScan,
@@ -860,8 +860,12 @@ export function ProgressPage({
   }, [waitingForTerminalPage, requestedTerminalPage, terminalPageRequestCount]);
   const scanWorkActive = hasActiveScanWork(runs);
   const undispatchedPlan = runs.find((run) => isUndispatchedScanPlan(run));
+  const providerSetupRequired = !readinessCheckFailed
+    && !scanWorkActive
+    && isProviderConfigurationBlocker(readiness?.blockerCode);
   const canStart = !terminalExactLocalhostQuickScan
-    && canStartPreparedScan(readiness, Boolean(readinessCheckFailed), runs);
+    && canStartPreparedScan(readiness, Boolean(readinessCheckFailed), runs)
+    && !providerSetupRequired;
   const blockerPresentation = readiness?.blockerCode
     ? readinessPresentation[readiness.blockerCode]
     : undefined;
@@ -870,7 +874,7 @@ export function ProgressPage({
     : copy.readinessUnavailableDescription;
   const startFreshScan = !readinessCheckFailed && isCapturedEvidenceBlocker(readiness?.blockerCode);
   // A scan spends its cloud connection, so after one the next scan simply starts with a reconnect.
-  const reconnectBeforeNextScan = !readinessCheckFailed
+  const reconnectBeforeNextScan = providerSetupRequired
     && readiness?.blockerCode === "provider_capability_unavailable";
   const needsLatestInstaller = Boolean(
     !readinessCheckFailed
@@ -1056,7 +1060,7 @@ export function ProgressPage({
             <button className="button button--primary" type="button" disabled aria-busy="true">
               <Icon name="progress" size={17} />{text(copy.startingAction)}
             </button>
-          ) : canStart && !reconnectBeforeNextScan ? (
+          ) : canStart ? (
             <button className="button button--primary" type="button" disabled={busy} onClick={requestStart}>
               <Icon name="play" size={17} />{text(copy.start)}
             </button>
@@ -1158,7 +1162,7 @@ export function ProgressPage({
     : recoveryActions.has("restart_check")
       ? copy.recoverMixed
       : copy.resume;
-  const canResume = !startFreshScan && (
+  const canResume = !startFreshScan && !providerSetupRequired && (
     selectedRun.status === "paused"
     || ((selectedRun.status === "partial" || selectedRun.status === "failed" || selectedRun.status === "cancelled") && hasResumableEngine)
   ) && !exactLocalhostQuickScan;
@@ -1265,15 +1269,16 @@ export function ProgressPage({
                 <Icon name="findings" size={17} />{text(copy.viewResults)}
               </a>
             )}
-            {canStart && !hasReleaseIncompatibleWork && (reconnectBeforeNextScan ? (
+            {!terminalExactLocalhostQuickScan && reconnectBeforeNextScan && (
               <button className="button button--secondary" type="button" disabled={busy} onClick={onFixSetup}>
                 <Icon name="refresh" size={17} />{text(copy.reconnectToScanAgain)}
               </button>
-            ) : (
+            )}
+            {canStart && !hasReleaseIncompatibleWork && (
               <button className="button button--primary" type="button" disabled={busy || starting} aria-busy={starting} onClick={requestStart}>
                 <Icon name={starting ? "progress" : "play"} size={17} />{text(starting ? copy.startingAction : copy.start)}
               </button>
-            ))}
+            )}
             {canPause && (
               <button className="button button--secondary" type="button" disabled={busy} aria-label={text(copy.pauseAria, { id: selectedRun.id })} onClick={() => void onPause(selectedRun.id)}>
                 <Icon name="pause" size={17} />{text(copy.pause)}
