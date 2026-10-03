@@ -74,7 +74,7 @@ Only Semgrep, Trivy and Grype consume host `.engine-cache/offline/` inputs today
 
 ## Rules, customizations and edits that move together
 
-Common to every update: actual acquisition pin, catalog/provenance and plan facts must agree with the tested closure. Base images, source archive hashes, dependency locks, source/notices and smoke expectations need review when their bytes change. The table adds engine-specific work; exact hashes stay in the machine-readable files rather than being copied here.
+Common to every update: actual acquisition pin, catalog/provenance and plan facts must agree with the tested closure. Base images, source archive hashes, dependency locks, source/notices and smoke expectations need review when their bytes change. Inspect the contents of attached source archives as well as runtime inputs: Semgrep's published four-rule runtime already contained newer restricted rules in its source attachment ([verified evidence](semgrep-combination-review.md#published-source-attachment-inspection)). The table adds engine-specific work; exact hashes stay in the machine-readable files rather than being copied here.
 
 | Engine | Rules or data used | Customization to re-check; coupled edits and pitfalls |
 | --- | --- | --- |
