@@ -53,6 +53,11 @@ test("the displayed GitHub stars match the dated API snapshot", async () => {
     workspaceFile("docs/index.html"),
   ]);
   const snapshot = JSON.parse(snapshotSource) as StarSnapshot;
+  // Frozen rule revisions still attribute their stars to the same repository.
+  const repositoryLinks = Array.from(
+    site.matchAll(/href="(https:\/\/github\.com\/[^"]+)"/gu),
+    ([, href]) => href.replace(/\/tree\/[a-f0-9]{40}$/u, ""),
+  );
 
   assert.equal(snapshot.schemaVersion, 1);
   assert.equal(snapshot.source, "GitHub REST API");
@@ -63,7 +68,11 @@ test("the displayed GitHub stars match the dated API snapshot", async () => {
   for (const entry of [...snapshot.tools, ...snapshot.ruleSources]) {
     assert.ok(Number.isSafeInteger(entry.stars) && entry.stars >= 0, entry.repository);
     assert.equal(occurrences(site, `<data value="${entry.stars}">`), 1, `${entry.repository} star count`);
-    assert.equal(occurrences(site, `href="https://github.com/${entry.repository}"`), 1, `${entry.repository} link`);
+    assert.equal(
+      repositoryLinks.filter((href) => href === `https://github.com/${entry.repository}`).length,
+      1,
+      `${entry.repository} link`,
+    );
   }
 });
 
