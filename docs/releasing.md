@@ -6,9 +6,11 @@ The product owner selects the version, channel, source commit, supported install
 
 ## Current release
 
-[v0.3.0](https://github.com/teddashh/ai-security-scanner/releases/tag/v0.3.0) is the currently published desktop release on **Linux, macOS, and Windows**. [Actions run 36884417623](https://github.com/teddashh/ai-security-scanner/actions/runs/36884417623) built and qualified the exact source `dddd491b87f90c9cebc5f946d9e2070f36742f21` as a public candidate, and [promotion run 36890665121](https://github.com/teddashh/ai-security-scanner/actions/runs/36890665121) published those frozen bytes without rebuilding, after approval in the `release-publication` environment. The release page carries the installers, `SHA256SUMS.txt`, runtime manifests, SBOMs, notices and qualification records.
+[v0.3.1](https://github.com/teddashh/ai-security-scanner/releases/tag/v0.3.1) is the current **stable/latest** desktop release on **Linux, macOS, and Windows**, published on 2026-10-03. [Candidate run 37148617398](https://github.com/teddashh/ai-security-scanner/actions/runs/37148617398) built and qualified exact source `6b61e9ef72f90174ef7310f80e766aba61c9428d`. [Promotion run 37153378798](https://github.com/teddashh/ai-security-scanner/actions/runs/37153378798) published the frozen bytes without rebuilding after normal approval in the `release-publication` environment. The release page carries installers, `SHA256SUMS.txt`, runtime manifests, SBOMs, notices and qualification records.
 
-As verified on 2026-10-03, GitHub marks v0.3.0 as the latest release with `prerelease: false`. Its frozen `release-metadata.json` still records `releaseChannel: prerelease`, and its release notes retain the original testing disclosures. The public `latest.json` contains macOS and Windows NSIS updater targets; Linux Debian and Windows MSI have no artifact-scoped updater. The GitHub label does not change the frozen qualification observations or establish general availability. `package.json` retains `release.target: 1.0.0`; the owner selects the next version and channel.
+GitHub records `prerelease: false`; frozen metadata records `releaseChannel: stable` and `stableTarget: 0.3.1`, matching `package.json`. The public `latest.json` contains macOS and Windows NSIS updater targets; Debian and MSI have no artifact-scoped updater. See the bilingual [v0.3.1 delivery record](release/v0.3.1.md) for exact checksums, source checks, local scan/report/reopen observations and known limitations.
+
+Previous release [v0.3.0](https://github.com/teddashh/ai-security-scanner/releases/tag/v0.3.0) retains its original files and testing disclosures. Its frozen metadata records the original prerelease channel even though GitHub later marked it stable/latest; that historical label does not change its bytes or qualification observations.
 
 | Platform | Installer | Disclosure |
 | --- | --- | --- |
@@ -18,7 +20,7 @@ As verified on 2026-10-03, GitHub marks v0.3.0 as the latest release with `prere
 
 For both Windows installers, metadata retains `windows-lifecycle-not-observed` and `windows-data-preservation-not-observed`; a passing installer qualification is not evidence of those lifecycle checks. The exact-candidate beginner human path is `not-observed` for every offered installer. Updater signatures, where present, do not establish OS signing or Apple notarization. These are disclosures, not release gates.
 
-The [2026-10-03 desktop release readiness record](release/desktop-readiness-2026-10-03.md) distinguishes completed main changes from the remaining candidate work.
+The [2026-10-03 desktop delivery record](release/desktop-readiness-2026-10-03.md) records the completed owner-requested delivery steps and separate follow-ups.
 
 ## Release identity
 
@@ -27,7 +29,7 @@ Use one numeric SemVer across `package.json`, `package-lock.json`, `src-tauri/ta
 `package.json` also records:
 
 - `release.channel`: `prerelease` or `stable`;
-- `release.target`: the next product version under development.
+- `release.target`: prereleases sort below the planned stable version; a stable release uses its own version as the target.
 
 ## Prepare main
 

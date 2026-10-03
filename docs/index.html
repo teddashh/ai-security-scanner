@@ -4,10 +4,11 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="theme-color" content="#102c37">
-    <meta name="description" content="Use the desktop app or Claude Code and Codex Agent Skills for upstream security checks and one standardized report. Download the v0.3.0 test release for Linux, macOS and Windows.">
+    <meta name="description" content="Use the desktop app or Claude Code and Codex Agent Skills for upstream security checks and one standardized report. Download the v0.3.1 stable release for Linux, macOS and Windows.">
     <meta property="og:type" content="website">
+    <meta property="og:locale" content="en_US">
     <meta property="og:title" content="ai-security-scanner · Many security tools, one clear report">
-    <meta property="og:description" content="Choose targets and confirm scope. Run upstream scanners through the desktop app or Agent Skills. One standardized report. Download the v0.3.0 test release for Linux, macOS and Windows.">
+    <meta property="og:description" content="Choose targets and confirm scope. Run upstream scanners through the desktop app or Agent Skills. One standardized report. Download the v0.3.1 stable release for Linux, macOS and Windows.">
     <meta property="og:url" content="https://teddashh.github.io/ai-security-scanner/">
     <meta property="og:image" content="https://teddashh.github.io/ai-security-scanner/project-mark.svg">
     <meta name="twitter:card" content="summary">
@@ -82,9 +83,9 @@
             <span class="lang-zh" lang="zh-Hant">選擇程式碼專案、網站與內部系統，確認網路範圍與授權。透過桌面程式或 Claude Code／Codex Agent Skills 執行適用的上游掃描器，再從一份標準化報告查看受影響資產、證據、優先順序與下一步。</span>
           </p>
           <div class="button-row">
-            <a class="button button-primary" href="https://github.com/teddashh/ai-security-scanner/releases/tag/v0.3.0">
-              <span class="lang-en">Download v0.3.0 test release</span>
-              <span class="lang-zh" lang="zh-Hant">下載 v0.3.0 測試版</span>
+            <a class="button button-primary" href="https://github.com/teddashh/ai-security-scanner/releases/tag/v0.3.1">
+              <span class="lang-en">Download v0.3.1 stable release</span>
+              <span class="lang-zh" lang="zh-Hant">下載 v0.3.1 正式版</span>
               <span aria-hidden="true">→</span>
             </a>
             <a class="button button-secondary" href="#agent-skills">
@@ -93,12 +94,16 @@
             </a>
           </div>
           <p class="snapshot-note">
-            <span class="lang-en"><strong>v0.3.0 test release (pre-release).</strong> Windows setup <code>.exe</code> and MSI (unsigned; SmartScreen may warn), macOS Universal <code>.dmg</code> (not notarized; run one <code>xattr</code> command before the first launch), and Debian/Ubuntu <code>.deb</code>. The app prepares its own scanning runtime; Docker is not required.</span>
-            <span class="lang-zh" lang="zh-Hant"><strong>v0.3.0 測試版（pre-release）。</strong>提供 Windows 安裝程式 <code>.exe</code> 與 MSI（未簽章，SmartScreen 可能警告）、macOS Universal <code>.dmg</code>（未經 Apple 公證，第一次開啟前執行一行 <code>xattr</code> 指令）與 Debian／Ubuntu <code>.deb</code>。應用程式會自行準備掃描環境，不需要另外安裝 Docker。</span>
+            <span class="lang-en"><strong>v0.3.1 stable release.</strong> Windows setup <code>.exe</code> and MSI (unsigned; SmartScreen may warn), macOS Universal <code>.dmg</code> (not notarized; run one <code>xattr</code> command before the first launch), and Debian/Ubuntu <code>.deb</code>. The app prepares its own scanning runtime; Docker is not required.</span>
+            <span class="lang-zh" lang="zh-Hant"><strong>v0.3.1 正式版。</strong>提供 Windows 安裝程式 <code>.exe</code> 與 MSI（未簽章，SmartScreen 可能警告）、macOS Universal <code>.dmg</code>（未經 Apple 公證，第一次開啟前執行一行 <code>xattr</code> 指令）與 Debian／Ubuntu <code>.deb</code>。應用程式會自行準備掃描環境，不需要另外安裝 Docker。</span>
           </p>
           <p class="snapshot-note">
-            <span class="lang-en">See the <a href="https://github.com/teddashh/ai-security-scanner/blob/main/docs/getting-started.md#install">install steps</a> and the <a href="https://github.com/teddashh/ai-security-scanner/releases/tag/v0.3.0">release notes</a>.</span>
-            <span class="lang-zh" lang="zh-Hant">詳見<a href="https://github.com/teddashh/ai-security-scanner/blob/main/docs/getting-started.zh-TW.md#安裝">安裝步驟</a>與<a href="https://github.com/teddashh/ai-security-scanner/releases/tag/v0.3.0">發布說明</a>。</span>
+            <span class="lang-en">See the <a href="https://github.com/teddashh/ai-security-scanner/blob/main/docs/getting-started.md#install">install steps</a> and the <a href="https://github.com/teddashh/ai-security-scanner/releases/tag/v0.3.1">release notes</a>.</span>
+            <span class="lang-zh" lang="zh-Hant">詳見<a href="https://github.com/teddashh/ai-security-scanner/blob/main/docs/getting-started.zh-TW.md#安裝">安裝步驟</a>與<a href="https://github.com/teddashh/ai-security-scanner/releases/tag/v0.3.1">發布說明</a>。</span>
+          </p>
+          <p class="snapshot-note">
+            <span class="lang-en"><strong>New in v0.3.1:</strong> clearer cloud findings, grouped actions, reconnect-and-rescan, and explicit incomplete coverage. <a href="https://github.com/teddashh/ai-security-scanner/blob/main/docs/release/v0.3.1.md">What changed</a>.</span>
+            <span class="lang-zh" lang="zh-Hant"><strong>v0.3.1 更新：</strong>更清楚的雲端結果、合併修正動作、重新連接再掃描，並標示未完成的檢查範圍。<a href="https://github.com/teddashh/ai-security-scanner/blob/main/docs/release/v0.3.1.zh-TW.md">查看更新內容</a>。</span>
           </p>
           <ul class="hero-metrics" aria-label="Project summary">
             <li>
@@ -350,7 +355,7 @@
             <article class="tool-card" data-tool="semgrep">
               <div class="tool-card-top"><h4 class="tool-name">Semgrep</h4><span class="stars"><data value="16693">16.7k</data></span></div>
               <span class="tool-kind"><span class="lang-en">Code security</span><span class="lang-zh" lang="zh-Hant">程式碼安全</span></span>
-              <p><span class="lang-en">Static analysis for risky code patterns using a pinned upstream security-rule snapshot.</span><span class="lang-zh" lang="zh-Hant">使用固定的上游安全規則快照，靜態分析危險程式碼模式。</span></p>
+              <p><span class="lang-en">Static analysis for risky code patterns with 1,493 pinned legacy upstream rules and four product rules.</span><span class="lang-zh" lang="zh-Hant">使用固定的 1,493 條舊版上游規則與四條產品規則，靜態分析危險程式碼模式。</span></p>
               <a class="tool-link" href="https://github.com/semgrep/semgrep"><span class="lang-en">GitHub repository</span><span class="lang-zh" lang="zh-Hant">GitHub 專案</span></a>
             </article>
             <article class="tool-card" data-tool="gitleaks">
@@ -374,7 +379,7 @@
             <article class="tool-card" data-tool="grype">
               <div class="tool-card-top"><h4 class="tool-name">Grype</h4><span class="stars"><data value="12903">12.9k</data></span></div>
               <span class="tool-kind"><span class="lang-en">Package vulnerabilities</span><span class="lang-zh" lang="zh-Hant">套件弱點</span></span>
-              <p><span class="lang-en">Package vulnerability matching for repository snapshots and single-image OCI layouts. Current source pin: <code>0.117.0-4</code> (<code>56b0d675…</code>); a controlled local repository scan recorded 81 Grype findings.</span><span class="lang-zh" lang="zh-Hant">比對專案副本與單一映像 OCI layout 中的套件弱點。目前原始碼釘選 <code>0.117.0-4</code>（<code>56b0d675…</code>）；受控本機專案掃描記錄 81 筆 Grype 問題。</span></p>
+              <p><span class="lang-en">Package vulnerability matching for repository snapshots and single-image OCI layouts. Released pin: <code>0.117.0-4</code> (<code>56b0d675…</code>); a controlled local repository scan recorded 81 Grype findings.</span><span class="lang-zh" lang="zh-Hant">比對專案副本與單一映像 OCI layout 中的套件弱點。本版釘選 <code>0.117.0-4</code>（<code>56b0d675…</code>）；受控本機專案掃描記錄 81 筆 Grype 問題。</span></p>
               <a class="tool-link" href="https://github.com/anchore/grype"><span class="lang-en">GitHub repository</span><span class="lang-zh" lang="zh-Hant">GitHub 專案</span></a>
               <a class="tool-link" href="https://github.com/teddashh/ai-security-scanner/blob/main/docs/engine-catalog.md#grype-repository-support"><span class="lang-en">Pin and recorded result</span><span class="lang-zh" lang="zh-Hant">釘選與實測紀錄</span></a>
             </article>
@@ -541,7 +546,7 @@
               <span class="stars"><data value="12989">13.0k</data></span>
             </div>
             <div class="rule-source">
-              <a href="https://github.com/semgrep/semgrep-rules">semgrep/semgrep-rules ↗</a>
+              <a href="https://github.com/semgrep/semgrep-rules/tree/0f5a85ceab1b82b193d0eaa418784c932d237d68">semgrep/semgrep-rules ↗</a>
               <span class="stars"><data value="1254">1.3k</data></span>
             </div>
           </div>
@@ -650,16 +655,16 @@
             <span class="lang-zh" lang="zh-Hant">從資產開始，讓產品選擇適用檢查。</span>
           </h2>
           <p>
-            <span class="lang-en">Download the Linux, macOS and Windows test release, or let Claude Code or Codex install it for you. Review the exact scan scope, start once, and read the final report.</span>
-            <span class="lang-zh" lang="zh-Hant">下載 Linux、macOS、Windows 測試版，或讓 Claude Code／Codex 幫你安裝。確認精確掃描範圍、啟動一次，再閱讀最終報告。</span>
+            <span class="lang-en">Download the Linux, macOS and Windows stable release, or let Claude Code or Codex install it for you. Review the exact scan scope, start once, and read the final report.</span>
+            <span class="lang-zh" lang="zh-Hant">下載 Linux、macOS、Windows 正式版，或讓 Claude Code／Codex 幫你安裝。確認精確掃描範圍、啟動一次，再閱讀最終報告。</span>
           </p>
           <div class="button-row">
-            <a class="button button-primary" href="https://github.com/teddashh/ai-security-scanner/releases/tag/v0.3.0">
-              <span class="lang-en">Download v0.3.0 test release</span>
-              <span class="lang-zh" lang="zh-Hant">下載 v0.3.0 測試版</span>
+            <a class="button button-primary" href="https://github.com/teddashh/ai-security-scanner/releases/tag/v0.3.1">
+              <span class="lang-en">Download v0.3.1 stable release</span>
+              <span class="lang-zh" lang="zh-Hant">下載 v0.3.1 正式版</span>
               <span aria-hidden="true">→</span>
             </a>
-            <a class="button button-secondary" href="https://github.com/teddashh/ai-security-scanner/blob/main/docs/getting-started.md">
+            <a class="button button-secondary" href="https://github.com/teddashh/ai-security-scanner/blob/main/docs/getting-started.md" data-href-en="https://github.com/teddashh/ai-security-scanner/blob/main/docs/getting-started.md" data-href-zh="https://github.com/teddashh/ai-security-scanner/blob/main/docs/getting-started.zh-TW.md">
               <span class="lang-en">Read getting started</span>
               <span class="lang-zh" lang="zh-Hant">閱讀開始使用</span>
             </a>
@@ -676,7 +681,7 @@
         </span>
         <div class="footer-links">
           <a href="https://github.com/teddashh/ai-security-scanner">GitHub</a>
-          <a href="https://github.com/teddashh/ai-security-scanner/blob/main/docs/README.md">
+          <a href="https://github.com/teddashh/ai-security-scanner/blob/main/docs/README.md" data-href-en="https://github.com/teddashh/ai-security-scanner/blob/main/docs/README.md" data-href-zh="https://github.com/teddashh/ai-security-scanner/blob/main/docs/README.zh-TW.md">
             <span class="lang-en">Documentation</span>
             <span class="lang-zh" lang="zh-Hant">文件</span>
           </a>

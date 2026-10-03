@@ -59,11 +59,13 @@ The published and catalog-pinned Greenbone `23.50.24-feed202610010558-1` image c
 
 Infrastructure files, Kubernetes manifests, exported container images, cloud accounts, and live clusters remain available as secondary sources. Each uses its selected artifact, resource, account, subscription, project, or cluster scope.
 
-The published and catalog-pinned kube-bench `0.16.0-4` image uses the unmodified upstream CIS 1.11 node profile. The next desktop adapter records WARN checks as incomplete automated coverage without turning them into failed findings. KICS similarly withholds completion when its declared file or query failure counters are positive or malformed.
+The published and catalog-pinned kube-bench `0.16.0-4` image uses the unmodified upstream CIS 1.11 node profile. The v0.3.1 desktop adapter records WARN checks as incomplete automated coverage without turning them into failed findings. KICS similarly withholds completion when its declared file or query failure counters are positive or malformed.
 
 The published and catalog-pinned Maester `2.0.0-9` image preserves upstream `Investigate` as a no-verdict control instead of a failed finding. ScubaGear `1.8.0-8` and the revised Microsoft 365 setup include the approved PIM read permissions. A fresh owner-run Microsoft 365 acceptance scan has not yet been observed.
 
 GCP Prowler currently uses its reviewed four-check permission and endpoint closure. Widening that profile requires one coordinated product decision covering checks, permissions, assets, endpoints, and report wording.
+
+Prowler headlines describe the failed condition. The approved AWS grouping combines findings with the same practical action while retaining every underlying identifier and evidence record. Expired read-only connections offer reconnect-and-rescan directly.
 
 ## Unified report
 

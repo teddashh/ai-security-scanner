@@ -1,14 +1,16 @@
-# Desktop release readiness — 2026-10-03
+# Desktop release delivery — 2026-10-03
 
-On 2026-10-03 the owner accepted **v0.3.1 on the stable channel** and authorized installer preparation, qualification, publication, and English/Traditional Chinese marketing updates. The coordinated version files and bilingual release notes are being prepared. The current published installer remains v0.3.0 until the frozen v0.3.1 candidate is verified and promoted.
+[繁體中文](desktop-readiness-2026-10-03.zh-TW.md) · [Release record](v0.3.1.md)
 
-## Published desktop baseline
+On 2026-10-03 the owner accepted **v0.3.1 on the stable channel** and authorized installer preparation, qualification, publication, and English/Traditional Chinese marketing updates. All three delivery steps are complete: [v0.3.1](https://github.com/teddashh/ai-security-scanner/releases/tag/v0.3.1) is published as stable/latest from frozen source `6b61e9ef72f90174ef7310f80e766aba61c9428d`.
 
-[v0.3.0](https://github.com/teddashh/ai-security-scanner/releases/tag/v0.3.0) was built from `dddd491b87f90c9cebc5f946d9e2070f36742f21`, not current main. On 2026-10-03, both the GitHub release API and `/releases/latest` identify it as the latest release with `prerelease: false`. Its published `release-metadata.json` retains `releaseChannel: prerelease`, and its release notes retain the original testing disclosures. This distinction does not change any frozen bytes or qualification observations.
+## Previous published desktop baseline
+
+[v0.3.0](https://github.com/teddashh/ai-security-scanner/releases/tag/v0.3.0) was built from `dddd491b87f90c9cebc5f946d9e2070f36742f21`, not current main. Before the v0.3.1 publication on 2026-10-03, both the GitHub release API and `/releases/latest` identified it as latest with `prerelease: false`. Its published `release-metadata.json` retains `releaseChannel: prerelease`, and its release notes retain the original testing disclosures. This distinction does not change any frozen bytes or qualification observations.
 
 Offered installers are Linux x86-64 Debian, macOS Universal DMG, and Windows x86-64 MSI and NSIS. The published `latest.json` has macOS and Windows NSIS updater targets. Debian and MSI have no artifact-scoped updater. Windows installers are unsigned; macOS is not notarized. See [Release operations](../releasing.md#current-release) for the exact existing disclosures.
 
-## Completed main work for the next desktop
+## Completed work included in v0.3.1
 
 | Change | Evidence and scope |
 | --- | --- |
@@ -19,7 +21,7 @@ Offered installers are Linux x86-64 Debian, macOS Universal DMG, and Windows x86
 | Semgrep combined pack | `b0c4ed4`: published and pinned `1.174.0-4`, with 1,493 legacy upstream rules plus four product rules. Native dual-architecture and managed scans, source/notices, signatures and publication evidence passed. See the [publication record](../engines/semgrep-publication-2026-10-03.md). |
 | Image maintenance notes | The [build and update notebook](../engines/image-build-index.md) covers all 25 engine records, their build inputs, rules/data preparation, coupled edits, patches and pitfalls. |
 
-CI, CodeQL and Pages passed for `b0c4ed4a17111987e3debed90778dcdbb4896acd`: [CI 37141380758](https://github.com/teddashh/ai-security-scanner/actions/runs/37141380758), [CodeQL 37141380723](https://github.com/teddashh/ai-security-scanner/actions/runs/37141380723), [Pages 37141379990](https://github.com/teddashh/ai-security-scanner/actions/runs/37141379990). That verifies the published Semgrep pin and source baseline; it is not installer acceptance for the next desktop.
+CI, CodeQL and Pages passed for `b0c4ed4a17111987e3debed90778dcdbb4896acd`: [CI 37141380758](https://github.com/teddashh/ai-security-scanner/actions/runs/37141380758), [CodeQL 37141380723](https://github.com/teddashh/ai-security-scanner/actions/runs/37141380723), [Pages 37141379990](https://github.com/teddashh/ai-security-scanner/actions/runs/37141379990). This earlier source baseline verifies the published Semgrep pin; exact v0.3.1 installer evidence is recorded below.
 
 ## Coverage fixes found during this review
 
@@ -32,18 +34,22 @@ Local verification passed on 2026-10-03: 2,072 Rust tests (including real-fixtur
 
 The coverage implementation is [source commit f0126c0](https://github.com/teddashh/ai-security-scanner/commit/f0126c0791337d258f10b0d68367b78a3660e0fa). Catalog adapter provenance binds to that commit; engine image coordinates and publication-source revisions remain unchanged.
 
-## v0.3.1 preparation
+## v0.3.1 version identity
 
 The application, lockfiles, Tauri bundle and managed-gateway product identity are coordinated at 0.3.1 stable. The gateway image remains the published `0.3.0-1` digest and source revision. Runtime and qualification validation retain the exact gateway publication pin independently of the desktop version; a desktop patch does not rebuild unchanged gateway bytes. A future gateway publication must update both `src-tauri/src/gateway_release.rs` and `scripts/release/platform-qualification.mjs` alongside its manifest.
 
-## Remaining delivery work
+## Completed delivery steps
 
-1. Owner decision recorded: v0.3.1, stable. Update the coordinated desktop version files and finish the bilingual release notes. The already-published `v0.3.0` tag is immutable and cannot identify new installer bytes.
-2. Finish changed-boundary validation, push the exact candidate source to main, and check its CI and CodeQL results.
-3. Run **Release desktop installers** on that exact main source. Verify the offered installer set and its frozen checksums, runtime manifests, notices, updater payloads and qualification observations.
-4. Check the installed candidate with isolated test data: controlled project scan, terminal Results, saved report, reopen and readable HTML export. Preserve the owner's live app and cases. Record platform limits from what the exact candidate actually demonstrated.
-5. Promote the frozen candidate through the existing publication workflow when its delivery checks are complete. Publish those bytes without rebuilding and verify the public release assets. The workflow's `release-publication` environment remains the external publication boundary.
+1. **Version and channel:** coordinated desktop metadata is 0.3.1 stable, with `release.target: 0.3.1`. Exact source CI [37148020161](https://github.com/teddashh/ai-security-scanner/actions/runs/37148020161) and CodeQL [37148020167](https://github.com/teddashh/ai-security-scanner/actions/runs/37148020167) passed.
+2. **Installers and actual execution:** candidate [37148617398](https://github.com/teddashh/ai-security-scanner/actions/runs/37148617398), attempt 1, passed all four installer lanes. The downloaded immutable candidate and finalized files verified. A separate exact Debian extracted-layout exercise completed real Gitleaks and Semgrep checks in the app-private runtime, retained four findings and six raw artifacts, saved redacted English/Chinese HTML through the desktop, and preserved identities after reopening. The fresh-runner lane separately installed the Debian package. This automated exercise does not change the human-path `not-observed` records.
+3. **Publish frozen bytes:** promotion [37153378798](https://github.com/teddashh/ai-security-scanner/actions/runs/37153378798), attempt 1, passed normal `release-publication` environment approval and published without rebuilding at 2026-10-03 21:05:59 UTC. The public tag points to the frozen source, GitHub reports stable/latest, and all 49 public assets were downloaded anonymously and matched their frozen SHA-256 and lengths.
 
-The Microsoft 365 live rerun is a separate, explicit follow-up: the owner runs the updated Windows setup, signs in, and starts verification in the app. Development does not sign in for them or reuse private credentials. Packaging can proceed while that follow-up is pending; the release must not claim the latest live Microsoft 365 path passed.
+Exact artifact IDs, digests, installer checksums, updater targets, platform observations and the additional local exercise are in the bilingual [v0.3.1 release record](v0.3.1.md). Current product READMEs, documentation/engine/release introductions, getting-started guides and website copy are updated in English and Traditional Chinese. Website viewport checks at 390, 768 and 1440 pixels in both languages passed without horizontal overflow; language switching, localized metadata and documentation destinations were checked.
+
+## Separate follow-ups
+
+The Microsoft 365 live rerun remains unobserved: the owner runs the updated Windows setup, signs in, and starts verification in the app. Development does not sign in for them or reuse private credentials. The release does not claim that fresh live path passed.
+
+The local exported HTML report has horizontal scrolling at 768 pixels; its 390- and 1440-pixel layouts fit. The content remains available, and tablet-width report layout is recorded for later improvement.
 
 Garak, Agentic Radar and ZAP remain explicitly non-runnable experimental integrations. Their future activation, other engines' next-rebuild maintenance items, OS signing/notarization, and new lifecycle studies are not silently added to this release's scope. Existing disclosures remain accurate, and the product owner decides release positioning.

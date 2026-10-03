@@ -6,15 +6,15 @@
 
 ## 開始使用
 
-下載適合你電腦的 **v0.3.0 測試版**：
+下載適合你電腦的 **v0.3.1 正式版**：
 
 | 電腦 | 安裝檔 | 第一次開啟前 |
 | --- | --- | --- |
-| macOS（Apple 晶片或 Intel） | [ai-security-scanner_0.3.0_universal.dmg](https://github.com/teddashh/ai-security-scanner/releases/download/v0.3.0/ai-security-scanner_0.3.0_universal.dmg) | 把應用程式拖進**應用程式**資料夾。此版本未經 Apple 公證，開啟前先在「終端機」執行一次 `xattr -dr com.apple.quarantine /Applications/ai-security-scanner.app`。 |
-| Windows x86-64 | [ai-security-scanner_0.3.0_x64-setup.exe](https://github.com/teddashh/ai-security-scanner/releases/download/v0.3.0/ai-security-scanner_0.3.0_x64-setup.exe) 或 [MSI](https://github.com/teddashh/ai-security-scanner/releases/download/v0.3.0/ai-security-scanner_0.3.0_x64_en-US.msi) | 安裝檔未簽章。SmartScreen 警告時，選**其他資訊 → 仍要執行**。Windows 要求安裝或更新 WSL 時請允許。 |
-| Debian 或 Ubuntu x86-64 | [ai-security-scanner_0.3.0_amd64.deb](https://github.com/teddashh/ai-security-scanner/releases/download/v0.3.0/ai-security-scanner_0.3.0_amd64.deb) | 以 `sudo apt install ./ai-security-scanner_0.3.0_amd64.deb` 安裝。 |
+| macOS（Apple 晶片或 Intel） | [ai-security-scanner_0.3.1_universal.dmg](https://github.com/teddashh/ai-security-scanner/releases/download/v0.3.1/ai-security-scanner_0.3.1_universal.dmg) | 把應用程式拖進**應用程式**資料夾。此版本未經 Apple 公證，開啟前先在「終端機」執行一次 `xattr -dr com.apple.quarantine /Applications/ai-security-scanner.app`。 |
+| Windows x86-64 | [ai-security-scanner_0.3.1_x64-setup.exe](https://github.com/teddashh/ai-security-scanner/releases/download/v0.3.1/ai-security-scanner_0.3.1_x64-setup.exe) 或 [MSI](https://github.com/teddashh/ai-security-scanner/releases/download/v0.3.1/ai-security-scanner_0.3.1_x64_en-US.msi) | 安裝檔未簽章。SmartScreen 警告時，選**其他資訊 → 仍要執行**。Windows 要求安裝或更新 WSL 時請允許。 |
+| Debian 或 Ubuntu x86-64 | [ai-security-scanner_0.3.1_amd64.deb](https://github.com/teddashh/ai-security-scanner/releases/download/v0.3.1/ai-security-scanner_0.3.1_amd64.deb) | 以 `sudo apt install ./ai-security-scanner_0.3.1_amd64.deb` 安裝。 |
 
-第一次需要掃描時，應用程式會自行準備掃描環境，不需要另外安裝 Docker。檢查碼與此測試版已測試的範圍請見 [v0.3.0 發布頁](https://github.com/teddashh/ai-security-scanner/releases/tag/v0.3.0)。
+第一次需要掃描時，應用程式會自行準備掃描環境，不需要另外安裝 Docker。檢查碼與此版本的驗證範圍請見 [v0.3.1 發布頁](https://github.com/teddashh/ai-security-scanner/releases/tag/v0.3.1)。
 
 開啟應用程式並選擇一條路徑：
 
@@ -51,9 +51,18 @@ Agent 的沙箱擋住下載或應用程式時，它會請你允許那一個指�
 
 個別檢查失敗時，其他已完成結果仍會保留。報告可重新開啟、與後續掃描比較，並匯出成好讀的 HTML 或結構化資料。
 
+## v0.3.1 更新內容
+
+- 雲端結果說明實際失敗原因；需要相同修正的 AWS 發現合併呈現，保留原始證據。
+- 唯讀連線過期後，可直接重新連接再掃描。
+- Semgrep 提供 1,493 條固定的舊版上游規則與四條產品規則。
+- kube-bench 人工檢查與 KICS 執行失敗會標示涵蓋範圍未完成。
+
+安裝檔實際驗證與待擁有者操作的 Microsoft 365 複驗，請見[發布紀錄](docs/release/v0.3.1.zh-TW.md)。
+
 ## 串接的工具
 
-目前可執行的引擎集合整合了 22 個上游專案。目錄另外保留實驗性、不可派送的 AI 契約；它們不是目前的掃描能力。詳見[開發狀態](docs/development-status.md)。產品只會針對每個選定資產執行適用工具，保留原始識別碼、嚴重度、證據與修正建議，再把所有已完成結果整理到同一份報告。
+目前可執行的引擎集合整合了 22 個上游專案。目錄另外保留實驗性、不可派送的 AI 契約；它們不是目前的掃描能力。詳見[開發狀態](docs/development-status.zh-TW.md)。產品只會針對每個選定資產執行適用工具，保留原始識別碼、嚴重度、證據與修正建議，再把所有已完成結果整理到同一份報告。
 
 **選定資產與授權 → 薄層轉接器 → 上游掃描器 → 輸出轉換器 → 一份依資產整理的標準化報告**
 
@@ -63,7 +72,7 @@ Agent 的沙箱擋住下載或應用程式時，它會請你允許那一個指�
 
 | 工具 | ai-security-scanner 的使用方式 |
 | --- | --- |
-| [Semgrep](https://github.com/semgrep/semgrep) | 使用固定的上游安全規則快照，進行危險程式碼模式的靜態分析。 |
+| [Semgrep](https://github.com/semgrep/semgrep) | 使用固定的 1,493 條舊版上游規則與四條產品規則，進行危險程式碼模式的靜態分析。 |
 | [Gitleaks](https://github.com/gitleaks/gitleaks) | 離線偵測秘密模式；一般證據會遮蔽秘密值。 |
 | [TruffleHog](https://github.com/trufflesecurity/trufflehog) | 離線檔案系統秘密偵測；停用網路驗證。 |
 | [Trivy](https://github.com/aquasecurity/trivy) | 使用固定離線資料，檢查支援的專案 manifest 與單一映像 OCI layout 中的弱點套件。 |
@@ -72,7 +81,7 @@ Agent 的沙箱擋住下載或應用程式時，它會請你允許那一個指�
 | [KICS](https://github.com/Checkmarx/kics) | 使用上游 query pack 檢查基礎設施即程式碼的錯誤設定。 |
 | [Syft](https://github.com/anchore/syft) | 建立軟體元件盤點與可保存的 SBOM；盤點本身不是弱點結果。 |
 
-目前原始碼目錄將 Grype 映像固定為 **`0.117.0-4`**，digest 為 `sha256:56b0d675…`，可檢查本機專案相依套件的已知弱點；受控專案掃描曾記錄 **81 筆 Grype 問題**。這是測試專案的實測結果，各專案筆數會不同。詳見[完整釘選與實測紀錄](docs/engine-catalog.md#grype-repository-support)。
+本版目錄將 Grype 映像固定為 **`0.117.0-4`**，digest 為 `sha256:56b0d675…`，可檢查本機專案相依套件的已知弱點；受控專案掃描曾記錄 **81 筆 Grype 問題**。這是測試專案的實測結果，各專案筆數會不同。詳見[完整釘選與實測紀錄](docs/engine-catalog.md#grype-repository-support)。
 
 ### 網站與內部系統
 
@@ -124,7 +133,7 @@ Agent 的沙箱擋住下載或應用程式時，它會請你允許那一個指�
 - [掃描範圍](docs/scanning-scope.zh-TW.md)
 - [結果與匯出](docs/results-and-exports.zh-TW.md)
 - [文件索引](docs/README.zh-TW.md)
-- [目前開發狀態](docs/development-status.md)
+- [目前開發狀態](docs/development-status.zh-TW.md)
 - [參與開發](CONTRIBUTING.md)
 - [貢獻者](CONTRIBUTORS.md)
 - [安全政策](SECURITY.md)

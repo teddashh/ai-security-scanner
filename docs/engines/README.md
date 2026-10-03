@@ -1,10 +1,12 @@
 # Engine reference
 
+[繁體中文](README.zh-TW.md) · [Documentation](../README.md)
+
 One page per scanner and per shared launcher. Each page records how the product runs that engine, what the adapter keeps from its output, how to update it, and what real runs taught. Read the page before changing an engine, and add a line to its **Lessons from real runs** when a real run teaches something new.
 
 [Engine maintenance procedure](../engine-maintenance.md) is the policy. Start a rebuild or upstream update with the [image build and update notebook](image-build-index.md): it covers all 25 engines, their build contexts, rules/data preparation, coupled edits and known pitfalls, plus the gateway. Each engine page links back to that entry point.
 
-`engines/catalog.json` and each `engines/images/<engine>/plan.json` record exact pins and intended build facts. Compare them with the publication source commit and evidence before saying what a pinned image runs: current source can differ from the published artifact. Semgrep is one such case. Resolve a disagreement from the actual artifact and acquisition evidence, then correct the affected records and documentation.
+`engines/catalog.json` and each `engines/images/<engine>/plan.json` record exact pins and intended build facts. Compare them with the publication source commit and evidence before saying what a pinned image runs: current source can differ from the published artifact. Historical Semgrep records illustrated this distinction; the current combined pack has a [verified publication record](semgrep-publication-2026-10-03.md). Resolve a disagreement from the actual artifact and acquisition evidence, then correct the affected records and documentation.
 
 ## Engines
 

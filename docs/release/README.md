@@ -1,13 +1,16 @@
 # Release records
 
+[繁體中文](README.zh-TW.md) · [Documentation](../README.md)
+
 Current operations are documented in [Release operations](../releasing.md). The product owner controls version numbers, release timing, channels, supported installers, signing, and publication.
 
-The [2026-10-03 desktop readiness record](desktop-readiness-2026-10-03.md) tracks the next candidate's completed changes and remaining delivery work.
+The [2026-10-03 desktop delivery record](desktop-readiness-2026-10-03.md) records the owner decision, exact candidate verification, publication and remaining follow-ups.
 
 This directory contains historical release records, exact delivery observations, artifact references, and schemas. It is not the product roadmap.
 
 ## Version records
 
+- [v0.3.1](v0.3.1.md) ([繁體中文](v0.3.1.zh-TW.md))
 - [v0.1.1](v0.1.1.md)
 - [v0.1.2](v0.1.2.md)
 - [v0.1.3](v0.1.3.md)

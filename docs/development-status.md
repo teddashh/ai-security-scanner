@@ -1,5 +1,7 @@
 # Development status
 
+[繁體中文](development-status.zh-TW.md) · [Documentation](README.md)
+
 _Updated 2026-10-03._
 
 This page summarizes current engineering status for contributors. It is not a product specification
@@ -8,15 +10,9 @@ product behavior, and the [current product review](product-audit.md) tracks the 
 
 ## At a glance
 
-- The current release, [v0.3.0](https://github.com/teddashh/ai-security-scanner/releases/tag/v0.3.0), is published on Linux,
-  macOS, and Windows: Windows MSI and NSIS (unsigned; SmartScreen may warn), macOS Universal `.dmg`
-  (not notarized), and Linux x86-64 `.deb`. Linux AppImage and `.rpm` are not offered. GitHub currently
-  marks it latest, while its frozen metadata retains the original prerelease channel. Its public
-  updater manifest offers macOS and Windows NSIS targets. See the [release record and testing disclosures](releasing.md#current-release).
-- Main now includes Prowler failure headlines, approved AWS report grouping, reconnect actions,
-  blocked-scan continuations, and the published Semgrep `1.174.0-4` combined pack. These changes
-  require a new desktop candidate; they are not present in the v0.3.0 installers. See the
-  [desktop readiness record](release/desktop-readiness-2026-10-03.md).
+- The current release, [v0.3.1](https://github.com/teddashh/ai-security-scanner/releases/tag/v0.3.1), is on the stable channel for Linux, macOS, and Windows. See the [release record](release/v0.3.1.md) for exact installer and updater observations.
+- The released desktop includes Prowler failure headlines, approved AWS report grouping, reconnect-and-rescan, blocked-scan continuations, Semgrep `1.174.0-4`, and explicit kube-bench/KICS incomplete-coverage handling.
+- A fresh owner-signed-in Microsoft 365 live rerun remains unobserved. Garak, Agentic Radar and ZAP remain non-runnable; these records are not additional advertised capabilities.
 - The paired repository [Agent Skills](getting-started.md#use-with-an-agent-skill) install the
   desktop release, check that a computer can scan, guide a scan in the app, and save its report;
   the Linux source build is documented there for changing the product.
@@ -64,6 +60,9 @@ and MCP Armor had no selected MCP configuration. These are results for that fixt
 counts for other repositories. See [the exact pin and recorded result](engine-catalog.md#grype-repository-support).
 
 ## Recorded verification baseline
+
+The October 3 source-readiness audit recorded 2,072 passing Rust tests, 798 frontend tests (six explicit skips), 515 component tests, 89 CI contracts and 202 release contracts. Formatting, Clippy, production build, engine admission and release identity passed. The v0.3.1 preparation also passed the full release self-test and the three gateway identity/security tests. Exact installer observations are recorded separately in [v0.3.1](release/v0.3.1.md); source tests do not substitute for installation or human-path evidence.
+
 
 The following test counts are the successful local baseline recorded on September 19, 2026; they
 are not a new test run for this documentation update:

@@ -170,3 +170,7 @@ Fix / documentation commit:
 ```
 
 Keep exact pins in [catalog.json](../../engines/catalog.json), the engine's plan and the relevant locks. Keep **why**, **how to repeat it**, **what failed**, and **when to revisit it** in these pages. Historical records stay historical; a newer build does not rewrite old scan provenance or advance old data dates.
+
+## Desktop patches that reuse the gateway
+
+A desktop patch updates `runtime/managed-egress-gateway.json` → `product_version` with the application, but retains the existing gateway image tag, digest and source revision when its behavior is unchanged. Desktop 0.3.1 uses the verified `0.3.0-1` image. A new gateway publication must update both exact `GATEWAY_PUBLICATION_TAG` constants (`src-tauri/src/gateway_release.rs` and `scripts/release/platform-qualification.mjs`) together with its manifest and publication records. Run the release self-test and real installed-runtime qualification; do not rebuild an unchanged gateway just to match a desktop version. See the [gateway update notes](egress-gateway.md#updating-this-engine).

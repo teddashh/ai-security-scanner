@@ -6,15 +6,15 @@ Security checks across repositories, websites, and internal systems, through a d
 
 ## Start here
 
-Download the **v0.3.0 test release** for your computer:
+Download the **v0.3.1 stable release** for your computer:
 
 | Computer | Installer | First launch |
 | --- | --- | --- |
-| macOS, Apple silicon or Intel | [ai-security-scanner_0.3.0_universal.dmg](https://github.com/teddashh/ai-security-scanner/releases/download/v0.3.0/ai-security-scanner_0.3.0_universal.dmg) | Drag the app into **Applications**. It is not notarized, so run `xattr -dr com.apple.quarantine /Applications/ai-security-scanner.app` once in Terminal before opening it. |
-| Windows x86-64 | [ai-security-scanner_0.3.0_x64-setup.exe](https://github.com/teddashh/ai-security-scanner/releases/download/v0.3.0/ai-security-scanner_0.3.0_x64-setup.exe) or the [MSI](https://github.com/teddashh/ai-security-scanner/releases/download/v0.3.0/ai-security-scanner_0.3.0_x64_en-US.msi) | The installer is unsigned. If SmartScreen warns, select **More info → Run anyway**. If Windows asks to install or update WSL, allow it. |
-| Debian or Ubuntu x86-64 | [ai-security-scanner_0.3.0_amd64.deb](https://github.com/teddashh/ai-security-scanner/releases/download/v0.3.0/ai-security-scanner_0.3.0_amd64.deb) | Install with `sudo apt install ./ai-security-scanner_0.3.0_amd64.deb`. |
+| macOS, Apple silicon or Intel | [ai-security-scanner_0.3.1_universal.dmg](https://github.com/teddashh/ai-security-scanner/releases/download/v0.3.1/ai-security-scanner_0.3.1_universal.dmg) | Drag the app into **Applications**. It is not notarized, so run `xattr -dr com.apple.quarantine /Applications/ai-security-scanner.app` once in Terminal before opening it. |
+| Windows x86-64 | [ai-security-scanner_0.3.1_x64-setup.exe](https://github.com/teddashh/ai-security-scanner/releases/download/v0.3.1/ai-security-scanner_0.3.1_x64-setup.exe) or the [MSI](https://github.com/teddashh/ai-security-scanner/releases/download/v0.3.1/ai-security-scanner_0.3.1_x64_en-US.msi) | The installer is unsigned. If SmartScreen warns, select **More info → Run anyway**. If Windows asks to install or update WSL, allow it. |
+| Debian or Ubuntu x86-64 | [ai-security-scanner_0.3.1_amd64.deb](https://github.com/teddashh/ai-security-scanner/releases/download/v0.3.1/ai-security-scanner_0.3.1_amd64.deb) | Install with `sudo apt install ./ai-security-scanner_0.3.1_amd64.deb`. |
 
-The app prepares its own scanning runtime the first time a scan needs it; Docker is not required. Checksums and the tested limits of this release are on the [v0.3.0 release page](https://github.com/teddashh/ai-security-scanner/releases/tag/v0.3.0).
+The app prepares its own scanning runtime the first time a scan needs it; Docker is not required. Checksums and the tested limits of this release are on the [v0.3.1 release page](https://github.com/teddashh/ai-security-scanner/releases/tag/v0.3.1).
 
 Open the app and choose one path:
 
@@ -51,6 +51,15 @@ The report leads with:
 
 Completed results remain available when an independent check fails. Reports can be reopened, compared with later runs, and exported as readable HTML or structured data.
 
+## What is new in v0.3.1
+
+- Cloud findings explain the failed condition; related AWS findings share a practical action while keeping the original evidence.
+- Expired read-only connections offer reconnect-and-rescan directly.
+- Semgrep includes 1,493 pinned legacy upstream rules and four product rules.
+- Manual kube-bench checks and KICS execution failures remain visible as incomplete coverage.
+
+See the [release record](docs/release/v0.3.1.md) for exact installer verification and the pending owner-run Microsoft 365 rerun.
+
 ## Integrated tools
 
 The current runnable engine set integrates 22 upstream projects. The catalog separately retains experimental, non-dispatchable AI contracts; those are not current scan capabilities. See [Development status](docs/development-status.md). The product runs only the tools that apply to each selected asset, keeps their original identifiers, severity, evidence, and remediation, then organizes every completed result in the same report.
@@ -63,7 +72,7 @@ Detection rules remain upstream. Product-owned prioritization, deduplication, an
 
 | Tool | What ai-security-scanner uses it for |
 | --- | --- |
-| [Semgrep](https://github.com/semgrep/semgrep) | Static analysis for risky code patterns using a pinned upstream security rule snapshot. |
+| [Semgrep](https://github.com/semgrep/semgrep) | Static analysis for risky code patterns using 1,493 pinned legacy upstream rules plus four product rules. |
 | [Gitleaks](https://github.com/gitleaks/gitleaks) | Offline secret-pattern scanning with secret values redacted from normal evidence. |
 | [TruffleHog](https://github.com/trufflesecurity/trufflehog) | Offline filesystem secret detection; network verification is disabled. |
 | [Trivy](https://github.com/aquasecurity/trivy) | Vulnerable packages in recognized repository manifests and single-image OCI layouts using pinned offline data. |
@@ -72,7 +81,7 @@ Detection rules remain upstream. Product-owned prioritization, deduplication, an
 | [KICS](https://github.com/Checkmarx/kics) | Infrastructure-as-code misconfiguration checks from the upstream query pack. |
 | [Syft](https://github.com/anchore/syft) | Software component inventory and preserved SBOM output; inventory is not a vulnerability result. |
 
-The current source catalog pins the Grype image to **`0.117.0-4`**, digest `sha256:56b0d675…`. It can scan local repository dependencies for known vulnerabilities; a controlled repository scan recorded **81 Grype findings**. That is a fixture result, not an expected count for every project. See the [exact pin and recorded result](docs/engine-catalog.md#grype-repository-support).
+The released catalog pins the Grype image to **`0.117.0-4`**, digest `sha256:56b0d675…`. It can scan local repository dependencies for known vulnerabilities; a controlled repository scan recorded **81 Grype findings**. That is a fixture result, not an expected count for every project. See the [exact pin and recorded result](docs/engine-catalog.md#grype-repository-support).
 
 ### Websites and internal systems
 

@@ -28,15 +28,17 @@
 
 報告內容的更多說明請見[結果與匯出](results-and-exports.zh-TW.md)。
 
+AWS 或 Microsoft 365 的唯讀連線過期時，掃描結果會提供**重新連接後再掃描**。請在應用程式完成連接並保留核准範圍。相關 AWS 發現可能合併為同一個修正動作；展開技術細節可查看每筆原始發現。
+
 ## 安裝
 
-從[發布頁](https://github.com/teddashh/ai-security-scanner/releases/tag/v0.3.0)下載適合你電腦的 **v0.3.0 測試版**：
+從[發布頁](https://github.com/teddashh/ai-security-scanner/releases/tag/v0.3.1)下載適合你電腦的 **v0.3.1 正式版**：
 
 | 電腦 | 安裝檔 | 第一次開啟前 |
 | --- | --- | --- |
-| macOS（Apple 晶片或 Intel） | [ai-security-scanner_0.3.0_universal.dmg](https://github.com/teddashh/ai-security-scanner/releases/download/v0.3.0/ai-security-scanner_0.3.0_universal.dmg) | 把應用程式拖進**應用程式**資料夾。此版本未經 Apple 公證，開啟前先在「終端機」執行一次 `xattr -dr com.apple.quarantine /Applications/ai-security-scanner.app`。 |
-| Windows x86-64 | [ai-security-scanner_0.3.0_x64-setup.exe](https://github.com/teddashh/ai-security-scanner/releases/download/v0.3.0/ai-security-scanner_0.3.0_x64-setup.exe) 或 [MSI](https://github.com/teddashh/ai-security-scanner/releases/download/v0.3.0/ai-security-scanner_0.3.0_x64_en-US.msi) | 安裝檔未簽章。SmartScreen 警告時，選**其他資訊 → 仍要執行**。Windows 要求安裝或更新 WSL 時請允許。 |
-| Debian 或 Ubuntu x86-64 | [ai-security-scanner_0.3.0_amd64.deb](https://github.com/teddashh/ai-security-scanner/releases/download/v0.3.0/ai-security-scanner_0.3.0_amd64.deb) | 以 `sudo apt install ./ai-security-scanner_0.3.0_amd64.deb` 安裝。 |
+| macOS（Apple 晶片或 Intel） | [ai-security-scanner_0.3.1_universal.dmg](https://github.com/teddashh/ai-security-scanner/releases/download/v0.3.1/ai-security-scanner_0.3.1_universal.dmg) | 把應用程式拖進**應用程式**資料夾。此版本未經 Apple 公證，開啟前先在「終端機」執行一次 `xattr -dr com.apple.quarantine /Applications/ai-security-scanner.app`。 |
+| Windows x86-64 | [ai-security-scanner_0.3.1_x64-setup.exe](https://github.com/teddashh/ai-security-scanner/releases/download/v0.3.1/ai-security-scanner_0.3.1_x64-setup.exe) 或 [MSI](https://github.com/teddashh/ai-security-scanner/releases/download/v0.3.1/ai-security-scanner_0.3.1_x64_en-US.msi) | 安裝檔未簽章。SmartScreen 警告時，選**其他資訊 → 仍要執行**。Windows 要求安裝或更新 WSL 時請允許。 |
+| Debian 或 Ubuntu x86-64 | [ai-security-scanner_0.3.1_amd64.deb](https://github.com/teddashh/ai-security-scanner/releases/download/v0.3.1/ai-security-scanner_0.3.1_amd64.deb) | 以 `sudo apt install ./ai-security-scanner_0.3.1_amd64.deb` 安裝。 |
 
 安裝完成後啟動 **ai-security-scanner**。第一次需要掃描時，應用程式會自行準備掃描環境，不需要另外安裝 Docker。
 
