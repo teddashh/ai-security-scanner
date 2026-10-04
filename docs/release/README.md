@@ -6,11 +6,13 @@ Current operations are documented in [Release operations](../releasing.md). The 
 
 The [2026-10-03 desktop delivery record](desktop-readiness-2026-10-03.md) records the owner decision, exact candidate verification, publication and remaining follow-ups.
 
+The current stable release is [v0.4.0](v0.4.0.md).
+
 This directory contains historical release records, exact delivery observations, artifact references, and schemas. It is not the product roadmap.
 
 ## Version records
 
-- [v0.4.0 preparation](v0.4.0.md) ([繁體中文](v0.4.0.zh-TW.md))
+- [v0.4.0 stable](v0.4.0.md) ([繁體中文](v0.4.0.zh-TW.md))
 - [v0.3.1](v0.3.1.md) ([繁體中文](v0.3.1.zh-TW.md))
 - [v0.1.1](v0.1.1.md)
 - [v0.1.2](v0.1.2.md)

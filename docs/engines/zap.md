@@ -1,6 +1,6 @@
 # OWASP ZAP
 
-Crawls one approved website origin and applies ZAP's upstream passive scan rules to the responses it observes, with no attack payloads, under the profile `zap_passive_v1`. It is integrated on main, explicitly selectable in website Advanced and mixed-environment website settings. Nuclei remains the recommended default. This source capability is not in the frozen v0.3.1 installers.
+Crawls one approved website origin and applies ZAP's upstream passive scan rules to the responses it observes, with no attack payloads, under the profile `zap_passive_v1`. It is included in v0.4.0, explicitly selectable in website Advanced and mixed-environment website settings. Nuclei remains the recommended default.
 
 | Item | Value |
 | --- | --- |

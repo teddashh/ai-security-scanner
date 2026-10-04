@@ -1,6 +1,6 @@
 # Agentic Radar
 
-The managed integration is published and optionally dispatchable on main; it is absent from frozen v0.3.1 installers. It statically inventories agents, tools, MCP servers and workflow relationships in one immutable repository snapshot. Inventory supplements the security checks and never produces findings or a successful security-scan claim.
+The managed integration is published and optionally dispatchable in v0.4.0. It statically inventories agents, tools, MCP servers and workflow relationships in one immutable repository snapshot. Inventory supplements the security checks and never produces findings or a successful security-scan claim.
 
 | Item | Value |
 | --- | --- |

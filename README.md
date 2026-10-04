@@ -6,15 +6,15 @@ Security checks across repositories, websites, and internal systems, through a d
 
 ## Start here
 
-Download the **v0.3.1 stable release** for your computer:
+Download the **v0.4.0 stable release** for your computer:
 
 | Computer | Installer | First launch |
 | --- | --- | --- |
-| macOS, Apple silicon or Intel | [ai-security-scanner_0.3.1_universal.dmg](https://github.com/teddashh/ai-security-scanner/releases/download/v0.3.1/ai-security-scanner_0.3.1_universal.dmg) | Drag the app into **Applications**. It is not notarized, so run `xattr -dr com.apple.quarantine /Applications/ai-security-scanner.app` once in Terminal before opening it. |
-| Windows x86-64 | [ai-security-scanner_0.3.1_x64-setup.exe](https://github.com/teddashh/ai-security-scanner/releases/download/v0.3.1/ai-security-scanner_0.3.1_x64-setup.exe) or the [MSI](https://github.com/teddashh/ai-security-scanner/releases/download/v0.3.1/ai-security-scanner_0.3.1_x64_en-US.msi) | The installer is unsigned. If SmartScreen warns, select **More info → Run anyway**. If Windows asks to install or update WSL, allow it. |
-| Debian or Ubuntu x86-64 | [ai-security-scanner_0.3.1_amd64.deb](https://github.com/teddashh/ai-security-scanner/releases/download/v0.3.1/ai-security-scanner_0.3.1_amd64.deb) | Install with `sudo apt install ./ai-security-scanner_0.3.1_amd64.deb`. |
+| macOS, Apple silicon or Intel | [ai-security-scanner_0.4.0_universal.dmg](https://github.com/teddashh/ai-security-scanner/releases/download/v0.4.0/ai-security-scanner_0.4.0_universal.dmg) | Drag the app into **Applications**. It is not notarized, so run `xattr -dr com.apple.quarantine /Applications/ai-security-scanner.app` once in Terminal before opening it. |
+| Windows x86-64 | [ai-security-scanner_0.4.0_x64-setup.exe](https://github.com/teddashh/ai-security-scanner/releases/download/v0.4.0/ai-security-scanner_0.4.0_x64-setup.exe) or the [MSI](https://github.com/teddashh/ai-security-scanner/releases/download/v0.4.0/ai-security-scanner_0.4.0_x64_en-US.msi) | The installer is unsigned. If SmartScreen warns, select **More info → Run anyway**. If Windows asks to install or update WSL, allow it. |
+| Debian or Ubuntu x86-64 | [ai-security-scanner_0.4.0_amd64.deb](https://github.com/teddashh/ai-security-scanner/releases/download/v0.4.0/ai-security-scanner_0.4.0_amd64.deb) | Install with `sudo apt install ./ai-security-scanner_0.4.0_amd64.deb`. |
 
-The app prepares its own scanning runtime the first time a scan needs it; Docker is not required. Checksums and the tested limits of this release are on the [v0.3.1 release page](https://github.com/teddashh/ai-security-scanner/releases/tag/v0.3.1).
+The app prepares its own scanning runtime the first time a scan needs it; Docker is not required. Checksums and the tested limits of this release are on the [v0.4.0 release page](https://github.com/teddashh/ai-security-scanner/releases/tag/v0.4.0).
 
 Open the app and choose one path:
 
@@ -51,16 +51,16 @@ The report leads with:
 
 Completed results remain available when an independent check fails. Reports can be reopened, compared with later runs, and exported as readable HTML or structured data.
 
-## Prepared for v0.4.0
+## What is new in v0.4.0
 
 - **ZAP:** optional passive website checks for one approved origin.
 - **Agentic Radar:** offline workflow inventory for five selected frameworks.
 - **Garak:** 54 fixed native prompts across four model probes with exact HTTPS/model consent, a one-shot local key and explicit request limits/provider charges.
 - More reliable coverage, exact-grant Greenbone recovery, readable HTML at tablet widths, corrected M365 platform matching, and reproducible engine build/update notes.
 
-See the [v0.4.0 preparation record](docs/release/v0.4.0.md). Current downloads above remain v0.3.1 until the new installer publication is verified.
+See the [v0.4.0 release record](docs/release/v0.4.0.md).
 
-## What is new in v0.3.1
+## Earlier changes in v0.3.1
 
 - Cloud findings explain the failed condition; related AWS findings share a practical action while keeping the original evidence.
 - Expired read-only connections offer reconnect-and-rescan directly.
@@ -71,7 +71,7 @@ See the [release record](docs/release/v0.3.1.md) for exact installer verificatio
 
 ## Integrated tools
 
-On main, the current runnable engine set integrates 25 upstream projects. The upcoming v0.4.0 adds optional ZAP passive website checks, Agentic Radar offline workflow inventory and bounded Garak model checks; the published v0.3.1 installers retain their frozen set of 22 tools. Garak requires an exact HTTPS endpoint/model, fresh local key and explicit approval of its 54 fixed native prompts and provider charges. Research-only candidates are not current scan capabilities. See [Development status](docs/development-status.md). The product runs only the tools that apply to each selected asset, keeps their original identifiers, severity, evidence, and remediation, then organizes every completed result in the same report.
+The v0.4.0 release integrates 25 upstream projects, including optional ZAP passive website checks, Agentic Radar offline workflow inventory and bounded Garak model checks. Garak requires an exact HTTPS endpoint/model, fresh local key and explicit approval of its 54 fixed native prompts and provider charges. Research-only candidates are not current scan capabilities. See [Development status](docs/development-status.md). The product runs only the tools that apply to each selected asset, keeps their original identifiers, severity, evidence, and remediation, then organizes every completed result in the same report.
 
 **Selected assets and authorization → thin adapters → upstream scanners → output converters → one standardized report organized by asset**
 
@@ -97,7 +97,7 @@ The released catalog pins the Grype image to **`0.117.0-4`**, digest `sha256:56b
 | Tool | What ai-security-scanner uses it for |
 | --- | --- |
 | [Nuclei](https://github.com/projectdiscovery/nuclei) | Technology-aware, bounded read-only HTTP security checks from a pinned [Nuclei Templates](https://github.com/projectdiscovery/nuclei-templates) snapshot. |
-| [ZAP](https://github.com/zaproxy/zaproxy) | Optional page-crawling and upstream passive response checks for one approved origin; available on main for v0.4.0, outside the frozen v0.3.1 installers. |
+| [ZAP](https://github.com/zaproxy/zaproxy) | Optional page-crawling and upstream passive response checks for one approved origin. |
 | [Greenbone OpenVAS Scanner](https://github.com/greenbone/openvas-scanner) | Service-aware remote checks from a pinned Community Feed for exact approved hosts and ports. |
 | [Naabu](https://github.com/projectdiscovery/naabu) | Selected TCP-port reachability and exposure discovery; an open port is not a vulnerability finding. |
 | [httpx](https://github.com/projectdiscovery/httpx) | Bounded HTTP reachability and status metadata; it is not a vulnerability scanner. |
@@ -125,7 +125,7 @@ The released catalog pins the Grype image to **`0.117.0-4`**, digest `sha256:56b
 
 | Tool | What ai-security-scanner uses it for |
 | --- | --- |
-| [Agentic Radar](https://github.com/splx-ai/agentic-radar) | Optional offline workflow inventory for LangGraph, CrewAI, n8n, OpenAI Agents, and AutoGen in one approved repository snapshot. It does not execute the workflow or contact a model. Available on main for v0.4.0. |
+| [Agentic Radar](https://github.com/splx-ai/agentic-radar) | Optional offline workflow inventory for LangGraph, CrewAI, n8n, OpenAI Agents, and AutoGen in one approved repository snapshot. It does not execute the workflow or contact a model. |
 | [Garak](https://github.com/NVIDIA/garak) | Optional model behavior checks against one approved HTTPS chat API/model with 54 native DAN/ANSI prompts, one-shot local keys and explicit inference limits/provider charges. |
 | [MCP Armor](https://github.com/aira-security/mcp-armor) | Static checks over one approved MCP configuration snapshot for hardcoded credentials and excessive tool permissions, without starting or contacting an MCP server or loading a model. |
 

@@ -4,11 +4,11 @@ const description = document.querySelector('meta[name="description"]');
 const pageCopy = {
   en: {
     title: "ai-security-scanner · Many security tools, one clear report",
-    description: "Use the desktop app or Claude Code and Codex Agent Skills for upstream security checks and one standardized report. Download the v0.3.1 stable release for Linux, macOS and Windows.",
+    description: "Use the desktop app or Claude Code and Codex Agent Skills for upstream security checks and one standardized report. Download the v0.4.0 stable release for Linux, macOS and Windows.",
   },
   "zh-TW": {
     title: "ai-security-scanner · 多種安全工具，一份清楚報告",
-    description: "透過桌面程式或 Claude Code／Codex Agent Skills 執行上游安全檢查，閱讀一份標準化報告。下載 Linux、macOS、Windows 的 v0.3.1 正式版。",
+    description: "透過桌面程式或 Claude Code／Codex Agent Skills 執行上游安全檢查，閱讀一份標準化報告。下載 Linux、macOS、Windows 的 v0.4.0 正式版。",
   },
 };
 

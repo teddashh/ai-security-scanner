@@ -6,11 +6,11 @@
 
 ## 目前發布版本
 
-[v0.3.1](https://github.com/teddashh/ai-security-scanner/releases/tag/v0.3.1) 是目前的 **stable／latest** 桌面版本，於 2026-10-03 發布，涵蓋 **Linux、macOS、Windows**。[候選 run 37148617398](https://github.com/teddashh/ai-security-scanner/actions/runs/37148617398) 建置並驗證精確來源 `6b61e9ef72f90174ef7310f80e766aba61c9428d`；[promotion run 37153378798](https://github.com/teddashh/ai-security-scanner/actions/runs/37153378798) 經 `release-publication` environment 正常核准後，不重新建置即發布同一批凍結檔案。發布頁包含安裝檔、`SHA256SUMS.txt`、runtime manifests、SBOM、notices 與 qualification 紀錄。
+[v0.4.0](https://github.com/teddashh/ai-security-scanner/releases/tag/v0.4.0) 是目前的 **stable／latest** 桌面版本，於 2026-10-04 發布，涵蓋 **Linux、macOS、Windows**。[候選 run 37188549410](https://github.com/teddashh/ai-security-scanner/actions/runs/37188549410) 建置並驗證精確來源 `335d0666bdc63eb86e6c8c4cddeae110db893397`；[promotion run 37191173323](https://github.com/teddashh/ai-security-scanner/actions/runs/37191173323) 經 `release-publication` environment 正常核准後，不重新建置即發布凍結檔案。全部 49 個公開檔案已獨立匿名下載、核對凍結檢查碼，來源 provenance 與更新簽章亦驗證通過。見[中英文交付紀錄](release/v0.4.0.zh-TW.md)。
 
-GitHub 記錄 `prerelease: false`；凍結 metadata 記錄 `releaseChannel: stable`、`stableTarget: 0.3.1`，與 `package.json` 一致。公開的 `latest.json` 有 macOS 與 Windows NSIS 更新目標；Debian 與 MSI 沒有對應的套件 updater。精確檢查碼、來源測試、本機掃描／報告／重新開啟實測及已知限制，見[本版交付紀錄](release/v0.3.1.zh-TW.md)。
+GitHub 記錄 `prerelease: false`；凍結 metadata 記錄 `releaseChannel: stable`、`stableTarget: 0.4.0`，與 `package.json` 一致。公開的 `latest.json` 有 macOS 與 Windows NSIS 更新目標；Debian 與 MSI 沒有對應的套件 updater。精確檢查碼、來源測試、本機掃描／報告／重新開啟實測及已知限制，見[本版交付紀錄](release/v0.4.0.zh-TW.md)。
 
-前版 [v0.3.0](https://github.com/teddashh/ai-security-scanner/releases/tag/v0.3.0) 保留原始檔案與測試揭露。即使 GitHub 後來曾將它標為 stable／latest，凍結 metadata 仍記錄原始 prerelease channel；歷史標籤不會改變檔案內容或驗證觀察。
+前一個正式版 [v0.3.1](release/v0.3.1.zh-TW.md) 保留原始檔案與交付觀察。更早的 [v0.3.0](https://github.com/teddashh/ai-security-scanner/releases/tag/v0.3.0) 也保留原始檔案與測試揭露。即使 GitHub 後來曾將它標為 stable／latest，凍結 metadata 仍記錄原始 prerelease channel；歷史標籤不會改變檔案內容或驗證觀察。
 
 | 平台 | 安裝檔 | 揭露事項 |
 | --- | --- | --- |

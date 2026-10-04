@@ -2,9 +2,9 @@
 
 [English](README.md) · [文件](../README.zh-TW.md)
 
-目前版本為 [v0.3.1 正式版](v0.3.1.zh-TW.md)。Linux、macOS 與 Windows 的安裝檔、更新說明、實際交付證據與尚未觀察的項目，都保存在該版紀錄。
+目前版本為 [v0.4.0 正式版](v0.4.0.zh-TW.md)。Linux、macOS 與 Windows 的安裝檔、更新說明、實際交付證據與尚未觀察的項目，都保存在該版紀錄。
 
-- [v0.4.0 準備紀錄](v0.4.0.zh-TW.md) · [English](v0.4.0.md)
+- [v0.4.0 發布紀錄](v0.4.0.zh-TW.md) · [English](v0.4.0.md)
 - [v0.3.1 發布紀錄](v0.3.1.zh-TW.md) · [English](v0.3.1.md)
 - [2026-10-03 桌面交付紀錄](desktop-readiness-2026-10-03.zh-TW.md)
 - [發布流程](../releasing.zh-TW.md)

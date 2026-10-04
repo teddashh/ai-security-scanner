@@ -276,10 +276,10 @@ test("beginner documentation leads with the three scan paths and one report", as
   }
   assert.match(english, /One report for every selected asset/u);
   assert.match(chinese, /所有資產集中在一份報告/u);
-  assert.match(english, new RegExp(`runnable engine set integrates ${runnableCount} upstream projects`, "iu"));
-  assert.match(chinese, new RegExp(`可執行的引擎集合整合了 ${runnableCount} 個上游專案`, "u"));
-  assert.match(website, new RegExp(`${runnableCount} runnable upstream projects`, "iu"));
-  assert.match(website, new RegExp(`${runnableCount} 個可執行的上游專案`, "u"));
+  assert.match(english, new RegExp(`integrates ${runnableCount} upstream projects`, "iu"));
+  assert.match(chinese, new RegExp(`整合 ${runnableCount} 個上游專案`, "u"));
+  assert.match(website, new RegExp(`${runnableCount} upstream projects`, "iu"));
+  assert.match(website, new RegExp(`${runnableCount} 個上游專案`, "u"));
   for (const content of [english, chinese, website]) {
     assert.match(content, /research-only candidates|研究用候選|experimental, non-dispatchable|實驗性、不可派送/iu);
     assert.match(content, /not (?:current |counted as )?scan capabilities|不(?:計為|是目前的)掃描能力/u);

@@ -6,15 +6,15 @@
 
 ## 開始使用
 
-下載適合你電腦的 **v0.3.1 正式版**：
+下載適合你電腦的 **v0.4.0 正式版**：
 
 | 電腦 | 安裝檔 | 第一次開啟前 |
 | --- | --- | --- |
-| macOS（Apple 晶片或 Intel） | [ai-security-scanner_0.3.1_universal.dmg](https://github.com/teddashh/ai-security-scanner/releases/download/v0.3.1/ai-security-scanner_0.3.1_universal.dmg) | 把應用程式拖進**應用程式**資料夾。此版本未經 Apple 公證，開啟前先在「終端機」執行一次 `xattr -dr com.apple.quarantine /Applications/ai-security-scanner.app`。 |
-| Windows x86-64 | [ai-security-scanner_0.3.1_x64-setup.exe](https://github.com/teddashh/ai-security-scanner/releases/download/v0.3.1/ai-security-scanner_0.3.1_x64-setup.exe) 或 [MSI](https://github.com/teddashh/ai-security-scanner/releases/download/v0.3.1/ai-security-scanner_0.3.1_x64_en-US.msi) | 安裝檔未簽章。SmartScreen 警告時，選**其他資訊 → 仍要執行**。Windows 要求安裝或更新 WSL 時請允許。 |
-| Debian 或 Ubuntu x86-64 | [ai-security-scanner_0.3.1_amd64.deb](https://github.com/teddashh/ai-security-scanner/releases/download/v0.3.1/ai-security-scanner_0.3.1_amd64.deb) | 以 `sudo apt install ./ai-security-scanner_0.3.1_amd64.deb` 安裝。 |
+| macOS（Apple 晶片或 Intel） | [ai-security-scanner_0.4.0_universal.dmg](https://github.com/teddashh/ai-security-scanner/releases/download/v0.4.0/ai-security-scanner_0.4.0_universal.dmg) | 把應用程式拖進**應用程式**資料夾。此版本未經 Apple 公證，開啟前先在「終端機」執行一次 `xattr -dr com.apple.quarantine /Applications/ai-security-scanner.app`。 |
+| Windows x86-64 | [ai-security-scanner_0.4.0_x64-setup.exe](https://github.com/teddashh/ai-security-scanner/releases/download/v0.4.0/ai-security-scanner_0.4.0_x64-setup.exe) 或 [MSI](https://github.com/teddashh/ai-security-scanner/releases/download/v0.4.0/ai-security-scanner_0.4.0_x64_en-US.msi) | 安裝檔未簽章。SmartScreen 警告時，選**其他資訊 → 仍要執行**。Windows 要求安裝或更新 WSL 時請允許。 |
+| Debian 或 Ubuntu x86-64 | [ai-security-scanner_0.4.0_amd64.deb](https://github.com/teddashh/ai-security-scanner/releases/download/v0.4.0/ai-security-scanner_0.4.0_amd64.deb) | 以 `sudo apt install ./ai-security-scanner_0.4.0_amd64.deb` 安裝。 |
 
-第一次需要掃描時，應用程式會自行準備掃描環境，不需要另外安裝 Docker。檢查碼與此版本的驗證範圍請見 [v0.3.1 發布頁](https://github.com/teddashh/ai-security-scanner/releases/tag/v0.3.1)。
+第一次需要掃描時，應用程式會自行準備掃描環境，不需要另外安裝 Docker。檢查碼與此版本的驗證範圍請見 [v0.4.0 發布頁](https://github.com/teddashh/ai-security-scanner/releases/tag/v0.4.0)。
 
 開啟應用程式並選擇一條路徑：
 
@@ -51,16 +51,16 @@ Agent 的沙箱擋住下載或應用程式時，它會請你允許那一個指�
 
 個別檢查失敗時，其他已完成結果仍會保留。報告可重新開啟、與後續掃描比較，並匯出成好讀的 HTML 或結構化資料。
 
-## v0.4.0 準備中的更新
+## v0.4.0 更新
 
 - **ZAP：**對一個核准來源進行可選的被動網站檢查。
 - **Agentic Radar：**選擇五種框架之一，離線盤點工作流程。
 - **Garak：**四個固定原生模型探針共 54 個提示，需精確 HTTPS／模型確認、一次性本機金鑰，以及明確請求限制與服務商費用。
 - 改善涵蓋範圍判定、精確授權的 Greenbone 復原、HTML 平板版面、M365 平台辨識，並提供可重現的引擎建置更新筆記。
 
-詳見 [v0.4.0 準備紀錄](docs/release/v0.4.0.zh-TW.md)。新版安裝包發布驗證完成前，上方下載仍為 v0.3.1。
+詳見 [v0.4.0 發布紀錄](docs/release/v0.4.0.zh-TW.md)。
 
-## v0.3.1 更新內容
+## v0.3.1 的先前更新
 
 - 雲端結果說明實際失敗原因；需要相同修正的 AWS 發現合併呈現，保留原始證據。
 - 唯讀連線過期後，可直接重新連接再掃描。
@@ -71,7 +71,7 @@ Agent 的沙箱擋住下載或應用程式時，它會請你允許那一個指�
 
 ## 串接的工具
 
-main 目前可執行的引擎集合整合了 25 個上游專案。準備中的 v0.4.0 新增可選的 ZAP 被動網站檢查、Agentic Radar 離線工作流程盤點，以及受限的 Garak 模型檢查；已發布的 v0.3.1 安裝包仍維持固定的 22 個工具。Garak 需要精確 HTTPS 端點與模型、新的本機金鑰，以及 54 個固定原生提示和服務商費用的明確核准。研究用候選不是目前的掃描能力。詳見[開發狀態](docs/development-status.zh-TW.md)。產品只會針對每個選定資產執行適用工具，保留原始識別碼、嚴重度、證據與修正建議，再把所有已完成結果整理到同一份報告。
+v0.4.0 正式版整合 25 個上游專案，包含可選的 ZAP 被動網站檢查、Agentic Radar 離線工作流程盤點，以及受限的 Garak 模型檢查。Garak 需要精確 HTTPS 端點與模型、新的本機金鑰，以及 54 個固定原生提示和服務商費用的明確核准。研究用候選不是目前的掃描能力。詳見[開發狀態](docs/development-status.zh-TW.md)。產品只會針對每個選定資產執行適用工具，保留原始識別碼、嚴重度、證據與修正建議，再把所有已完成結果整理到同一份報告。
 
 **選定資產與授權 → 薄層轉接器 → 上游掃描器 → 輸出轉換器 → 一份依資產整理的標準化報告**
 
@@ -97,7 +97,7 @@ main 目前可執行的引擎集合整合了 25 個上游專案。準備中的 v
 | 工具 | ai-security-scanner 的使用方式 |
 | --- | --- |
 | [Nuclei](https://github.com/projectdiscovery/nuclei) | 從固定的 [Nuclei Templates](https://github.com/projectdiscovery/nuclei-templates) 快照，執行會辨識技術、範圍受限的唯讀 HTTP 安全檢查。 |
-| [ZAP](https://github.com/zaproxy/zaproxy) | 對一個核准來源爬取頁面並執行上游被動回應檢查；已在 main 接通，預計納入 v0.4.0，未包含於固定的 v0.3.1 安裝包。 |
+| [ZAP](https://github.com/zaproxy/zaproxy) | 對一個核准來源爬取頁面並執行上游被動回應檢查。 |
 | [Greenbone OpenVAS Scanner](https://github.com/greenbone/openvas-scanner) | 針對精確獲准的主機與連接埠，從固定 Community Feed 執行會辨識服務的遠端檢查。 |
 | [Naabu](https://github.com/projectdiscovery/naabu) | 探索選定 TCP 連接埠的可達性與曝露；開放連接埠不等於弱點。 |
 | [httpx](https://github.com/projectdiscovery/httpx) | 取得範圍受限的 HTTP 可達性與狀態資訊；它不是弱點掃描器。 |
@@ -125,7 +125,7 @@ main 目前可執行的引擎集合整合了 25 個上游專案。準備中的 v
 
 | 工具 | ai-security-scanner 的使用方式 |
 | --- | --- |
-| [Agentic Radar](https://github.com/splx-ai/agentic-radar) | 可選的離線工作流程盤點，支援一份已核准儲存庫快照中的 LangGraph、CrewAI、n8n、OpenAI Agents 與 AutoGen；不執行工作流程，也不連線模型。目前已在 main 上提供，將納入 v0.4.0。 |
+| [Agentic Radar](https://github.com/splx-ai/agentic-radar) | 可選的離線工作流程盤點，支援一份已核准儲存庫快照中的 LangGraph、CrewAI、n8n、OpenAI Agents 與 AutoGen；不執行工作流程，也不連線模型。 |
 | [Garak](https://github.com/NVIDIA/garak) | 對一個核准 HTTPS 聊天 API／模型進行可選行為檢查：54 個原生 DAN／ANSI 提示、一次性本機金鑰，以及明確推論限制與服務商費用。 |
 | [MCP Armor](https://github.com/aira-security/mcp-armor) | 靜態檢查一份已核准的 MCP 設定快照中的硬編碼憑證與過度工具權限，不啟動或連線 MCP 伺服器，也不載入模型。 |
 
