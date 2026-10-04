@@ -55,7 +55,7 @@ Completed results remain available when an independent check fails. Reports can 
 
 - **ZAP:** optional passive website checks for one approved origin.
 - **Agentic Radar:** offline workflow inventory for five selected frameworks.
-- **Garak:** 54 fixed native model probes with exact HTTPS/model consent, a one-shot local key and explicit request limits/provider charges.
+- **Garak:** 54 fixed native prompts across four model probes with exact HTTPS/model consent, a one-shot local key and explicit request limits/provider charges.
 - More reliable coverage, exact-grant Greenbone recovery, readable HTML at tablet widths, corrected M365 platform matching, and reproducible engine build/update notes.
 
 See the [v0.4.0 preparation record](docs/release/v0.4.0.md). Current downloads above remain v0.3.1 until the new installer publication is verified.
