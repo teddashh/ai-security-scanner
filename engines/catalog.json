@@ -85,7 +85,7 @@
         "id": "ai-security-scanner:cloudquery",
         "version": "0.2.5",
         "acquisition_source": "workspace://src-tauri/src/adapters/mod.rs",
-        "source_revision": "bbec04155dba2685741d4f956f51d41f9992de5c",
+        "source_revision": "d3826fdb018e6ed0d54f00c17d7fdfd0c17aed41",
         "release_state": "released"
       }
     },
@@ -219,7 +219,7 @@
         "id": "ai-security-scanner:steampipe",
         "version": "0.2.5",
         "acquisition_source": "workspace://src-tauri/src/adapters/mod.rs",
-        "source_revision": "bbec04155dba2685741d4f956f51d41f9992de5c",
+        "source_revision": "d3826fdb018e6ed0d54f00c17d7fdfd0c17aed41",
         "release_state": "released"
       }
     },
@@ -392,7 +392,7 @@
         "id": "ai-security-scanner:prowler",
         "version": "0.2.5",
         "acquisition_source": "workspace://src-tauri/src/adapters/mod.rs",
-        "source_revision": "bbec04155dba2685741d4f956f51d41f9992de5c",
+        "source_revision": "d3826fdb018e6ed0d54f00c17d7fdfd0c17aed41",
         "release_state": "released"
       }
     },
@@ -531,7 +531,7 @@
         "id": "ai-security-scanner:scoutsuite",
         "version": "0.2.5",
         "acquisition_source": "workspace://src-tauri/src/adapters/mod.rs",
-        "source_revision": "bbec04155dba2685741d4f956f51d41f9992de5c",
+        "source_revision": "d3826fdb018e6ed0d54f00c17d7fdfd0c17aed41",
         "release_state": "released"
       }
     },
@@ -666,7 +666,7 @@
         "id": "ai-security-scanner:cloudsplaining",
         "version": "0.2.5",
         "acquisition_source": "workspace://src-tauri/src/adapters/mod.rs",
-        "source_revision": "bbec04155dba2685741d4f956f51d41f9992de5c",
+        "source_revision": "d3826fdb018e6ed0d54f00c17d7fdfd0c17aed41",
         "release_state": "released"
       }
     },
@@ -801,7 +801,7 @@
         "id": "ai-security-scanner:scubagear",
         "version": "0.2.5",
         "acquisition_source": "workspace://src-tauri/src/adapters/mod.rs",
-        "source_revision": "bbec04155dba2685741d4f956f51d41f9992de5c",
+        "source_revision": "d3826fdb018e6ed0d54f00c17d7fdfd0c17aed41",
         "release_state": "released"
       }
     },
@@ -936,7 +936,7 @@
         "id": "ai-security-scanner:maester",
         "version": "0.2.5",
         "acquisition_source": "workspace://src-tauri/src/adapters/mod.rs",
-        "source_revision": "bbec04155dba2685741d4f956f51d41f9992de5c",
+        "source_revision": "d3826fdb018e6ed0d54f00c17d7fdfd0c17aed41",
         "release_state": "released"
       }
     },
@@ -1086,7 +1086,7 @@
         "id": "ai-security-scanner:naabu",
         "version": "0.2.5",
         "acquisition_source": "workspace://src-tauri/src/adapters/mod.rs",
-        "source_revision": "bbec04155dba2685741d4f956f51d41f9992de5c",
+        "source_revision": "d3826fdb018e6ed0d54f00c17d7fdfd0c17aed41",
         "release_state": "released"
       }
     },
@@ -1230,7 +1230,7 @@
         "id": "ai-security-scanner:httpx",
         "version": "0.2.5",
         "acquisition_source": "workspace://src-tauri/src/adapters/mod.rs",
-        "source_revision": "bbec04155dba2685741d4f956f51d41f9992de5c",
+        "source_revision": "d3826fdb018e6ed0d54f00c17d7fdfd0c17aed41",
         "release_state": "released"
       }
     },
@@ -1374,7 +1374,7 @@
         "id": "ai-security-scanner:nuclei",
         "version": "0.2.5",
         "acquisition_source": "workspace://src-tauri/src/adapters/mod.rs",
-        "source_revision": "bbec04155dba2685741d4f956f51d41f9992de5c",
+        "source_revision": "d3826fdb018e6ed0d54f00c17d7fdfd0c17aed41",
         "release_state": "released"
       }
     },
@@ -1519,7 +1519,7 @@
         "id": "ai-security-scanner:greenbone",
         "version": "0.2.5",
         "acquisition_source": "workspace://src-tauri/src/adapters/mod.rs",
-        "source_revision": "bbec04155dba2685741d4f956f51d41f9992de5c",
+        "source_revision": "d3826fdb018e6ed0d54f00c17d7fdfd0c17aed41",
         "release_state": "released"
       }
     },
@@ -1666,7 +1666,7 @@
         "id": "ai-security-scanner:zap",
         "version": "0.2.5",
         "acquisition_source": "workspace://src-tauri/src/adapters/mod.rs",
-        "source_revision": "bbec04155dba2685741d4f956f51d41f9992de5c",
+        "source_revision": "d3826fdb018e6ed0d54f00c17d7fdfd0c17aed41",
         "release_state": "released"
       }
     },
@@ -1803,7 +1803,7 @@
         "id": "ai-security-scanner:semgrep",
         "version": "0.2.5",
         "acquisition_source": "workspace://src-tauri/src/adapters/mod.rs",
-        "source_revision": "bbec04155dba2685741d4f956f51d41f9992de5c",
+        "source_revision": "d3826fdb018e6ed0d54f00c17d7fdfd0c17aed41",
         "release_state": "released"
       }
     },
@@ -1934,7 +1934,7 @@
         "id": "ai-security-scanner:gitleaks",
         "version": "0.2.5",
         "acquisition_source": "workspace://src-tauri/src/adapters/mod.rs",
-        "source_revision": "bbec04155dba2685741d4f956f51d41f9992de5c",
+        "source_revision": "d3826fdb018e6ed0d54f00c17d7fdfd0c17aed41",
         "release_state": "released"
       }
     },
@@ -2066,7 +2066,7 @@
         "id": "ai-security-scanner:trufflehog",
         "version": "0.2.5",
         "acquisition_source": "workspace://src-tauri/src/adapters/mod.rs",
-        "source_revision": "bbec04155dba2685741d4f956f51d41f9992de5c",
+        "source_revision": "d3826fdb018e6ed0d54f00c17d7fdfd0c17aed41",
         "release_state": "released"
       }
     },
@@ -2212,7 +2212,7 @@
         "id": "ai-security-scanner:checkov",
         "version": "0.2.5",
         "acquisition_source": "workspace://src-tauri/src/adapters/mod.rs",
-        "source_revision": "bbec04155dba2685741d4f956f51d41f9992de5c",
+        "source_revision": "d3826fdb018e6ed0d54f00c17d7fdfd0c17aed41",
         "release_state": "released"
       }
     },
@@ -2358,7 +2358,7 @@
         "id": "ai-security-scanner:kics",
         "version": "0.2.5",
         "acquisition_source": "workspace://src-tauri/src/adapters/mod.rs",
-        "source_revision": "bbec04155dba2685741d4f956f51d41f9992de5c",
+        "source_revision": "d3826fdb018e6ed0d54f00c17d7fdfd0c17aed41",
         "release_state": "released"
       }
     },
@@ -2507,7 +2507,7 @@
         "id": "ai-security-scanner:trivy",
         "version": "0.2.5",
         "acquisition_source": "workspace://src-tauri/src/adapters/mod.rs",
-        "source_revision": "bbec04155dba2685741d4f956f51d41f9992de5c",
+        "source_revision": "d3826fdb018e6ed0d54f00c17d7fdfd0c17aed41",
         "release_state": "released"
       }
     },
@@ -2648,7 +2648,7 @@
         "id": "ai-security-scanner:grype",
         "version": "0.2.5",
         "acquisition_source": "workspace://src-tauri/src/adapters/mod.rs",
-        "source_revision": "bbec04155dba2685741d4f956f51d41f9992de5c",
+        "source_revision": "d3826fdb018e6ed0d54f00c17d7fdfd0c17aed41",
         "release_state": "released"
       }
     },
@@ -2792,7 +2792,7 @@
         "id": "ai-security-scanner:syft",
         "version": "0.2.5",
         "acquisition_source": "workspace://src-tauri/src/adapters/mod.rs",
-        "source_revision": "bbec04155dba2685741d4f956f51d41f9992de5c",
+        "source_revision": "d3826fdb018e6ed0d54f00c17d7fdfd0c17aed41",
         "release_state": "released"
       }
     },
@@ -2924,7 +2924,7 @@
         "id": "ai-security-scanner:kubescape",
         "version": "0.2.5",
         "acquisition_source": "workspace://src-tauri/src/adapters/mod.rs",
-        "source_revision": "bbec04155dba2685741d4f956f51d41f9992de5c",
+        "source_revision": "d3826fdb018e6ed0d54f00c17d7fdfd0c17aed41",
         "release_state": "released"
       }
     },
@@ -3056,7 +3056,7 @@
         "id": "ai-security-scanner:kube-bench",
         "version": "0.2.5",
         "acquisition_source": "workspace://src-tauri/src/adapters/mod.rs",
-        "source_revision": "bbec04155dba2685741d4f956f51d41f9992de5c",
+        "source_revision": "d3826fdb018e6ed0d54f00c17d7fdfd0c17aed41",
         "release_state": "released"
       }
     },
@@ -3188,7 +3188,7 @@
         "id": "ai-security-scanner:garak",
         "version": "0.2.5",
         "acquisition_source": "workspace://src-tauri/src/adapters/mod.rs",
-        "source_revision": "bbec04155dba2685741d4f956f51d41f9992de5c",
+        "source_revision": "d3826fdb018e6ed0d54f00c17d7fdfd0c17aed41",
         "release_state": "workspace_unreleased"
       }
     },
@@ -3322,7 +3322,7 @@
         "id": "ai-security-scanner:agentic-radar",
         "version": "0.2.5",
         "acquisition_source": "workspace://src-tauri/src/adapters/mod.rs",
-        "source_revision": "bbec04155dba2685741d4f956f51d41f9992de5c",
+        "source_revision": "d3826fdb018e6ed0d54f00c17d7fdfd0c17aed41",
         "release_state": "workspace_unreleased"
       }
     },
@@ -3459,7 +3459,7 @@
         "id": "ai-security-scanner:mcp-armor",
         "version": "0.2.5",
         "acquisition_source": "workspace://src-tauri/src/adapters/mod.rs",
-        "source_revision": "bbec04155dba2685741d4f956f51d41f9992de5c",
+        "source_revision": "d3826fdb018e6ed0d54f00c17d7fdfd0c17aed41",
         "release_state": "released"
       }
     },
