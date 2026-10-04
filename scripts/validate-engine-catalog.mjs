@@ -340,6 +340,7 @@ const managedGreenboneContract = {
 const greenbonePublicationBlocker =
   "Publish and independently verify the Greenbone 23.50.24-feed202610010558-1 image for linux/amd64 and linux/arm64, then record its immutable digest and exact publication evidence.";
 const managedEvidenceWorkflows = [
+  ".github/workflows/engine-image-garak.yml",
   ".github/workflows/engine-image-agentic-radar.yml",
   ".github/workflows/engine-images-cloud.yml",
   ".github/workflows/engine-images-external.yml",
@@ -354,6 +355,7 @@ const managedEvidenceWorkflows = [
 const localK8sWorkflowRelative = ".github/workflows/engine-images-local-k8s.yml";
 const managedEgressGatewayWorkflowRelative = ".github/workflows/managed-egress-gateway-image.yml";
 const newlyPublishedEvidenceWorkflows = [
+  ".github/workflows/engine-image-garak.yml",
   ".github/workflows/engine-image-agentic-radar.yml",
   ".github/workflows/engine-images-external.yml",
   ".github/workflows/engine-images-m365.yml",

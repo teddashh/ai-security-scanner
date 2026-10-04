@@ -1105,6 +1105,11 @@ fn validate_execution_scope_for_request<'a>(
             manifest.id
         )));
     }
+    if manifest.id == crate::garak_input::ENGINE_ID && (assets.len() != 1 || grants.len() != 1) {
+        return Err(AppError::NotAuthorized(
+            "model check requires one exact asset and authorization".into(),
+        ));
+    }
     let direct_external = manifest.required_permissions.iter().any(|permission| {
         matches!(
             permission,
@@ -1219,11 +1224,39 @@ fn validate_execution_scope_for_request<'a>(
                 }
                 structured_targets.insert(external.target.canonical_text());
             }
-            let identifiers: Vec<&AssetIdentifier> = asset
-                .identifiers
-                .iter()
-                .filter(|identifier| structured_targets.contains(identifier.value.as_str()))
-                .collect();
+            let identifiers: Vec<&AssetIdentifier> =
+                if manifest.id == crate::garak_input::ENGINE_ID {
+                    let input = crate::garak_input::asset_input(asset)?;
+                    if !matched.iter().all(|grant| {
+                        grant.external_scope.as_ref().is_some_and(|external| {
+                            input.matches_scope(external, now).unwrap_or(false)
+                        })
+                    }) {
+                        return Err(AppError::NotAuthorized(
+                            "model check does not match its exact endpoint authorization".into(),
+                        ));
+                    }
+                    // The native launcher needs both the full URL and model. The
+                    // validated typed input binds their host and port to the grant;
+                    // matching an origin identifier would discard these coordinates.
+                    asset
+                        .identifiers
+                        .iter()
+                        .filter(|identifier| {
+                            matches!(
+                                identifier.namespace.as_str(),
+                                crate::garak_input::ENDPOINT_NAMESPACE
+                                    | crate::garak_input::MODEL_NAMESPACE
+                            )
+                        })
+                        .collect()
+                } else {
+                    asset
+                        .identifiers
+                        .iter()
+                        .filter(|identifier| structured_targets.contains(identifier.value.as_str()))
+                        .collect()
+                };
             if identifiers.is_empty() {
                 return Err(AppError::NotAuthorized(format!(
                     "managed network policy does not allow an exact identifier for external asset {}",
@@ -1864,6 +1897,105 @@ mod tests {
     use sha2::{Digest, Sha256};
     use std::collections::BTreeMap;
     use std::sync::{Arc, Mutex};
+
+    #[test]
+    fn model_scope_retains_full_coordinates_and_rejects_mismatched_authorization() {
+        use crate::garak_input::{
+            ENDPOINT_NAMESPACE, METADATA_KEY, MODEL_NAMESPACE, ModelEndpointInput,
+        };
+        let catalog: Vec<EngineManifest> =
+            serde_json::from_str(include_str!("../../engines/catalog.json")).unwrap();
+        let manifest = catalog.iter().find(|entry| entry.id == "garak").unwrap();
+        let input = ModelEndpointInput::validated(
+            "https://model.example.test:8443/v1/chat/completions",
+            "fixture/model",
+        )
+        .unwrap();
+        let model_asset = Asset {
+            id: "model-1".into(),
+            kind: AssetKind::AiModelEndpoint,
+            name: "Fixture model".into(),
+            provider: None,
+            region: None,
+            identifiers: vec![
+                AssetIdentifier {
+                    namespace: ENDPOINT_NAMESPACE.into(),
+                    value: input.endpoint.clone(),
+                },
+                AssetIdentifier {
+                    namespace: MODEL_NAMESPACE.into(),
+                    value: input.model.clone(),
+                },
+            ],
+            discovered_from: vec![],
+            candidate: false,
+            owner_confirmed: true,
+            internet_exposed: Some(true),
+            contains_sensitive_data: None,
+            metadata: BTreeMap::from([(METADATA_KEY.into(), serde_json::json!(input))]),
+        };
+        let mut model_grant = grant(&model_asset.id, ScanPermission::ActiveExternalTesting, true);
+        let external = model_grant.external_scope.as_mut().unwrap();
+        external.id = model_grant.id.clone();
+        external.target = input.target().unwrap();
+        external.ports = BTreeSet::from([8443]);
+        external.protocol = TransportProtocol::Https;
+        external.rate_policy = RatePolicy {
+            requests_per_second: 1,
+            concurrency: 1,
+            timeout_seconds: 20,
+        };
+        external.template_policy = TemplatePolicy::conservative_profile(
+            crate::garak_input::SOURCE_REVISION,
+            crate::garak_input::PROFILE_ID,
+        );
+        let policy = NetworkPolicy::managed(
+            "model-network",
+            "model-policy",
+            vec!["model.example.test:8443".into()],
+            "socks5h://172.29.0.1:1080",
+        )
+        .unwrap();
+        let assets = [model_asset.clone()];
+        let grants = [model_grant.clone()];
+        let scope = validate_execution_scope(manifest, &assets, &grants, &policy).unwrap();
+        let document =
+            serde_json::to_value(ScopeDocument::new(manifest, &scope, None).unwrap()).unwrap();
+        assert_eq!(
+            document["assets"][0]["identifiers"],
+            serde_json::json!(model_asset.identifiers)
+        );
+
+        for mismatch in ["host", "port", "rate", "profile"] {
+            let mut changed = model_grant.clone();
+            let external = changed.external_scope.as_mut().unwrap();
+            match mismatch {
+                "host" => external.target = CanonicalTarget::parse("other.example.test").unwrap(),
+                "port" => {
+                    external.ports.insert(443);
+                }
+                "rate" => external.rate_policy.requests_per_second = 2,
+                "profile" => external.template_policy.profile_id = Some("other".into()),
+                _ => unreachable!(),
+            }
+            assert!(
+                validate_execution_scope(manifest, &assets, &[changed], &policy).is_err(),
+                "{mismatch}"
+            );
+        }
+        let mut changed = model_asset.clone();
+        changed.identifiers[1].value = "different/model".into();
+        assert!(validate_execution_scope(manifest, &[changed], &grants, &policy).is_err());
+        assert!(
+            validate_execution_scope(
+                manifest,
+                &assets,
+                &[model_grant.clone(), model_grant],
+                &policy
+            )
+            .is_err()
+        );
+    }
 
     struct IncompleteAdapter;
 

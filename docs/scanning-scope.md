@@ -18,6 +18,8 @@ Nuclei performs upstream technology detection and selects applicable vulnerabili
 
 A completed no-finding result records the checks Nuclei completed and the exact origin. Upstream technology and template applicability determine which templates run.
 
+The optional ZAP passive profile crawls links within that same approved origin and checks responses with upstream passive rules. It uses five spider threads, native pacing of five requests/second and a ten-second request timeout; crawling is bounded to two minutes, depth five and 100 children per page, followed by at most two minutes of passive processing. It does not authenticate, submit forms or run active attack jobs. No observed responses means incomplete coverage.
+
 ## Project folder
 
 The app creates a bounded private snapshot and runs applicable upstream checks for:
@@ -31,6 +33,14 @@ The app creates a bounded private snapshot and runs applicable upstream checks f
 The snapshot process follows repository ignore rules for generated, dependency, build, cache, and version-control directories. Common secret-bearing source files (including `.env` variants, private keys, registry or authentication configuration, and `*.tfvars`) remain available to the secret scanners.
 
 The project is not built, executed, uploaded, committed, pushed, or modified.
+
+Optional Agentic Radar inventory uses one selected framework: LangGraph, CrewAI, n8n, OpenAI Agents or AutoGen. It runs offline over the saved repository and reports agents, tools and workflow connections. It does not execute project code or contact models. Parser diagnostics and unsupported input remain incomplete inventory, separate from security findings.
+
+## Model behavior check
+
+The optional Garak run requires one exact OpenAI-compatible HTTPS chat-completions URL, a model identifier and explicit consent for the fixed native DAN/ANSI profile and provider charges. It sends 54 prompts, one request at a time at most once per second. Each request has a 20-second timeout; the run has a ten-minute deadline, at most 64 attempts including retries and 150 requested output tokens per attempt (9,600 maximum requested tokens). TLS verification stays enabled; redirects and other destinations are refused.
+
+Enter the API key only in the dedicated app field. It remains in app memory for up to 30 minutes and is consumed once before dispatch. It is absent from saved cases and reports; another attempt requires a new key and confirmation. Native detector failure counts remain Unknown severity; failed, cancelled or unfinished checks disclose incomplete coverage. Normal rescan actions do not automatically repeat this paid check.
 
 ## Internal system
 

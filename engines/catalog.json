@@ -3113,7 +3113,12 @@
     "homepage_url": "https://garak.ai/",
     "license_spdx": "Apache-2.0",
     "distribution_mode": "pull_pinned_image",
-    "image": null,
+    "image": {
+      "repository": "ghcr.io/teddashh/ai-security-scanner-engine-garak",
+      "tag": "0.17.0-1",
+      "digest": "sha256:8a39b5812a4fd5aa2caecfef089ff85c39709f1bc00afa3328714346baab222f",
+      "signature_identity": null
+    },
     "source_revision": "93aa9cdec309ec4170559676f1826ea2a679920c",
     "engine_version": "0.17.0",
     "rule_version": null,
@@ -3152,9 +3157,9 @@
       "--output",
       "/output"
     ],
-    "status": "experimental",
+    "status": "integrated",
     "notices": [
-      "The local native profile is implemented and verified, but remains non-dispatchable until the immutable public image and its evidence are admitted.",
+      "Published, source-bound fixed native HTTPS model profile. Explicit consent and a fresh one-shot local key are required for each run; ordinary rescans omit Garak.",
       "A garak run sends adversarial prompts to the model behind the endpoint. That is active external testing against someone's live service and it consumes that service's quota, so it stays bound to an endpoint named by an explicit scope grant.",
       "garak reports each probe and detector pair as counts of attempts that passed, failed, or could not be judged. It publishes no severity for them, and this product does not invent one."
     ],
@@ -3170,8 +3175,8 @@
         "source_revision": "93aa9cdec309ec4170559676f1826ea2a679920c",
         "source_ref": "v0.17.0",
         "acquisition_source": "https://github.com/NVIDIA/garak/commit/93aa9cdec309ec4170559676f1826ea2a679920c",
-        "artifact_source_revision": null,
-        "source_association": "source_build_required"
+        "artifact_source_revision": "c9945b672853585be832a0ff978b16a7166b92b6",
+        "source_association": "attested_match"
       },
       "rules": {
         "mode": "embedded",
@@ -3198,11 +3203,9 @@
       "support_until": "2026-12-11",
       "maintenance_owner": "teddashh/ai-security-scanner maintainers",
       "update_procedure": "docs/engine-maintenance.md",
-      "runnable": false,
+      "runnable": true,
       "artifact_state": "managed_build_plan",
-      "blocked_by": [
-        "the locally verified Garak image awaits immutable publication and independent verification"
-      ],
+      "blocked_by": [],
       "knowledge_input": {
         "kind": "runtime_bound",
         "identifier": "the AI model endpoint named by the case scope grant",

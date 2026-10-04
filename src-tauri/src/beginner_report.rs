@@ -1520,6 +1520,19 @@ fn project_requested_coverage(
 }
 
 fn project_requested_target(case: &AssessmentCase, run: &ScanRun, asset_id: Id) -> RequestedTarget {
+    // A model check is bound to the frozen full endpoint and model, rather
+    // than the website origin inferred from its HTTPS network grant.
+    if let Some(snapshot) = run.report_asset_snapshots.iter().find(|snapshot| {
+        snapshot.asset.id == asset_id && snapshot.asset.kind == AssetKind::AiModelEndpoint
+    }) {
+        return RequestedTarget {
+            asset_id,
+            label: Some(snapshot.asset.name.clone()),
+            asset_kind: Some(AssetKind::AiModelEndpoint),
+            label_availability: DataAvailability::Recorded,
+            asset_kind_availability: DataAvailability::Recorded,
+        };
+    }
     if let Some(port) = run
         .engine_runs
         .iter()

@@ -1,12 +1,12 @@
 # Garak
 
-Garak 0.17.0 is implemented and tested locally against a disposable TLS model fixture. The candidate remains non-dispatchable until its immutable public image and source evidence are verified and admitted. The owner authorized this integration for v0.4.0. It contacts one explicitly approved OpenAI-compatible HTTPS chat API and model; no owner endpoint or credential was used for development QA.
+Garak 0.17.0 is published, independently verified and optionally dispatchable on main for v0.4.0. Both platform bytes and signed source/SBOM evidence are verified; six controlled native TLS scenarios passed again by the public amd64 digest. See the [publication record](garak-publication-2026-10-04.md). The owner authorized this integration for v0.4.0. It contacts one explicitly approved OpenAI-compatible HTTPS chat API and model; no owner endpoint or credential was used for development QA.
 
 | Item | Reviewed input |
 | --- | --- |
 | Upstream | [NVIDIA/garak](https://github.com/NVIDIA/garak/tree/93aa9cdec309ec4170559676f1826ea2a679920c), native 0.17.0, Apache-2.0 |
 | Native source archive | `sha256:34a7e31c9ca7efb00d00509f3397e8f25e87b88239c2c78d21fc9c54740b5fce` |
-| Managed candidate | `ghcr.io/teddashh/ai-security-scanner-engine-garak:0.17.0-1`; not yet admitted |
+| Managed candidate | `ghcr.io/teddashh/ai-security-scanner-engine-garak:0.17.0-1`; independently verified and admitted |
 | Build context | Repository root; [Dockerfile](../../engines/images/garak/Dockerfile), [complete recipe and hashes](../../engines/images/garak/plan.json) |
 | Runtime | Python 3.11.16 slim at `sha256:9c900dea9e8fb7e16277c179b555cc72d29a352dbc33cff48ad5a0412fd5bfc7`; uid65532, read-only rootfs, bounded tmpfs, managed egress |
 | Dependencies | 36 hash-locked binary runtime distributions; three separately hash-locked build tools excluded from runtime; unchanged langdetect 1.0.9 source built into a Python 3 wheel |
@@ -38,13 +38,15 @@ A complete native 0.17 report needs matching init/completion run IDs and all fou
 - PyPI's langdetect 1.0.9 wheel is Python 2 only. Build the exact unchanged source archive `sha256:cbc1fef89f8d062739774bd51eda3da3274006b3661d199c2655f6b3f6d605a0` with the separate tool lock; avoid floating build/runtime dependency resolution.
 - Preserve installed module mtimes at source epoch `1788977945`. Otherwise cache invalidation enumerates unused plugins whose dependencies are intentionally absent. Recheck native cache behavior and all four real constructors on every upstream update.
 - Keep Rust, UI and launcher profile IDs, source revision, endpoint normalization, model identifier, grant expiry and budgets aligned. The shared grant contract forbids a profile plus a template allowlist.
+- Preserve both typed identifiers (`ai-security-scanner:model-endpoint` and `ai-security-scanner:model-id`) in the private scope document. The orchestrator validates their host/port/profile against one exact grant before retaining them; a generic hostname-only filter prevents valid model dispatch. Keep the serialized-scope mismatch regression and the all-engine save/reopen/export audit in the update checks.
+- Keep the run-frozen model label and asset type in reports. Its HTTPS network grant describes transport, while the report must retain the full API path and model. Framework relationships remain conditional on the declared AI context; they must not change native detector counts.
 - Reserve and persist each attempt before transmission, including retries and TLS failures. Receipt counters describe attempts; fixture counters describe observed HTTP requests. Never account retries only after success.
 - Keep execution receipts under `output/upstream`, raw reports private, and reject raw output containing the actual API key. Do not rewrite native fixture bytes to obtain expected verdicts.
 - Repeat positive/clean/redirect/TLS/deadline/cancellation QA. Positive and refusal replies each exercise four real detector pairs; redirect cannot reach another destination, invalid TLS sends no HTTP prompt, short expiry stops backoff, and cancellation sends no later request while preserving its private partial native JSONL. The test CA is QA-only; production exposes no trust override. Local native evidence is amd64 only.
 
 Recheck native `eval`, `attempt`, `start_run setup` and init/completion fields, prompt counts and primary detector identifiers before changing this pin. Update the Dockerfile, both locks, local hashes, plan, catalog, dedicated validator, publication verifier, workflow and this page together. Image input changes require a fresh tag. Keep historical bytes and receipts immutable. Independently verify public index/platform/layers, source/signatures/SBOMs and repeat native smoke by public digest before clearing catalog blockers.
 
-Garak 的本機原生檢查已完成，但公開映像與證據通過驗證前仍不可派送。只測試明確核准的 HTTPS 端點與模型，金鑰不寫入案件，派送時使用一次。更新時沿用上面的來源、依賴與六種 TLS 測試紀錄；54 個提示的上游判定、失敗次數與未完成狀態必須保留。
+Garak 的公開雙平台位元組、來源簽章與 SBOM 已獨立驗證；公開 amd64 digest 的六種原生 TLS 檢查亦通過，main 已接通可選派送。只測試明確核准的 HTTPS 端點與模型，金鑰不寫入案件，派送時使用一次。更新時沿用上面的來源、依賴與六種 TLS 測試紀錄；54 個提示的上游判定、失敗次數與未完成狀態必須保留。
 
 <details>
 <summary>Historical adapter research — before the authorized October 4 integration</summary>

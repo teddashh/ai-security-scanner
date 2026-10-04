@@ -15,7 +15,7 @@ One page per scanner and per shared launcher. Each page records how the product 
 | AWS account; Prowler also an Azure subscription or GCP project | [Prowler](prowler.md), [ScoutSuite](scoutsuite.md), [Cloudsplaining](cloudsplaining.md), [Steampipe](steampipe.md) and [CloudQuery](cloudquery.md) (both inventory) | [Cloud launcher](cloud-launcher.md) | `engine-images-cloud.yml` |
 | Microsoft 365 tenant | [ScubaGear](scubagear.md), [Maester](maester.md) | [Microsoft 365 launcher](m365-launcher.md) | `engine-images-m365.yml` |
 | Website, domain, IP address | [naabu](naabu.md), [httpx](httpx.md), [Nuclei](nuclei.md) | [External launcher](external-launcher.md) | `engine-images-external.yml` |
-| | [ZAP](zap.md) (experimental) | Upstream image | None |
+| | [ZAP](zap.md) (optional passive website checks) | Upstream image | None |
 | Internal host or service | [Greenbone](greenbone.md) | [Greenbone launcher](greenbone-launcher.md) | `engine-image-greenbone.yml` |
 | Repository, IaC project, container image | [Semgrep](semgrep.md), [TruffleHog](trufflehog.md), [Trivy](trivy.md), [Grype](grype.md) | [Local launcher](local-launcher.md) | `engine-images-local-k8s.yml` |
 | | [Gitleaks](gitleaks.md) | Its own entrypoint | `engine-image-gitleaks.yml` |
@@ -24,7 +24,7 @@ One page per scanner and per shared launcher. Each page records how the product 
 | Kubernetes cluster, Kubernetes node | [Kubescape](kubescape.md), [kube-bench](kube-bench.md) | [Local launcher](local-launcher.md) | `engine-images-local-k8s.yml` |
 | MCP configuration in a repository | [MCP Armor](mcp-armor.md) | Its own entrypoint | `engine-image-mcp-armor.yml` |
 | Agent repository snapshot | [Agentic Radar](agentic-radar.md) (optional offline inventory) | Dedicated static launcher | `engine-image-agentic-radar.yml` |
-| AI model endpoint | [garak](garak.md) (experimental, not published) | | None |
+| AI model endpoint | [Garak](garak.md) (optional fixed native probes) | Dedicated bounded REST launcher | `engine-image-garak.yml` |
 
 Engines that reach a network target or a provider leave their container only through the [egress gateway](egress-gateway.md).
 

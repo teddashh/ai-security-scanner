@@ -93,6 +93,7 @@ The source and license below identify the pinned engine family. Exact release, s
 | MCP configuration | [MCP Armor](https://github.com/aira-security/mcp-armor/tree/6af4cee4665ab6242f02a88952f9127b6a04922a) | Apache-2.0 source; model terms separately excluded | Published, digest-pinned configuration-only image; dispatchable but not default-enabled. A retained patch runs only the existing hardcoded-secret and excessive-tool-permission checks against one exact configuration snapshot. It cannot contact or start an MCP server and does not import or download the prompt-injection model. Findings from completed checks survive partial coverage; a clean result requires the exact two-check ledger to complete. Missing configuration is not tested. See the [pinned decision](research/mcp-armor-evaluation.md). |
 | Agent workflow inventory | [Agentic Radar](https://github.com/splx-ai/agentic-radar/tree/65a7e4bd01e2034c7cb52e9620eeed287688cc53) | Apache-2.0 | Published offline native static workflow inventory over one typed framework and immutable repository snapshot; preserves incomplete diagnostics and produces observations only, never vulnerability findings. |
 | Website passive findings | [OWASP ZAP](https://github.com/zaproxy/zaproxy/tree/2665d972f6d587ba4773a95053ac39af3fdf8df9) | Apache-2.0 | Explicit advanced passive website choice on main, absent from frozen v0.3.1 installers. Crawls one exact authorized origin at 5 requests/s, preserving upstream alert identity, severity, remediation and per-instance evidence. Native per-request pacing, bounded automation-plan dispatch and recovery ownership are implemented. |
+| Model behavior probes | [Garak](https://github.com/NVIDIA/garak/tree/93aa9cdec309ec4170559676f1826ea2a679920c) | Apache-2.0 | Published `0.17.0-1`; optional exact HTTPS/model checks with 54 native DAN/ANSI prompts, unchanged detectors, Unknown severity, one-shot local keys and explicit inference limits/provider charges. |
 
 ### Grype repository support
 
@@ -112,17 +113,9 @@ also records known inconsistencies in image publication metadata; scan results d
 build provenance.
 
 
-### Experimental, non-dispatchable engine contracts
+### Image admission
 
-Experimental records have thin adapters and pinned evidence contracts, and all remain
-`runnable: false`. None has a verified published image digest. Garak is the remaining experimental record. A local build candidate, where
-present, is build evidence only and does not make a record dispatchable. They are not current scan
-capabilities. Their blockers are enforced by the registry rather than left as an operator
-convention.
-
-| Capability | Upstream engine / source | Pinned license record | Evaluated boundary |
-|---|---|---|---|
-| Model endpoint probes | [garak](https://github.com/NVIDIA/garak/tree/93aa9cdec309ec4170559676f1826ea2a679920c) | Apache-2.0 | Preserves four native detector failure counts for 54 fixed DAN/ANSI prompts without inventing severity. The scoped HTTPS input, one-shot local key and native six-case TLS QA are implemented; immutable public image admission remains pending. |
+All 25 current catalog records are integrated and runnable. Research-only candidates are not current scan capabilities. A local build candidate is build evidence only and does not make a record dispatchable; registry blockers remain enforced until public artifact and execution evidence are admitted.
 
 ### Provider scope and credentials
 

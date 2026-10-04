@@ -10,6 +10,7 @@ This directory contains historical release records, exact delivery observations,
 
 ## Version records
 
+- [v0.4.0 preparation](v0.4.0.md) ([繁體中文](v0.4.0.zh-TW.md))
 - [v0.3.1](v0.3.1.md) ([繁體中文](v0.3.1.zh-TW.md))
 - [v0.1.1](v0.1.1.md)
 - [v0.1.2](v0.1.2.md)

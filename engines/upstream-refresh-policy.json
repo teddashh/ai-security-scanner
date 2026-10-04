@@ -3,8 +3,8 @@
   "engines": [
     {
       "id": "agentic-radar",
-      "status": "experimental",
-      "reason": "The adapter is experimental because its plan is managed_artifact_not_published. Refreshes may be reviewed independently, but cannot reach a release until a managed artifact is published and the catalog release blockers are cleared."
+      "status": "frozen",
+      "reason": "The offline machine-output image is published. Automatic upstream refreshes are frozen and cannot reach a release through automation; manually revalidate the thin output patch, five framework parsers, diagnostics and target/environment isolation before changing the pin."
     },
     {
       "id": "checkov",
@@ -23,8 +23,8 @@
     },
     {
       "id": "garak",
-      "status": "experimental",
-      "reason": "The adapter is experimental because its plan is managed_artifact_not_published. Refreshes may be reviewed independently, but cannot reach a release until a managed artifact is published and the catalog release blockers are cleared."
+      "status": "frozen",
+      "reason": "The fixed native REST/DAN/ANSI image is published. Automatic upstream refreshes are frozen and cannot reach a release through automation; manually revalidate prompt/detector counts, exact HTTPS/model scope, import closure, retry-inclusive limits and six-case native TLS QA before changing the pin."
     },
     {
       "id": "gitleaks",
@@ -68,8 +68,8 @@
     },
     {
       "id": "mcp-armor",
-      "status": "experimental",
-      "reason": "The adapter is experimental because its plan is publication_in_progress. Refreshes may be reviewed independently, but cannot reach a release until publication finishes and the catalog release blockers are cleared."
+      "status": "frozen",
+      "reason": "The configuration-only image is published. Automatic upstream refreshes are frozen and cannot reach a release through automation; manually revalidate the two native checks and continued exclusion of model imports, downloads and server execution before changing the pin."
     },
     {
       "id": "naabu",

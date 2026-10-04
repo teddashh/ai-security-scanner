@@ -261,6 +261,42 @@ const RELEASE_COPY = new Map([
     },
   ],
   [
+    "0.4.0",
+    {
+      updaterNotes:
+        "Optional ZAP passive website checks, offline Agentic Radar workflow inventory, bounded Garak model checks, and more reliable reports. 新增可選的 ZAP 被動網站檢查、Agentic Radar 離線工作流程盤點、受限的 Garak 模型檢查，並改善報告完整性。",
+      releaseNotes: [
+        "ai-security-scanner 0.4.0 is the stable desktop release for Linux, macOS, and Windows, integrating 25 upstream projects.",
+        "",
+        "- ZAP: optionally crawl one approved website origin and retain upstream passive findings, evidence and remediation. No login, form submission or active attack jobs.",
+        "- Agentic Radar: optionally inventory one saved repository using LangGraph, CrewAI, n8n, OpenAI Agents or AutoGen. No workflow execution or model contact; inventory is distinct from security findings.",
+        "- Garak: explicitly check one approved OpenAI-compatible HTTPS chat API and model with 54 native DAN/ANSI prompts. One-shot local API keys, TLS verification, no redirects, 1 request/second, 64 attempts including retries, and 150 requested output tokens per attempt. Provider charges apply.",
+        "- Reports preserve completed sibling results, identify malformed or unevaluated Kubescape output, and stream large evidence within the retained evidence budget. Greenbone tasks and resume state bind to each exact grant.",
+        "- HTML reports fit desktop, tablet and mobile widths. Microsoft 365 adapter platform matching is corrected; a fresh owner-signed-in live rerun remains unobserved.",
+        "- Gitleaks 8.30.1-2 and the new managed images retain immutable source/build evidence. Build and update notes cover all 25 engine records and the egress gateway.",
+        "",
+        "### 繁體中文",
+        "",
+        "0.4.0 為 Linux、macOS 與 Windows 的正式版，整合 25 個上游專案。",
+        "",
+        "- ZAP：可選擇爬取一個核准的網站來源，保留上游被動發現、證據與修正建議；不登入、不送出表單、不執行主動攻擊。",
+        "- Agentic Radar：離線盤點保存儲存庫中的 LangGraph、CrewAI、n8n、OpenAI Agents 或 AutoGen 工作流程；不執行流程、不連線模型，盤點與安全發現分開呈現。",
+        "- Garak：明確核准一個 OpenAI 相容 HTTPS 聊天 API 與模型後，送出 54 個原生 DAN／ANSI 提示。金鑰只在本機記憶體使用一次；驗證 TLS、不跟隨重新導向、每秒一次、含重試最多 64 次，每次要求最多 150 個輸出 token；服務商費用適用。",
+        "- 報告保留其他已完成結果；Kubescape 無效或未評估輸出會標示未完成。大型證據以串流方式處理，Greenbone 工作與復原狀態綁定精確授權。",
+        "- HTML 報告改善桌面、平板與手機版面；M365 平台辨識已修正，仍待擁有者登入後的最新實測。",
+        "- Gitleaks 8.30.1-2 與新增映像保留固定來源與建置證據；25 個引擎與閘道器都有建置、例外與更新筆記。",
+        "",
+        "Windows installers are unsigned; macOS is not notarized. / Windows 安裝檔未簽章，macOS 尚未公證。",
+        "",
+        "On macOS, drag the app to Applications, then remove quarantine from this app if macOS blocks it:",
+        "macOS 請先將程式拖入 Applications；若系統阻擋開啟，再針對此程式移除隔離標記：",
+        "",
+        "    xattr -dr com.apple.quarantine /Applications/ai-security-scanner.app",
+        "",
+      ],
+    },
+  ],
+  [
     "1.0.0",
     {
       updaterNotes:

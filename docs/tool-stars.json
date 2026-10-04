@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "checkedAt": "2026-10-04T03:30:11Z",
+  "checkedAt": "2026-10-04T07:04:41Z",
   "source": "GitHub REST API",
   "tools": [
     {
@@ -16,7 +16,7 @@
     {
       "id": "prowler",
       "repository": "prowler-cloud/prowler",
-      "stars": 14926
+      "stars": 14930
     },
     {
       "id": "scoutsuite",
@@ -51,7 +51,7 @@
     {
       "id": "nuclei",
       "repository": "projectdiscovery/nuclei",
-      "stars": 31701
+      "stars": 31703
     },
     {
       "id": "greenbone",
@@ -59,19 +59,24 @@
       "stars": 4850
     },
     {
+      "id": "zap",
+      "repository": "zaproxy/zaproxy",
+      "stars": 15866
+    },
+    {
       "id": "semgrep",
       "repository": "semgrep/semgrep",
-      "stars": 16857
+      "stars": 16860
     },
     {
       "id": "gitleaks",
       "repository": "gitleaks/gitleaks",
-      "stars": 29641
+      "stars": 29646
     },
     {
       "id": "trufflehog",
       "repository": "trufflesecurity/trufflehog",
-      "stars": 28262
+      "stars": 28266
     },
     {
       "id": "checkov",
@@ -86,7 +91,7 @@
     {
       "id": "trivy",
       "repository": "aquasecurity/trivy",
-      "stars": 38211
+      "stars": 38214
     },
     {
       "id": "grype",
@@ -96,7 +101,7 @@
     {
       "id": "syft",
       "repository": "anchore/syft",
-      "stars": 9633
+      "stars": 9634
     },
     {
       "id": "kubescape",
@@ -109,25 +114,25 @@
       "stars": 8209
     },
     {
-      "id": "mcp-armor",
-      "repository": "aira-security/mcp-armor",
-      "stars": 123
-    },
-    {
-      "id": "zap",
-      "repository": "zaproxy/zaproxy",
-      "stars": 15865
+      "id": "garak",
+      "repository": "NVIDIA/garak",
+      "stars": 9423
     },
     {
       "id": "agentic-radar",
       "repository": "splx-ai/agentic-radar",
       "stars": 1057
+    },
+    {
+      "id": "mcp-armor",
+      "repository": "aira-security/mcp-armor",
+      "stars": 123
     }
   ],
   "ruleSources": [
     {
       "repository": "projectdiscovery/nuclei-templates",
-      "stars": 13053
+      "stars": 13054
     },
     {
       "repository": "semgrep/semgrep-rules",

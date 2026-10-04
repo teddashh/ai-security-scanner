@@ -304,9 +304,9 @@ test("an experimental failure stays experimental and does not change an eligible
       },
       eligible: { outcome: "ready", eligible: true },
       encodedProductFacts: {
-        "agentic-radar": { status: "experimental", cannotRelease: true },
-        garak: { status: "experimental", cannotRelease: true },
-        "mcp-armor": { status: "experimental", cannotRelease: true },
+        "agentic-radar": { status: "frozen", cannotRelease: true },
+        garak: { status: "frozen", cannotRelease: true },
+        "mcp-armor": { status: "frozen", cannotRelease: true },
       },
     });
   } finally {

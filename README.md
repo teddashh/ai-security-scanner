@@ -51,6 +51,15 @@ The report leads with:
 
 Completed results remain available when an independent check fails. Reports can be reopened, compared with later runs, and exported as readable HTML or structured data.
 
+## Prepared for v0.4.0
+
+- **ZAP:** optional passive website checks for one approved origin.
+- **Agentic Radar:** offline workflow inventory for five selected frameworks.
+- **Garak:** 54 fixed native model probes with exact HTTPS/model consent, a one-shot local key and explicit request limits/provider charges.
+- More reliable coverage, exact-grant Greenbone recovery, readable HTML at tablet widths, corrected M365 platform matching, and reproducible engine build/update notes.
+
+See the [v0.4.0 preparation record](docs/release/v0.4.0.md). Current downloads above remain v0.3.1 until the new installer publication is verified.
+
 ## What is new in v0.3.1
 
 - Cloud findings explain the failed condition; related AWS findings share a practical action while keeping the original evidence.
@@ -62,7 +71,7 @@ See the [release record](docs/release/v0.3.1.md) for exact installer verificatio
 
 ## Integrated tools
 
-On main, the current runnable engine set integrates 24 upstream projects. The upcoming v0.4.0 adds the optional ZAP passive website profile and offline AI workflow inventory with Agentic Radar; the published v0.3.1 installers retain their frozen set of 22 tools. The catalog separately retains an experimental, non-dispatchable Garak model-testing contract; those are not current scan capabilities. See [Development status](docs/development-status.md). The product runs only the tools that apply to each selected asset, keeps their original identifiers, severity, evidence, and remediation, then organizes every completed result in the same report.
+On main, the current runnable engine set integrates 25 upstream projects. The upcoming v0.4.0 adds optional ZAP passive website checks, Agentic Radar offline workflow inventory and bounded Garak model checks; the published v0.3.1 installers retain their frozen set of 22 tools. Garak requires an exact HTTPS endpoint/model, fresh local key and explicit approval of its 54 fixed native prompts and provider charges. Research-only candidates are not current scan capabilities. See [Development status](docs/development-status.md). The product runs only the tools that apply to each selected asset, keeps their original identifiers, severity, evidence, and remediation, then organizes every completed result in the same report.
 
 **Selected assets and authorization → thin adapters → upstream scanners → output converters → one standardized report organized by asset**
 
@@ -117,6 +126,7 @@ The released catalog pins the Grype image to **`0.117.0-4`**, digest `sha256:56b
 | Tool | What ai-security-scanner uses it for |
 | --- | --- |
 | [Agentic Radar](https://github.com/splx-ai/agentic-radar) | Optional offline workflow inventory for LangGraph, CrewAI, n8n, OpenAI Agents, and AutoGen in one approved repository snapshot. It does not execute the workflow or contact a model. Available on main for v0.4.0. |
+| [Garak](https://github.com/NVIDIA/garak) | Optional model behavior checks against one approved HTTPS chat API/model with 54 native DAN/ANSI prompts, one-shot local keys and explicit inference limits/provider charges. |
 | [MCP Armor](https://github.com/aira-security/mcp-armor) | Static checks over one approved MCP configuration snapshot for hardcoded credentials and excessive tool permissions, without starting or contacting an MCP server or loading a model. |
 
 Discovery, inventory, SBOM generation, and the localhost TCP utility remain clearly separated from vulnerability findings. The complete pinned versions, licenses, profiles, and execution boundaries are recorded in the [engine catalog](docs/engine-catalog.md).

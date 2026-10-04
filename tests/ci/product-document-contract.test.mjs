@@ -281,7 +281,7 @@ test("beginner documentation leads with the three scan paths and one report", as
   assert.match(website, new RegExp(`${runnableCount} runnable upstream projects`, "iu"));
   assert.match(website, new RegExp(`${runnableCount} 個可執行的上游專案`, "u"));
   for (const content of [english, chinese, website]) {
-    assert.match(content, /experimental, non-dispatchable|實驗性、不可派送/u);
+    assert.match(content, /research-only candidates|研究用候選|experimental, non-dispatchable|實驗性、不可派送/iu);
     assert.match(content, /not (?:current |counted as )?scan capabilities|不(?:計為|是目前的)掃描能力/u);
   }
 });
@@ -443,9 +443,13 @@ test("public development status stays catalog-backed and excludes local handoff 
 
 test("experimental engine documentation distinguishes local builds from published artifacts", async () => {
   const engineCatalog = await load("docs/engine-catalog.md");
-
-  assert.match(engineCatalog, /all remain\s+`runnable: false`/iu);
-  assert.match(engineCatalog, /None has a verified published image digest/iu);
+  const catalog = JSON.parse(await load("engines/catalog.json"));
+  if (catalog.some((engine) => engine.status === "experimental")) {
+    assert.match(engineCatalog, /all remain\s+`runnable: false`/iu);
+    assert.match(engineCatalog, /None has a verified published image digest/iu);
+  } else {
+    assert.match(engineCatalog, new RegExp(`All ${catalog.length} current catalog records are integrated and runnable`, "iu"));
+  }
   assert.match(
     engineCatalog,
     /local build candidate[\s\S]*build evidence only[\s\S]*does not make a record dispatchable/iu,

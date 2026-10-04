@@ -166,6 +166,10 @@ fn fixture(engine: &str, outcomes: EngineOutcomes) -> (&'static [u8], &'static s
             include_bytes!("../../docs/research/fixtures/agentic-radar/n8n.json"),
             "agentic-radar.json",
         ),
+        "garak" => (
+            include_bytes!("fixtures/adapters/garak-0.17.0-native.jsonl"),
+            "report.jsonl",
+        ),
         other => panic!("missing fixture for {other}"),
     }
 }
@@ -446,6 +450,7 @@ fn execute(
     let destinations = match execution.manifest.id.as_str() {
         "nuclei" | "httpx" => vec!["portal.example.test:443".into()],
         "zap" => vec!["passive.example.test:443".into()],
+        "garak" => vec!["model.example.test:8443".into()],
         "greenbone" => vec!["203.0.113.10:443".into(), "203.0.113.10:8443".into()],
         "naabu" => gateway
             .expect("the Naabu run carries its prepared attempt")
@@ -491,6 +496,27 @@ fn execute(
         ),
         _ => None,
     };
+    let credentials = if execution.manifest.id == "garak" {
+        let sessions = ai_security_scanner_lib::garak_input::ModelEndpointSessions::default();
+        sessions
+            .put(
+                &execution.case_id,
+                &execution.assets[0],
+                zeroize::Zeroizing::new("synthetic-fixture-only-no-provider-access".into()),
+                Utc::now(),
+            )
+            .unwrap();
+        sessions
+            .take(
+                &execution.case_id,
+                &execution.assets[0],
+                &execution.scope_grants,
+                Utc::now(),
+            )
+            .unwrap()
+    } else {
+        ScannerCredentialSet::default()
+    };
     let request = EngineExecutionRequest {
         case_id: &execution.case_id,
         scan_run_id: &execution.scan_run_id,
@@ -508,7 +534,7 @@ fn execute(
         workspace,
         network_policy: &network,
         resource_limits: &resources,
-        credentials: &ScannerCredentialSet::default(),
+        credentials: &credentials,
         attempt: execution.attempt,
     };
     let Some((service, attempt)) = naabu else {
@@ -674,7 +700,7 @@ fn all_engines_in_one_report<T>(
     let service = CaseService::new(&storage, &engines, &adapters, &artifact_root, &signing_key);
     let case = service
         .create_case(&CreateCaseRequest {
-            title: format!("All 21 engines, one report ({intent:?})"),
+            title: format!("All integrated engines, one report ({intent:?})"),
             organization_name: "Fixture organization".into(),
             employee_range: "1-10".into(),
             assessment_intent: Some(intent),
@@ -904,6 +930,58 @@ fn all_engines_in_one_report<T>(
             .unwrap();
     }
     let expires = Utc::now() + Duration::hours(1);
+    let model_input = ai_security_scanner_lib::garak_input::ModelEndpointInput::validated(
+        "https://model.example.test:8443/v1/chat/completions",
+        "fixture/model",
+    )
+    .unwrap();
+    let configured = service
+        .configure_model_endpoint(&case.id, model_input.clone(), true)
+        .unwrap();
+    let model_asset = configured
+        .assets
+        .iter()
+        .find(|asset| {
+            ai_security_scanner_lib::garak_input::asset_input(asset)
+                .ok()
+                .as_ref()
+                == Some(&model_input)
+        })
+        .unwrap()
+        .id
+        .clone();
+    service
+        .approve_scope(
+            &case.id,
+            ScopeApprovalRequest {
+                asset_id: model_asset.clone(),
+                permissions: vec![ScanPermission::ActiveExternalTesting],
+                confirmed_by: "Fixture model owner".into(),
+                expires_at: Some(Utc::now() + Duration::minutes(30)),
+                authorization_reference: Some(
+                    "Exact model fixture and stated inference charges".into(),
+                ),
+                notes: Some("Fake runtime only; no API key or endpoint contact".into()),
+                external_scope: Some(ExternalScopeRequest {
+                    target: "model.example.test".into(),
+                    ports: BTreeSet::from([8443]),
+                    protocol: TransportProtocol::Https,
+                    activity: ExternalActivity::ActiveExternal,
+                    rate_policy: RatePolicy {
+                        requests_per_second: 1,
+                        concurrency: 1,
+                        timeout_seconds: 20,
+                    },
+                    template_policy: TemplatePolicy::conservative_profile(
+                        ai_security_scanner_lib::garak_input::SOURCE_REVISION,
+                        ai_security_scanner_lib::garak_input::PROFILE_ID,
+                    ),
+                    asserted_authority: "Exact model fixture and stated inference charges".into(),
+                    allow_sensitive_networks: false,
+                }),
+            },
+        )
+        .unwrap();
     for (asset_id, target, ports, protocol, permission, activity, templates) in [
         (
             &website,
@@ -1028,7 +1106,7 @@ fn all_engines_in_one_report<T>(
             .unwrap();
     }
 
-    let routes = [
+    let mut routes: Vec<EngineAssetRoute> = [
         ("nuclei", &website),
         ("zap", &passive_website),
         ("httpx", &website),
@@ -1065,6 +1143,12 @@ fn all_engines_in_one_report<T>(
             }),
     )
     .collect();
+    if dispatchable_engine_ids(&engines).contains("garak") {
+        routes.push(EngineAssetRoute {
+            engine_id: "garak".into(),
+            asset_ids: vec![model_asset],
+        });
+    }
     let plan = service
         .plan_scan(
             &case.id,
@@ -1825,7 +1909,55 @@ fn every_integrated_engine_lands_in_one_terminal_report() {
                     .map(|target| &target.asset_id)
                     .collect::<BTreeSet<_>>()
                     .len(),
-                completed.assets.len()
+                completed.assets.len(),
+                "requested: {:?}; case assets: {:?}",
+                report
+                    .requested
+                    .targets
+                    .iter()
+                    .map(|target| (&target.asset_id, &target.label))
+                    .collect::<Vec<_>>(),
+                completed
+                    .assets
+                    .iter()
+                    .map(|asset| (&asset.id, &asset.name, &asset.kind))
+                    .collect::<Vec<_>>()
+            );
+            let model_target = report
+                .requested
+                .targets
+                .iter()
+                .find(|target| target.asset_kind == Some(AssetKind::AiModelEndpoint))
+                .expect("the exact model target must remain in the saved report");
+            assert_eq!(
+                model_target.label.as_deref(),
+                Some("fixture/model (https://model.example.test:8443/v1/chat/completions)")
+            );
+            let model_findings = report
+                .findings
+                .iter()
+                .filter(|finding| {
+                    finding
+                        .evidence_references
+                        .iter()
+                        .any(|reference| reference.engine_id == "garak")
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(
+                model_findings.len(),
+                4,
+                "all four native failing probe/detector pairs must survive"
+            );
+            assert!(
+                model_findings
+                    .iter()
+                    .all(|finding| finding.target_asset_ids.as_slice()
+                        == [model_target.asset_id.clone()])
+            );
+            assert!(
+                !serde_json::to_string(completed)
+                    .unwrap()
+                    .contains("synthetic-fixture-only-no-provider-access")
             );
             for (engine, status) in [
                 ("nuclei", CoverageDimensionStatus::TestedPartial),
@@ -2265,6 +2397,7 @@ fn every_integrated_engine_lands_in_one_terminal_report() {
             // printed it once per engine. A limit is a policy and who it
             // covers: forty-one lines carried twelve distinct policies.
             for right in [
+                "<strong>Execution timeout:</strong> 600 seconds",
                 "<strong>Execution timeout:</strong> 900 seconds",
                 "<strong>Execution timeout:</strong> 1800 seconds",
                 "<strong>Execution timeout:</strong> 3600 seconds",
@@ -2279,7 +2412,7 @@ fn every_integrated_engine_lands_in_one_terminal_report() {
             }
             assert_eq!(
                 limits.matches("Execution timeout:").count(),
-                5,
+                6,
                 "one execution timeout per distinct value, not per engine"
             );
             // Where a limit came from is a property of the grant, and it was
@@ -2324,9 +2457,9 @@ fn every_integrated_engine_lands_in_one_terminal_report() {
                 subjects_seen += seen.len();
             }
             assert!(subjects_seen >= 5, "the audit lost the limit subjects");
-            // ZAP contributes one distinct rate, profile and timeout policy.
+            // ZAP and Garak each retain their distinct rate, port, profile and timeout bounds.
             assert!(
-                limits.matches("<li>").count() - limits.matches("<strong>From the ").count() <= 16,
+                limits.matches("<li>").count() - limits.matches("<strong>From the ").count() <= 21,
                 "the limits list is repeating a policy per holder"
             );
             // A limit that names itself needs no holder after it.
@@ -3676,7 +3809,7 @@ fn every_integrated_engine_lands_in_one_terminal_report() {
             // rule that reaches it would rewrite a name rather than a marker.
             for html in [&ordered_html, &zh_html] {
                 assert_eq!(
-                    html.matches("All 21 engines, one report (InternalItEnvironment)")
+                    html.matches("All integrated engines, one report (InternalItEnvironment)")
                         .count(),
                     3,
                     "the case's own title stopped reaching the tab, cover and running head"
@@ -3894,12 +4027,18 @@ fn aidefend_view(
                     .collect(),
                 mapping_states,
                 reached,
-                finding_titles: subject
-                    .report
-                    .findings
-                    .iter()
-                    .map(|finding| finding.title.clone())
-                    .collect(),
+                finding_titles: {
+                    // Context may change prioritization; compare the retained
+                    // detector content, including duplicates, independently of rank.
+                    let mut titles = subject
+                        .report
+                        .findings
+                        .iter()
+                        .map(|finding| finding.title.clone())
+                        .collect::<Vec<_>>();
+                    titles.sort();
+                    titles
+                },
                 html,
                 zh_html,
             }
@@ -3911,7 +4050,7 @@ fn aidefend_view(
 /// the audit above cannot reach any of it: coordinates are withheld from a
 /// case that declares a non-AI assessment, which is exactly what the
 /// IT-environment run declares. So the AI half of the mapping is exercised
-/// here -- catalog, adapter, report layer and export -- on the same 23 checks.
+/// here -- catalog, adapter, report layer and export -- on the same 25 checks.
 #[test]
 fn the_ai_framework_follows_the_case_answers_and_nothing_else() {
     let withheld = aidefend_view(
@@ -3975,11 +4114,11 @@ fn the_ai_framework_follows_the_case_answers_and_nothing_else() {
         ["AID-H-003.001", "AID-H-003.010", "AID-I-001.001"]
     );
 
-    // The catalog cannot place the synthetic Nuclei rule and three native
-    // ZAP instances with no reviewed relationship. Preserve those unknown
-    // coordinates rather than inventing mappings when an engine is enabled.
+    // The synthetic Nuclei rule and three native ZAP instances have no reviewed
+    // relationship. Garak's four AI mappings also stay unknown when the case
+    // does not declare an AI system; enabling the engine must not infer it.
     for view in [&withheld, &declared, &no_artifact] {
-        assert_eq!(view.mapped + view.unmapped, 52);
+        assert_eq!(view.mapped + view.unmapped, 56);
         assert_eq!(
             view.mapping_states.get("no_packaged_catalog_relationship"),
             Some(&view.unmapped),
@@ -4007,19 +4146,20 @@ fn the_ai_framework_follows_the_case_answers_and_nothing_else() {
         assert!(!view.zh_html.contains("未保留本輪的框架參考。"));
         assert!(
             view.limitations.iter().any(|limitation| limitation
-                == "4 of 52 selected-run findings have no relationship in the packaged mapping catalog. Their framework position is unknown, not absent."),
+                == &format!("{} of 56 selected-run findings have no relationship in the packaged mapping catalog. Their framework position is unknown, not absent.", view.unmapped)),
             "{:#?}",
             view.limitations
         );
     }
-    // Declaring an AI system adds coordinates to findings the catalog had
-    // already placed, so it moves no finding across the line.
-    assert_eq!((withheld.mapped, withheld.unmapped), (48, 4));
-    assert_eq!((declared.mapped, declared.unmapped), (48, 4));
+    // Declaring an AI system admits the four native Garak relationships. The
+    // unrelated Nuclei/ZAP rules remain unknown in either context.
+    assert_eq!((withheld.mapped, withheld.unmapped), (48, 8));
+    assert_eq!((declared.mapped, declared.unmapped), (52, 4));
+    assert_eq!((no_artifact.mapped, no_artifact.unmapped), (52, 4));
 
-    // None of this is detection. The same 23 checks found the same problems
+    // None of this is detection. The same 25 checks found the same problems
     // in all three runs; only the coordinates the report may name changed.
-    assert_eq!(withheld.finding_titles.len(), 52);
+    assert_eq!(withheld.finding_titles.len(), 56);
     assert_eq!(declared.finding_titles, withheld.finding_titles);
     assert_eq!(no_artifact.finding_titles, withheld.finding_titles);
 }

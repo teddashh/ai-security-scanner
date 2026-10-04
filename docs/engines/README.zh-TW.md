@@ -4,7 +4,7 @@
 
 每個掃描器與共用 launcher 都有自己的維護頁，記錄產品如何執行、adapter 保留哪些上游結果、更新步驟，以及實際掃描學到的注意事項。修改前先閱讀該頁；有新的實測經驗時，在 **Lessons from real runs** 補上日期、症狀、原因與修正 commit。
 
-建置或更新先從[映像檔建置與更新筆記](image-build-index.md)開始。它涵蓋全部 **25 個引擎紀錄**及 gateway，列出 build context、規則與資料準備、必須同步修改的檔案、patch 與已知限制。main 現在可執行的引擎為 24 個；ZAP 被動網站檢查與 Agentic Radar 離線工作流程盤點將包含在 v0.4.0，Garak 仍在整合中。已發布的 v0.3.1 安裝包維持原本的 22 個工具。
+建置或更新先從[映像檔建置與更新筆記](image-build-index.md)開始。它涵蓋全部 **25 個引擎紀錄**及 gateway，列出 build context、規則與資料準備、必須同步修改的檔案、patch 與已知限制。main 現在可執行的引擎為 25 個；ZAP 被動網站檢查、Agentic Radar 離線工作流程盤點與受限的 Garak 模型檢查將包含在 v0.4.0。已發布的 v0.3.1 安裝包維持原本的 22 個工具。
 
 [引擎維護流程](../engine-maintenance.md)是維護規則；精確版本、digest 與 provenance 以 `engines/catalog.json` 和各引擎 `plan.json` 為準。現行原始碼可能與歷史映像檔不同，不能只看 Dockerfile 就宣稱已發布內容。[Semgrep 發布紀錄](semgrep-publication-2026-10-03.md)保留本次合併規則包的實際證據。
 
@@ -19,7 +19,7 @@
 | Kubernetes | [Kubescape](kubescape.md)、[kube-bench](kube-bench.md)；[本機 launcher](local-launcher.md)。 |
 | MCP 設定 | [MCP Armor](mcp-armor.md)，只讀取已核准設定快照，不啟動 MCP 伺服器或模型。 |
 | 新增於 main | [ZAP](zap.md) 被動網站檢查、[Agentic Radar](agentic-radar.md) 離線工作流程盤點。 |
-| 尚未開放執行 | [Garak](garak.md)。 |
+| 模型端點 | [Garak](garak.md)，以精確 HTTPS／模型、一次性本機金鑰與固定原生探針執行。 |
 
 需要接觸網路目標或服務商的引擎，只能透過 [egress gateway](egress-gateway.md)離開容器。
 

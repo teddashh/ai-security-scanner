@@ -100,6 +100,16 @@ This profile covers the displayed `scheme://host:port` origin. See [Scanning sco
 
 The app scans a bounded read-only snapshot. The original folder is not changed.
 
+### Optional checks prepared for v0.4.0
+
+The upcoming release adds these explicit choices:
+
+- **ZAP:** in website Advanced settings, choose passive website checks, review the exact origin and confirm the displayed limits. Nuclei remains the quick default.
+- **Agentic Radar:** in repository Advanced settings, select LangGraph, CrewAI, n8n, OpenAI Agents or AutoGen for offline workflow inventory. Agent and tool inventory appears separately from security findings.
+- **Garak:** in an AI-project or IT-environment Review screen, open **Optional model behavior check**. Enter the complete HTTPS chat-completions URL and model identifier, then the API key in the dedicated password field. Select internal/local networking only when applicable, confirm authorization and provider charges, then select **Start model check**. This starts a separate run with 54 fixed native DAN/ANSI prompts. The key is kept locally for up to 30 minutes and consumed once; another attempt requires a new key and confirmation.
+
+See [Scanning scope](scanning-scope.md#model-behavior-check) for exact request and token limits. Supply model keys only in the app, never in chat or command arguments.
+
 ### Cloud account
 
 This checks the identity and access settings of one AWS account, Azure subscription, Google Cloud organization, or Microsoft 365 tenant. If you own or administer the account, you can do every step yourself.

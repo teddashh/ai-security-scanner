@@ -6,7 +6,7 @@
   "support_until": "2026-12-11",
   "maintenance_owner": "teddashh/ai-security-scanner maintainers",
   "update_procedure": "docs/engine-maintenance.md",
-  "publish_state": "publication_in_progress",
+  "publish_state": "published_managed_artifact",
   "source": {
     "repository": "https://github.com/NVIDIA/garak",
     "revision": "93aa9cdec309ec4170559676f1826ea2a679920c",
@@ -17,7 +17,7 @@
   "final_artifact": {
     "repository": "ghcr.io/teddashh/ai-security-scanner-engine-garak",
     "tag": "0.17.0-1",
-    "digest": null
+    "digest": "sha256:8a39b5812a4fd5aa2caecfef089ff85c39709f1bc00afa3328714346baab222f"
   },
   "build_recipe": {
     "source_revision": "93aa9cdec309ec4170559676f1826ea2a679920c",
@@ -144,10 +144,22 @@
     "rationale": "Apache-2.0 permits redistribution of the engine and its probes with the upstream notice retained.",
     "source_offer_path": null
   },
-  "blockers": [
-    "the locally verified Garak image awaits immutable publication and independent verification"
-  ],
-  "publication": null,
+  "blockers": [],
+  "publication": {
+    "workflow_run": "https://github.com/teddashh/ai-security-scanner/actions/runs/37185013509",
+    "source_revision": "c9945b672853585be832a0ff978b16a7166b92b6",
+    "platforms": [
+      "linux/amd64",
+      "linux/arm64"
+    ],
+    "platform_digests": {
+      "linux/amd64": "sha256:21f2e097684de81183fb1a5815e93b78dd013bf076cc1ad5804845179acb805d",
+      "linux/arm64": "sha256:732d0e8038ef6a3e1bce66fbe956e034a662e4125c8f819b91609e718d003bb6"
+    },
+    "anonymous_pull_verified": true,
+    "evidence_artifact": "garak-image-evidence-37185013509-1",
+    "managed_smoke_evidence_sha256": "sha256:c6c6a42f0d377195e7b2078f31401318cb32b3748d9990af60f9e993625dd53a"
+  },
   "managed_runtime": {
     "non_root_user": "65532:65532",
     "read_only_rootfs": true,
