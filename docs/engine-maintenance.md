@@ -125,3 +125,14 @@ Numbering follows the contract, not the calendar:
 - **Major:** a field is removed or changes type.
 
 The change from 0.1.4 to 0.2.0 is a minor bump. `Confidence` gained `Unknown`, and the framework report schema’s confidence enum widened from four values to five, so a validator written against the four-value enum rejects an export that is correct. It was earned in commit `4ec35b0`, where a Greenbone result with no detection quality stopped being reported as Medium confidence.
+
+## 9. Large-report normalization
+
+Launchers may capture reports up to 512 MiB. The shared normalizer now uses the same per-file and total serialized-byte boundary; it does not discard a whole valid report merely because it exceeds the former 16 MiB in-memory document limit. Smaller artifacts retain their existing parser. Larger JSON, JSONL and XML artifacts stream from the verified case path.
+
+- **JSON:** `adapters/bounded_json.rs` assigns a 32 MiB materialization budget to values and keys, caps individual copied strings at 1 MiB, nested depth at 64, and each array at 100,000 entries. Normalized records still have their existing 10,000-record bound; the larger parsing bound lets engines such as Cloudsplaining prioritize retained findings before that bound. It validates skipped values with Serde `IgnoredAny`. An oversized string is omitted whole rather than becoming a truncated identifier; later values can still be read. Omission withholds complete coverage. The budget bounds the retained tree, not total process RSS: the JSON decoder may temporarily hold a serialized scalar, bounded by the 512 MiB artifact limit.
+- **JSONL:** lines remain bounded at 1 MiB, with at most 10,000 retained rows and the same shared tree budget. Overlong or malformed lines make coverage incomplete while valid sibling rows remain usable. CloudQuery retains its existing specialized scalar-column reader and 64 MiB row limit.
+- **XML:** the Greenbone parser streams events with its existing depth, event, record, attribute and evidence-field bounds. The raw XML stays available when these limits exclude later records or oversized fields.
+- **Evidence identity:** every streamed file is read to its end even if parsing stops at a record limit. Its full length and SHA-256 must match the captured metadata before any parsed findings are accepted. A changed suffix therefore invalidates the whole parsed result.
+
+When updating an engine, compare its actual maximum-output budget and media type with these limits. Do not shrink upstream output to 16 MiB, silently claim complete coverage after truncation, or raise the materialized-tree budget to the full on-disk maximum. Regression cases in `adapter_fixtures.rs` cover JSON/XML/JSONL above 16 MiB and a large omitted value followed by a real finding; reader tests also cover changed tails and the 512 MiB rejection boundary.

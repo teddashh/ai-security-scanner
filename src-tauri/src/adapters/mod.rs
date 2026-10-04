@@ -4,6 +4,7 @@
 //! fields into the case schema; they never execute, render, or follow text from
 //! a target or a scanner result.
 
+mod bounded_json;
 mod control_mapping;
 
 use crate::adapter::{AdapterInput, AdapterOutput, AdapterRegistry, EngineAdapter};
@@ -25,7 +26,7 @@ use std::io::{BufRead, BufReader, Read, Take};
 use std::path::{Component, Path};
 use std::sync::Arc;
 
-pub const ADAPTER_VERSION: &str = "0.2.3";
+pub const ADAPTER_VERSION: &str = "0.2.4";
 /// Stable identity for the canonical finding fingerprint algorithm. Changing
 /// this value requires an explicit migration before cross-version diffs may be
 /// treated as comparable.
@@ -64,7 +65,8 @@ pub const BUILTIN_ENGINE_IDS: &[&str] = &[
 
 const MAX_ARTIFACTS: usize = 64;
 const MAX_ARTIFACT_BYTES: u64 = 16 * 1024 * 1024;
-const MAX_TOTAL_BYTES: u64 = 32 * 1024 * 1024;
+const MAX_JSON_TREE_BYTES: usize = 32 * 1024 * 1024;
+const MAX_STREAM_ARTIFACT_BYTES: u64 = 512 * 1024 * 1024;
 const MAX_RECORDS: usize = 10_000;
 const MAX_LINE_BYTES: usize = 1024 * 1024;
 const MAX_CLOUDQUERY_ARTIFACT_BYTES: u64 = 512 * 1024 * 1024;
@@ -750,11 +752,7 @@ fn normalize_artifacts(
     }
 
     let relevant_count = relevant.len();
-    let total_byte_limit = if adapter.profile == Profile::CloudQuery {
-        MAX_CLOUDQUERY_TOTAL_BYTES
-    } else {
-        MAX_TOTAL_BYTES
-    };
+    let total_byte_limit = MAX_CLOUDQUERY_TOTAL_BYTES;
     for artifact in relevant.into_iter().take(MAX_ARTIFACTS) {
         if processed_bytes.saturating_add(artifact.byte_length) > total_byte_limit {
             output.complete = false;
@@ -768,6 +766,12 @@ fn normalize_artifacts(
         let warnings_before_read = output.warnings.len();
         let parsed = if adapter.profile == Profile::CloudQuery {
             let parsed = read_cloudquery_rows(input.artifact_root, artifact, &mut output.warnings);
+            if parsed.is_some() {
+                processed_bytes += artifact.byte_length;
+            }
+            parsed
+        } else if artifact.byte_length > MAX_ARTIFACT_BYTES {
+            let parsed = read_large_artifact(input.artifact_root, artifact, &mut output.warnings);
             if parsed.is_some() {
                 processed_bytes += artifact.byte_length;
             }
@@ -1292,6 +1296,128 @@ fn open_bounded_artifact(
     }
 }
 
+/// Match the launchers' on-disk output boundary without materializing their
+/// entire report. The serialized stream and the retained JSON tree have
+/// independent bounds; whole-file length and SHA-256 still bind all evidence,
+/// including data omitted from normalization.
+fn read_large_artifact(
+    root: &Path,
+    artifact: &RawArtifact,
+    warnings: &mut Vec<String>,
+) -> Option<ParsedArtifact> {
+    let file = open_bounded_artifact(root, artifact, MAX_STREAM_ARTIFACT_BYTES, warnings)?;
+    let mut reader = BufReader::new(HashingReader {
+        inner: file.take(MAX_STREAM_ARTIFACT_BYTES + 1),
+        hasher: Sha256::new(),
+        length: 0,
+    });
+    let mut budget = bounded_json::Budget::new(MAX_JSON_TREE_BYTES);
+    let parsed = if artifact.media_type.contains("xml") || artifact.relative_path.ends_with(".xml")
+    {
+        parse_greenbone_xml_reader(&mut reader, warnings).map(ParsedArtifact::Xml)
+    } else if is_json_lines_artifact(artifact) {
+        let mut rows = Vec::new();
+        let mut line = Vec::new();
+        let mut line_number = 0;
+        loop {
+            let (consumed, oversized) =
+                match read_bounded_line(&mut reader, &mut line, MAX_LINE_BYTES) {
+                    Ok(value) => value,
+                    Err(_) => {
+                        push_warning(
+                            warnings,
+                            "an artifact exceeded the byte limit while being read",
+                        );
+                        return None;
+                    }
+                };
+            if consumed == 0 {
+                break;
+            }
+            line_number += 1;
+            if oversized {
+                push_warning(
+                    warnings,
+                    format!("JSONL line {line_number} exceeded the line limit and was skipped"),
+                );
+                continue;
+            }
+            let bytes = trim_ascii(&line);
+            if bytes.is_empty() {
+                continue;
+            }
+            if rows.len() >= MAX_RECORDS {
+                push_warning(
+                    warnings,
+                    "JSONL record limit reached; later lines remain only as raw evidence",
+                );
+                break;
+            }
+            match bounded_json::read(bytes, &mut budget) {
+                Ok(value) => rows.push((line_number, value)),
+                Err(_) => push_warning(
+                    warnings,
+                    format!("malformed JSONL line {line_number} was skipped"),
+                ),
+            }
+        }
+        Some(ParsedArtifact::JsonLines(rows))
+    } else {
+        match bounded_json::read(&mut reader, &mut budget) {
+            Ok(value) => Some(ParsedArtifact::Json(value)),
+            Err(error) => {
+                push_warning(
+                    warnings,
+                    format!(
+                        "artifact {} was neither valid bounded JSON nor JSONL: {}",
+                        safe_text(&artifact.id, MAX_SHORT_TEXT),
+                        safe_text(&error.to_string(), MAX_SHORT_TEXT)
+                    ),
+                );
+                None
+            }
+        }
+    };
+    if budget.omitted {
+        push_warning(
+            warnings,
+            "report data exceeded the normalization memory boundary; check results are incomplete",
+        );
+    }
+    // Parsers may stop at a row/event bound or syntax error. Verify the entire
+    // captured artifact before releasing any successfully read records.
+    if std::io::copy(&mut reader, &mut std::io::sink()).is_err() {
+        push_warning(
+            warnings,
+            "an artifact exceeded the byte limit while being read",
+        );
+        return None;
+    }
+    let HashingReader { hasher, length, .. } = reader.into_inner();
+    if length > MAX_STREAM_ARTIFACT_BYTES {
+        push_warning(
+            warnings,
+            "an artifact exceeded the byte limit while being read",
+        );
+        return None;
+    }
+    if length != artifact.byte_length {
+        push_warning(
+            warnings,
+            "an artifact length did not match its recorded evidence metadata",
+        );
+        return None;
+    }
+    if !hex::encode(hasher.finalize()).eq_ignore_ascii_case(&artifact.sha256) {
+        push_warning(
+            warnings,
+            "an artifact hash did not match its recorded evidence metadata",
+        );
+        return None;
+    }
+    parsed
+}
+
 /// Streams one CloudQuery NDJSON table file. The aws_iam_policies table carries
 /// every version of each attached AWS managed policy, so on a live account one
 /// row measured 7 MB and the file 11 MB. Each row is reduced to its top-level
@@ -1697,6 +1823,13 @@ fn parse_artifact(
 
 fn parse_greenbone_xml(
     bytes: &[u8],
+    warnings: &mut Vec<String>,
+) -> Option<Vec<GreenboneXmlResult>> {
+    parse_greenbone_xml_reader(bytes, warnings)
+}
+
+fn parse_greenbone_xml_reader(
+    bytes: impl BufRead,
     warnings: &mut Vec<String>,
 ) -> Option<Vec<GreenboneXmlResult>> {
     let mut reader = Reader::from_reader(bytes);
@@ -7271,11 +7404,33 @@ fn extract_kubescape(parsed: &ParsedArtifact, warnings: &mut Vec<String>) -> Vec
         .and_then(Value::as_object)
         .and_then(|summary| summary.get("controls"))
         .and_then(Value::as_object);
+    if root.contains_key("summaryDetails") && summary_controls.is_none() {
+        push_warning(
+            warnings,
+            "Kubescape summaryDetails lacked its controls object; result processing is incomplete",
+        );
+    }
     let mut summaries: BTreeMap<String, KubescapeControlSummary> = BTreeMap::new();
     for (control_id, control) in summary_controls.into_iter().flatten() {
         let Some(control) = control.as_object() else {
+            push_warning(
+                warnings,
+                "Kubescape summary control was not an object; result processing is incomplete",
+            );
             continue;
         };
+        if control_id.trim().is_empty() || control_id.len() > MAX_SHORT_TEXT {
+            push_warning(
+                warnings,
+                "Kubescape summary control lacked a valid control ID; result processing is incomplete",
+            );
+            continue;
+        }
+        kubescape_control_failed(
+            control,
+            &format!("/summaryDetails/controls/{control_id}"),
+            warnings,
+        );
         summaries.insert(
             control_id.clone(),
             KubescapeControlSummary {
@@ -7289,43 +7444,67 @@ fn extract_kubescape(parsed: &ParsedArtifact, warnings: &mut Vec<String>) -> Vec
     }
 
     let mut records = Vec::new();
-    for (index, result) in root
-        .get("results")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .enumerate()
-    {
+    let results = root.get("results").and_then(Value::as_array);
+    if results.is_none() {
+        push_warning(
+            warnings,
+            "Kubescape output lacked its results array; result processing is incomplete",
+        );
+    }
+    let mut evaluated_controls = 0_usize;
+    for (index, result) in results.into_iter().flatten().enumerate() {
         let Some(result) = result.as_object() else {
+            push_warning(
+                warnings,
+                format!(
+                    "Kubescape result at /results/{index} was not an object; result processing is incomplete"
+                ),
+            );
             continue;
         };
         let location = string_any(result, &["resourceID", "resource"])
             .unwrap_or_else(|| "kubernetes-resource".into());
-        for (control_index, control) in result
-            .get("controls")
-            .and_then(Value::as_array)
-            .into_iter()
-            .flatten()
-            .enumerate()
-        {
+        // Upstream uses omitempty for resources with no associated controls.
+        let controls = result.get("controls").and_then(Value::as_array);
+        if result.contains_key("controls") && controls.is_none() {
+            push_warning(
+                warnings,
+                format!(
+                    "Kubescape result at /results/{index} had an invalid controls array; result processing is incomplete"
+                ),
+            );
+        }
+        for (control_index, control) in controls.into_iter().flatten().enumerate() {
             if records.len() >= MAX_RECORDS {
                 return records;
             }
             let Some(control) = control.as_object() else {
+                push_warning(
+                    warnings,
+                    format!(
+                        "Kubescape control at /results/{index}/controls/{control_index} was not an object; result processing is incomplete"
+                    ),
+                );
                 continue;
             };
             // v2 nests the verdict; older shapes put a plain string here.
-            let status = control
-                .get("status")
-                .and_then(Value::as_object)
-                .and_then(|status| string_any(status, &["status"]))
-                .or_else(|| string_any(control, &["status"]));
-            if !status.as_deref().is_some_and(is_failure) {
-                continue;
-            }
-            let Some(rule_id) = exact_rule_string_any(control, &["controlID"]) else {
+            let pointer = format!("/results/{index}/controls/{control_index}");
+            let Some(failed) = kubescape_control_failed(control, &pointer, warnings) else {
                 continue;
             };
+            let Some(rule_id) = exact_rule_string_any(control, &["controlID"]) else {
+                push_warning(
+                    warnings,
+                    format!(
+                        "Kubescape control at {pointer} lacked its controlID; result processing is incomplete"
+                    ),
+                );
+                continue;
+            };
+            evaluated_controls += 1;
+            if !failed {
+                continue;
+            }
             let summary = summaries.get(&rule_id);
             records.push(record_with_derived_confidence!(
                 format!("/results/{index}/controls/{control_index}"),
@@ -7356,21 +7535,27 @@ fn extract_kubescape(parsed: &ParsedArtifact, warnings: &mut Vec<String>) -> Vec
             let Some(object) = control.as_object() else {
                 continue;
             };
-            if !string_any(object, &["status"])
-                .as_deref()
-                .is_some_and(is_failure)
-            {
+            let pointer = format!("/summaryDetails/controls/{rule_id}");
+            if kubescape_control_failed(object, &pointer, warnings) != Some(true) {
                 continue;
             }
-            let summary = summaries.get(rule_id);
+            push_warning(
+                warnings,
+                "Kubescape reported failing summary controls without matching resource findings; result processing is incomplete",
+            );
+            let Some(summary) = summaries.get(rule_id) else {
+                continue;
+            };
             records.push(record_with_derived_confidence!(
                 format!("/summaryDetails/controls/{rule_id}"),
                 rule_id.clone(),
                 summary
-                    .and_then(|summary| summary.name.clone())
+                    .name
+                    .clone()
                     .unwrap_or_else(|| format!("Kubescape control {rule_id}")),
                 summary
-                    .and_then(|summary| summary.score_factor.clone())
+                    .score_factor
+                    .clone()
                     .unwrap_or_else(|| "unknown".into()),
                 "kubernetes-cluster".to_owned(),
                 None,
@@ -7381,7 +7566,55 @@ fn extract_kubescape(parsed: &ParsedArtifact, warnings: &mut Vec<String>) -> Vec
             ));
         }
     }
+    if evaluated_controls == 0 {
+        push_warning(
+            warnings,
+            "Kubescape output contained no evaluated resource controls; check coverage is incomplete",
+        );
+    }
     records
+}
+
+/// OPA-utils v0.0.303 owns these verdicts. An error or skipped evaluation is
+/// coverage evidence, never a vulnerability or a passing control.
+fn kubescape_control_failed(
+    control: &Map<String, Value>,
+    pointer: &str,
+    warnings: &mut Vec<String>,
+) -> Option<bool> {
+    let status = control
+        .get("statusInfo")
+        .and_then(Value::as_object)
+        .and_then(|status| string_any(status, &["status"]))
+        .or_else(|| {
+            control
+                .get("status")
+                .and_then(Value::as_object)
+                .and_then(|status| string_any(status, &["status"]))
+        })
+        .or_else(|| string_any(control, &["status"]));
+    match status.as_deref() {
+        Some("failed") => Some(true),
+        Some("passed" | "excluded" | "irrelevant") => Some(false),
+        Some("skipped" | "error") => {
+            push_warning(
+                warnings,
+                format!(
+                    "Kubescape control at {pointer} was not evaluated; check coverage is incomplete"
+                ),
+            );
+            None
+        }
+        _ => {
+            push_warning(
+                warnings,
+                format!(
+                    "Kubescape control at {pointer} lacked a supported status; result processing is incomplete"
+                ),
+            );
+            None
+        }
+    }
 }
 
 fn extract_kube_bench(parsed: &ParsedArtifact, warnings: &mut Vec<String>) -> Vec<SourceRecord> {
@@ -8621,6 +8854,55 @@ fn push_priority_warning(warnings: &mut Vec<String>, warning: impl AsRef<str>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn large_report_reader_verifies_even_the_suffix_beyond_the_record_limit() {
+        let root = tempfile::tempdir().unwrap();
+        let mut bytes = b"{\"rule\":\"one\"}\n".repeat(MAX_RECORDS + 1);
+        let path = root.path().join("results.jsonl");
+        std::fs::write(&path, &bytes).unwrap();
+        let artifact = RawArtifact {
+            id: "streamed-report".into(),
+            case_id: "case-1".into(),
+            run_id: "run-1".into(),
+            engine_run_id: "engine-run-1".into(),
+            relative_path: "results.jsonl".into(),
+            media_type: "application/x-ndjson".into(),
+            sha256: hex::encode(Sha256::digest(&bytes)),
+            byte_length: bytes.len() as u64,
+            created_at: chrono::Utc::now(),
+            contains_sensitive_data: false,
+        };
+        let mut warnings = Vec::new();
+        assert!(
+            matches!(read_large_artifact(root.path(), &artifact, &mut warnings),
+            Some(ParsedArtifact::JsonLines(rows)) if rows.len() == MAX_RECORDS)
+        );
+        assert!(
+            warnings
+                .iter()
+                .any(|warning| warning.contains("record limit"))
+        );
+        let index = bytes.len() - 4;
+        bytes[index] = b'x';
+        std::fs::write(&path, &bytes).unwrap();
+        warnings.clear();
+        assert!(read_large_artifact(root.path(), &artifact, &mut warnings).is_none());
+        assert!(
+            warnings
+                .iter()
+                .any(|warning| warning.contains("hash did not match"))
+        );
+        let mut oversized = artifact;
+        oversized.byte_length = MAX_STREAM_ARTIFACT_BYTES + 1;
+        warnings.clear();
+        assert!(read_large_artifact(root.path(), &oversized, &mut warnings).is_none());
+        assert!(
+            warnings
+                .iter()
+                .any(|warning| warning.contains("per-file byte limit"))
+        );
+    }
 
     #[test]
     fn bounded_lines_keep_short_lines_and_consume_long_ones() {

@@ -16,6 +16,8 @@
 - MCP Armor 可執行已核准 MCP 設定快照的靜態檢查，預設不啟用；不啟動 MCP 伺服器、不載入模型。
 - Augustus 仍是研究用資料契約，沒有 production 引擎、派送或授權路徑。研究期間沒有連線任何模型端點。
 
+擁有者指定先完成結果完整性、引擎建置／修補維護與實驗功能整合，再製作 **v0.4.0 正式版**。目前開發中的修正會將 Greenbone 按確切授權分成獨立工作，保存重試所需的授權成員；Kubescape 的缺漏或未評估資料會揭露涵蓋缺口；大型報告則在 512 MiB 證據限制內串流處理。這些改動不在固定的 v0.3.1 安裝包內。引擎重建與 Garak／Agentic Radar／ZAP 啟用仍在進行；v0.4.0 尚未打包或發布。
+
 ## 已記錄的驗證
 
 10 月 3 日來源準備檢查：2,072 項 Rust、798 項前端（六項明確 skip）、515 項 component、89 項 CI 合約與 202 項發布合約通過。Formatting、Clippy、production build、引擎 admission 與 release identity 亦通過。v0.3.1 準備另通過完整打包自測及三項 gateway 身分／安全測試。

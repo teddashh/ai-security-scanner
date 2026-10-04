@@ -31,6 +31,8 @@ product behavior, and the [current product review](product-audit.md) tracks the 
   wire contracts; unknown permissions and tasks cannot claim authorization, execution, or coverage.
 - No model endpoint or hosted provider was contacted while developing the experimental AI paths.
 
+The owner has selected result integrity, engine build/patch maintenance, and experimental integrations before **v0.4.0 stable**. Result-integrity work now separates Greenbone tasks by exact grant, freezes task grant membership for resume, rejects malformed or unevaluated Kubescape output as complete coverage, and streams large reports within the 512 MiB evidence budget. This is development work; it is not included in the frozen v0.3.1 installer. Engine rebuilding and Garak/Agentic Radar/ZAP activation remain in progress; v0.4.0 has not been packaged or published.
+
 ## AI integration work
 
 | Integration | Implemented | Current fail-closed boundary |

@@ -40,6 +40,12 @@ Only openvasd and the feed ship, not the full Greenbone stack ([Greenbone compon
 - 2026-10-01: with one CPU, openvasd starved its status API and the launcher's 30 s request timeout ended the scan with exit 126 -> the reviewed CPU allowance is now applied (2ddaec2). See [Greenbone](greenbone.md#lessons-from-real-runs) for the image-level lessons.
 - Hardening that came from review rather than a failed run: unrated alarms stay alarms and OID-less `error` and `dead_host` results are kept (369a6b9, 2026-09-09); an unknown OID-less result type and a missing or null `items` field now fail instead of reading as a clean scan (c668b6d, 2026-09-17); unrecognized QoD types are omitted instead of written as 50 (4ec35b0, 2026-09-17).
 
+## Product execution isolation
+
+The launcher publishes one atomic XML file and removes it on any failed grant. The product therefore plans **one Greenbone task per exact grant**, each with its own engine-run ID, evidence directory and cleanup identity. `execution_scope_grant_ids` freezes the task's grant membership; resume selects only those grants and revalidates the original scope hash. A failed task cannot delete a completed sibling's output, including siblings on the same asset.
+
+Historical multi-grant executions may reopen their saved reports and finish adapting already captured evidence. They cannot replay the old atomic batch; Start a new scan creates independent tasks. Do not restore multi-grant batching or describe the launcher's raw batch mode as partial-result safe. This isolation changes host orchestration, not OpenVAS detection or the published image.
+
 ## Updating this launcher
 
 - Any change to `main.go` needs a new `wrapper.launcher_sha256` in the plan and therefore a new image tag; follow [Greenbone](greenbone.md#updating-this-engine).

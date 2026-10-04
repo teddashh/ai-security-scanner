@@ -4198,24 +4198,37 @@ impl<'a> CaseService<'a> {
             // failure silently suppress otherwise useful sibling results.
             let execution_groups = assets
                 .into_iter()
-                .map(|asset| vec![asset])
+                .flat_map(|asset| {
+                    let grants = effective
+                        .iter()
+                        .copied()
+                        .filter(|grant| {
+                            grant.asset_id == asset.id
+                                && (manifest.required_permissions.contains(&grant.permission)
+                                    || (manifest.active_external
+                                        && grant.permission
+                                            == ScanPermission::ActiveExternalTesting))
+                        })
+                        .cloned()
+                        .collect::<Vec<_>>();
+                    if manifest.id == "greenbone" {
+                        // The launcher finalizes one XML document atomically.
+                        // Give each exact grant its own output directory so a
+                        // later failed grant cannot delete a successful one.
+                        grants
+                            .into_iter()
+                            .map(|grant| (vec![asset], vec![grant]))
+                            .collect::<Vec<_>>()
+                    } else {
+                        vec![(vec![asset], grants)]
+                    }
+                })
                 .collect::<Vec<_>>();
-            for assets in execution_groups {
+            for (assets, relevant_grants) in execution_groups {
                 let engine_run_id = new_id();
                 let asset_ids = assets
                     .iter()
                     .map(|asset| asset.id.clone())
-                    .collect::<Vec<_>>();
-                let relevant_grants = effective
-                    .iter()
-                    .copied()
-                    .filter(|grant| {
-                        asset_ids.contains(&grant.asset_id)
-                            && (manifest.required_permissions.contains(&grant.permission)
-                                || (manifest.active_external
-                                    && grant.permission == ScanPermission::ActiveExternalTesting))
-                    })
-                    .cloned()
                     .collect::<Vec<_>>();
                 let execution_contract =
                     (|| -> AppResult<(EngineManifest, String, String, String)> {
@@ -4325,6 +4338,12 @@ impl<'a> CaseService<'a> {
                     execution_timeout_seconds: Some(manifest.execution_timeout_seconds()),
                     knowledge_input: Some(dated_knowledge_input(manifest)),
                     scope_contract_sha256: Some(scope_contract_sha256),
+                    execution_scope_grant_ids: (manifest.id == "greenbone").then(|| {
+                        relevant_grants
+                            .iter()
+                            .map(|grant| grant.id.clone())
+                            .collect()
+                    }),
                     naabu_work_plan: None,
                     naabu_attempt_requests: Vec::new(),
                     naabu_attempt_results: Vec::new(),
@@ -5985,12 +6004,31 @@ impl<'a> CaseService<'a> {
                 .copied()
                 .filter(|grant| {
                     engine_run.asset_ids.contains(&grant.asset_id)
+                        && engine_run
+                            .execution_scope_grant_ids
+                            .as_ref()
+                            .is_none_or(|ids| ids.contains(&grant.id))
                         && (manifest.required_permissions.contains(&grant.permission)
                             || (manifest.active_external
                                 && grant.permission == ScanPermission::ActiveExternalTesting))
                 })
                 .cloned()
                 .collect::<Vec<_>>();
+            if manifest.id == "greenbone"
+                && relevant_grants.len() > 1
+                && !previous
+                    .as_ref()
+                    .is_some_and(captured_checkpoint_is_adapter_only)
+            {
+                blocked.push(ResumeBlocked {
+                    engine_index,
+                    phase: "resume_scope_changed",
+                    error_code: "resume_scope_changed".into(),
+                    clear_resume_token: false,
+                    explanation: "This saved check combines several target authorizations. Start a new scan to run each authorization independently.".into(),
+                });
+                continue;
+            }
             let resumed_scope_sha256 = comparable_scope_contract_sha256(
                 manifest,
                 &assets.iter().collect::<Vec<_>>(),
@@ -10000,6 +10038,7 @@ fn not_executed_run(
         execution_timeout_seconds: manifest.map(EngineManifest::execution_timeout_seconds),
         knowledge_input: manifest.map(dated_knowledge_input),
         scope_contract_sha256: None,
+        execution_scope_grant_ids: None,
         naabu_work_plan: None,
         naabu_attempt_requests: Vec::new(),
         naabu_attempt_results: Vec::new(),
@@ -31640,6 +31679,167 @@ mod tests {
     }
 
     #[test]
+    fn greenbone_grants_on_one_asset_are_independent_and_resume_keeps_exact_membership() {
+        let fixture = Fixture::new();
+        let start = mixed_environment_start(&fixture);
+        let service = fixture.service();
+        service
+            .authorize_and_persist_scan_before_execution_preflight(
+                &start.case_id,
+                start.decisions,
+                start.request,
+            )
+            .unwrap();
+        let mut case = service.show_case(&start.case_id).unwrap();
+        case.scan_runs.clear();
+        let mut second_grant = case
+            .scope_grants
+            .iter()
+            .find(|grant| grant.asset_id == start.first_device_asset_id)
+            .unwrap()
+            .clone();
+        second_grant.id = new_id();
+        let external = second_grant.external_scope.as_mut().unwrap();
+        external.id = second_grant.id.clone();
+        external.rate_policy.requests_per_second = 1;
+        let second_id = second_grant.id.clone();
+        case.scope_grants.push(second_grant);
+        fixture
+            .storage
+            .save_case(&mut case, "test.legacy_independent_grants")
+            .unwrap();
+
+        let plan = service
+            .plan_scan(
+                &case.id,
+                ScanPlanRequest {
+                    engine_ids: Vec::new(),
+                    engine_asset_routes: vec![EngineAssetRoute {
+                        engine_id: "greenbone".into(),
+                        asset_ids: vec![start.first_device_asset_id.clone()],
+                    }],
+                },
+            )
+            .unwrap();
+        assert_eq!(plan.executable.len(), 2);
+        assert!(
+            plan.executable
+                .iter()
+                .all(|execution| execution.assets.len() == 1 && execution.scope_grants.len() == 1)
+        );
+        assert_ne!(
+            plan.executable[0].engine_run_id,
+            plan.executable[1].engine_run_id
+        );
+        let second_task = plan
+            .executable
+            .iter()
+            .find(|execution| execution.scope_grants[0].id == second_id)
+            .unwrap();
+        let first_task = plan
+            .executable
+            .iter()
+            .find(|execution| execution.scope_grants[0].id != second_id)
+            .unwrap();
+        let mut stored = service.show_case(&case.id).unwrap();
+        let run = &mut stored.scan_runs[0];
+        for engine_run in &mut run.engine_runs {
+            engine_run.finished_at = Some(Utc::now());
+            if engine_run.id == first_task.engine_run_id {
+                engine_run.status = EngineRunStatus::Completed;
+                engine_run.phase = "completed".into();
+                engine_run.progress_percent = 100;
+                engine_run.exit_code = Some(0);
+                engine_run.resume_token = None;
+            } else {
+                engine_run.status = EngineRunStatus::Failed;
+                engine_run.phase = "failed".into();
+                engine_run.exit_code = Some(126);
+                let mut checkpoint = ExecutionCheckpoint::from_resume_token(
+                    engine_run.resume_token.as_deref().unwrap(),
+                )
+                .unwrap();
+                checkpoint.stage = ExecutionStage::Failed;
+                checkpoint.last_error = Some("independent grant failed".into());
+                engine_run.resume_token = Some(checkpoint.resume_token().unwrap());
+            }
+        }
+        run.completed_at = Some(Utc::now());
+        stored.status = CaseStatus::NeedsAttention;
+        fixture
+            .storage
+            .save_case(&mut stored, "test.independent_grant_failure")
+            .unwrap();
+        let resumed = service.plan_resume(&case.id, &plan.scan_run.id).unwrap();
+        assert_eq!(resumed.executable.len(), 1);
+        assert_eq!(
+            resumed.executable[0].engine_run_id,
+            second_task.engine_run_id
+        );
+        assert_eq!(resumed.executable[0].scope_grants[0].id, second_id);
+        assert_eq!(resumed.executable[0].scope_grants.len(), 1);
+        assert_eq!(
+            resumed
+                .scan_run
+                .engine_runs
+                .iter()
+                .find(|task| task.id == first_task.engine_run_id)
+                .unwrap()
+                .status,
+            EngineRunStatus::Completed
+        );
+        // Old cases without membership must not replay their atomic batch.
+        // Their completed evidence remains readable; a fresh scan splits work.
+        let mut legacy = service.show_case(&case.id).unwrap();
+        let asset = legacy
+            .assets
+            .iter()
+            .find(|asset| asset.id == start.first_device_asset_id)
+            .unwrap();
+        let grants = legacy
+            .scope_grants
+            .iter()
+            .filter(|grant| grant.asset_id == asset.id)
+            .cloned()
+            .collect::<Vec<_>>();
+        let hash =
+            comparable_scope_contract_sha256(&second_task.manifest, &[asset], &grants).unwrap();
+        let run = &mut legacy.scan_runs[0];
+        let mut combined = run
+            .engine_runs
+            .iter()
+            .find(|task| task.id == second_task.engine_run_id)
+            .unwrap()
+            .clone();
+        combined.execution_scope_grant_ids = None;
+        combined.scope_contract_sha256 = Some(hash);
+        combined.status = EngineRunStatus::Failed;
+        combined.resume_token = stored.scan_runs[0]
+            .engine_runs
+            .iter()
+            .find(|task| task.id == second_task.engine_run_id)
+            .unwrap()
+            .resume_token
+            .clone();
+        run.engine_runs = vec![combined];
+        run.completed_at = Some(Utc::now());
+        legacy.status = CaseStatus::NeedsAttention;
+        fixture
+            .storage
+            .save_case(&mut legacy, "test.legacy_atomic_grants")
+            .unwrap();
+        let blocked = service
+            .plan_resume(&case.id, &plan.scan_run.id)
+            .unwrap_err();
+        assert!(matches!(blocked, AppError::NotAvailable(_)));
+        assert!(
+            blocked
+                .to_string()
+                .contains("run each authorization independently")
+        );
+    }
+
+    #[test]
     fn mixed_environment_materializes_disjoint_website_and_device_executions() {
         let fixture = Fixture::new();
         let start = mixed_environment_start(&fixture);
@@ -36757,6 +36957,7 @@ mod tests {
                 execution_timeout_seconds: None,
                 knowledge_input: None,
                 scope_contract_sha256: None,
+                execution_scope_grant_ids: None,
                 naabu_work_plan: None,
                 naabu_attempt_requests: Vec::new(),
                 naabu_attempt_results: Vec::new(),
@@ -40165,6 +40366,7 @@ mod tests {
                 execution_timeout_seconds: None,
                 knowledge_input: None,
                 scope_contract_sha256: None,
+                execution_scope_grant_ids: None,
                 naabu_work_plan: None,
                 naabu_attempt_requests: Vec::new(),
                 naabu_attempt_results: Vec::new(),
@@ -44986,6 +45188,7 @@ mod tests {
                 execution_timeout_seconds: None,
                 knowledge_input: None,
                 scope_contract_sha256: None,
+                execution_scope_grant_ids: None,
                 naabu_work_plan: None,
                 naabu_attempt_requests: Vec::new(),
                 naabu_attempt_results: Vec::new(),
@@ -45472,6 +45675,7 @@ mod tests {
                 support_until: Some("2026-11-22".into()),
             }),
             scope_contract_sha256: Some("d".repeat(64)),
+            execution_scope_grant_ids: None,
             naabu_work_plan: None,
             naabu_attempt_requests: Vec::new(),
             naabu_attempt_results: Vec::new(),

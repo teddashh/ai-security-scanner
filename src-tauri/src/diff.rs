@@ -977,6 +977,7 @@ mod tests {
                 support_until: Some("2026-11-22".into()),
             }),
             scope_contract_sha256: Some("d".repeat(64)),
+            execution_scope_grant_ids: None,
             naabu_work_plan: None,
             naabu_attempt_requests: Vec::new(),
             naabu_attempt_results: Vec::new(),

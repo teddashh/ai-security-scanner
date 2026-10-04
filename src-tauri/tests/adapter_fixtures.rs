@@ -6512,6 +6512,142 @@ fn kubescape_per_resource_results_are_read_not_only_the_summary_rollup() {
     );
 }
 
+#[test]
+fn kubescape_missing_or_malformed_results_never_become_a_clean_check() {
+    for document in [
+        serde_json::json!({}),
+        serde_json::json!({"results": null}),
+        serde_json::json!({"results": {"controls": []}}),
+        serde_json::json!({"results": [null]}),
+        serde_json::json!({"results": [{"controls": {}}]}),
+        serde_json::json!({"results": []}),
+    ] {
+        let output = normalize_bytes(
+            "kubescape",
+            &serde_json::to_vec(&document).unwrap(),
+            "kubescape.json",
+            "application/json",
+            "kubescape-invalid",
+        );
+        assert!(
+            !output.complete,
+            "invalid or unevaluated report: {document}"
+        );
+        assert!(output.findings.is_empty());
+        assert!(!output.warnings.is_empty());
+    }
+}
+
+#[test]
+fn large_json_xml_and_jsonl_reports_keep_findings_beyond_the_old_file_limit() {
+    for engine_id in ["semgrep", "greenbone", "trufflehog"] {
+        let (original, filename, media_type) = fixture(engine_id);
+        let mut bytes = original.to_vec();
+        // Whitespace is valid serialized evidence, but needs no JSON tree.
+        for _ in 0..2_049 {
+            bytes.extend_from_slice(&[b' '; 8_192]);
+            bytes.push(b'\n');
+        }
+        assert!(bytes.len() > 16 * 1024 * 1024);
+        let output = normalize_bytes(engine_id, &bytes, filename, media_type, "large-output");
+        let expected = normalize_fixture(engine_id);
+        assert_eq!(
+            rules_and_severities(&output),
+            rules_and_severities(&expected),
+            "{engine_id}"
+        );
+        assert_eq!(
+            output.complete, expected.complete,
+            "{engine_id}: {:?}",
+            output.warnings
+        );
+        assert!(
+            output
+                .findings
+                .iter()
+                .flat_map(|finding| &finding.evidence)
+                .all(|evidence| evidence.artifact_id == format!("artifact-{engine_id}"))
+        );
+    }
+}
+
+#[test]
+fn large_json_with_an_oversized_value_keeps_later_findings_and_marks_partial() {
+    let (original, filename, media_type) = fixture("semgrep");
+    let mut bytes = br#"{"oversized_metadata":""#.to_vec();
+    bytes.resize(bytes.len() + 17 * 1024 * 1024, b'x');
+    bytes.extend_from_slice(b"\",");
+    bytes.extend_from_slice(&original[1..]);
+    let output = normalize_bytes("semgrep", &bytes, filename, media_type, "large-partial");
+    assert_eq!(
+        rules_and_severities(&output),
+        rules_and_severities(&normalize_fixture("semgrep"))
+    );
+    assert!(!output.complete);
+    assert!(
+        output
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("normalization memory boundary"))
+    );
+}
+
+#[test]
+fn kubescape_invalid_siblings_preserve_real_findings_and_withhold_completion() {
+    for invalid in [
+        serde_json::json!(null),
+        serde_json::json!({"status": {"status": "failed"}}),
+        serde_json::json!({"controlID": "C-0009"}),
+        serde_json::json!({"controlID": "C-0009", "status": {"status": "future-status"}}),
+        serde_json::json!({"controlID": "C-0009", "status": {"status": "skipped", "subStatus": "notEvaluated"}}),
+        serde_json::json!({"controlID": "C-0009", "status": "error"}),
+    ] {
+        let document = serde_json::json!({"results": [{
+            "resourceID": "apps/v1/default/Deployment/real-resource",
+            "controls": [{"controlID": "C-0002", "status": {"status": "failed"}}, invalid]
+        }]});
+        let output = normalize_bytes(
+            "kubescape",
+            &serde_json::to_vec(&document).unwrap(),
+            "kubescape.json",
+            "application/json",
+            "kubescape-partial",
+        );
+        assert!(!output.complete, "partial report: {document}");
+        assert_eq!(
+            output.findings.len(),
+            1,
+            "scanner errors are not vulnerabilities"
+        );
+        assert!(rules_and_severities(&output).contains_key("c-0002"));
+        assert!(output.findings[0].evidence.iter().any(|evidence| {
+            evidence
+                .summary
+                .contains("apps/v1/default/Deployment/real-resource")
+        }));
+    }
+}
+
+#[test]
+fn kubescape_a_real_passing_control_can_complete_without_findings() {
+    let output = normalize_bytes("kubescape",
+        br#"{"results":[{"resourceID":"v1/default/Pod/checked","controls":[{"controlID":"C-0002","status":{"status":"passed"}}]},{"resourceID":"v1/default/Service/no-associated-controls"}]}"#,
+        "kubescape.json", "application/json", "kubescape-passed");
+    assert!(output.complete, "{:?}", output.warnings);
+    assert!(output.findings.is_empty());
+}
+
+#[test]
+fn kubescape_summary_only_findings_are_useful_but_not_complete_resource_coverage() {
+    let output = normalize_bytes("kubescape",
+        br#"{"summaryDetails":{"controls":{"C-0002":{"statusInfo":{"status":"failed"},"name":"Exec into container","scoreFactor":5}}}}"#,
+        "kubescape.json", "application/json", "kubescape-summary");
+    assert!(!output.complete);
+    assert_eq!(output.findings.len(), 1);
+    assert!(rules_and_severities(&output).contains_key("c-0002"));
+    assert_eq!(output.findings[0].severity, Severity::Medium);
+}
+
 /// Engines whose artifact is JSON Lines, from `engines/catalog.json`.
 const JSON_LINES_ENGINES: &[&str] = &["naabu", "httpx", "nuclei", "trufflehog"];
 

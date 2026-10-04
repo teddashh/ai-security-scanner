@@ -173,6 +173,7 @@ pub fn prepare_localhost_quick_scan(
         execution_timeout_seconds: Some(3),
         knowledge_input: None,
         scope_contract_sha256: None,
+        execution_scope_grant_ids: None,
         naabu_work_plan: None,
         naabu_attempt_requests: Vec::new(),
         naabu_attempt_results: Vec::new(),

@@ -852,6 +852,10 @@ pub struct EngineRun {
     /// semantically identical re-approval remains comparable.
     #[serde(default)]
     pub scope_contract_sha256: Option<String>,
+    /// Exact grants bound to a per-grant Greenbone execution. Other engines
+    /// and legacy runs retain their original combined grant contract.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub execution_scope_grant_ids: Option<Vec<Id>>,
     /// Exact host-frozen Naabu work units persisted before the first target
     /// contact. Missing values identify legacy, non-Naabu, or not-yet-frozen
     /// executions and never imply complete work-unit coverage.
