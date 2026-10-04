@@ -2575,6 +2575,10 @@ export default function App() {
               "select-mcp-configuration",
               () => scannerService.selectMcpConfiguration({ caseId: currentCaseId, assetId, relativePath }),
             )}
+            onSelectAgenticFramework={(assetId, framework) => executeAction(
+              "select-agentic-framework",
+              () => scannerService.selectAgenticFramework({ caseId: currentCaseId, assetId, framework }),
+            )}
             onStartDiscovery={() => runAction("discovery", () => scannerService.startDiscovery(currentCaseId))}
             onAuthorizationChanged={async () => {
               await loadSnapshot(currentCaseId, true);

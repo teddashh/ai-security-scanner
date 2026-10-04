@@ -1,3 +1,4 @@
+import { agenticRadarFramework } from "../agenticRadarProfile";
 import type {
   AppSnapshot,
   AssessmentCase,
@@ -2429,6 +2430,7 @@ export const adaptNativeCase = (
       selectedMcpConfiguration: typeof asset.metadata?.mcp_configuration_selected === "string"
         ? asset.metadata.mcp_configuration_selected
         : undefined,
+      agenticRadarFramework: agenticRadarFramework(asset.metadata?.agentic_radar_framework),
       declaredWebService: adaptDeclaredWebServiceMetadata(asset.metadata),
       declaredNetworkService: adaptDeclaredNetworkServiceMetadata(asset.metadata),
       declaredHostScan: adaptDeclaredHostScanMetadata(asset.metadata),

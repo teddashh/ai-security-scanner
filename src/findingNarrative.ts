@@ -1482,6 +1482,10 @@ const COVERAGE_GAP_PROSE: ReadonlyArray<readonly [string, string]> = [
     "回到掃描設定，選擇要檢查的 MCP 設定。",
   ],
   [
+    "Return to scan setup and choose the AI workflow framework for inventory.",
+    "回到掃描設定，選擇要盤點的 AI 工作流程框架。",
+  ],
+  [
     "MCP configuration discovery did not finish. Continue with the other checks.",
     "MCP 設定探索未完成；請繼續查看其他檢查。",
   ],
@@ -1924,6 +1928,10 @@ export const localizedTestedValue = (
 
 /** Fixed coverage-ledger explanations shared by the screen and case export. */
 const COVERAGE_RECORD_DETAIL_PROSE: ReadonlyArray<readonly [string, string]> = [
+  [
+    "Choose the AI workflow framework for this repository before running its workflow inventory.",
+    "請先選擇這個專案的 AI 工作流程框架，再執行工作流程盤點。",
+  ],
   [
     "The source is connected, but no attributable discovery has completed and no assets are known. Coverage is not established.",
     "來源已連線，但尚未完成可歸屬的探索，也沒有已知資產。尚未建立涵蓋。",

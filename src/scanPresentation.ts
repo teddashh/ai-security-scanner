@@ -174,6 +174,10 @@ const nextStepCopy = {
     en: "Return to scan setup and choose which MCP configuration to check.",
     zhTW: "回到掃描設定，選擇要檢查的 MCP 設定。",
   },
+  agenticFrameworkChoice: {
+    en: "Return to scan setup and choose the AI workflow framework for inventory.",
+    zhTW: "回到掃描設定，選擇要盤點的 AI 工作流程框架。",
+  },
   mcpConfigurationDiscoveryIncomplete: {
     en: "MCP configuration discovery did not finish. Continue with the other checks.",
     zhTW: "MCP 設定探索未完成；請繼續查看其他檢查。",
@@ -280,8 +284,9 @@ export const skippedChecksNextStepFor = (reasonCodes: readonly string[]): Biling
   const hasApprovedScopeIssue = reasonCodes.some((code) => approvedScopeMismatchErrorCodes.has(code));
   const hasMcpAbsent = reasonCodes.some((code) => mcpConfigurationAbsentErrorCodes.has(code));
   const hasMcpChoice = reasonCodes.some((code) => mcpConfigurationChoiceErrorCodes.has(code));
+  const hasAgenticChoice = reasonCodes.includes("agentic_framework_unselected");
   const hasMcpDiscoveryIssue = reasonCodes.some((code) => mcpConfigurationDiscoveryErrorCodes.has(code));
-  const knownCount = Number(hasTargetIssue) + Number(hasProviderIssue) + Number(hasToolIssue) + Number(hasReleaseIssue) + Number(hasApprovedScopeIssue) + Number(hasMcpAbsent) + Number(hasMcpChoice) + Number(hasMcpDiscoveryIssue);
+  const knownCount = Number(hasTargetIssue) + Number(hasProviderIssue) + Number(hasToolIssue) + Number(hasReleaseIssue) + Number(hasApprovedScopeIssue) + Number(hasMcpAbsent) + Number(hasMcpChoice) + Number(hasMcpDiscoveryIssue) + Number(hasAgenticChoice);
 
   if (knownCount > 1) {
     return reasonCodes.every((code) => settledSkipReasonCodes.has(code))
@@ -295,6 +300,7 @@ export const skippedChecksNextStepFor = (reasonCodes: readonly string[]): Biling
   if (hasApprovedScopeIssue) return nextStepCopy.approvedScopeMismatch;
   if (hasMcpAbsent) return nextStepCopy.mcpConfigurationAbsent;
   if (hasMcpChoice) return nextStepCopy.mcpConfigurationChoice;
+  if (hasAgenticChoice) return nextStepCopy.agenticFrameworkChoice;
   if (hasMcpDiscoveryIssue) return nextStepCopy.mcpConfigurationDiscoveryIncomplete;
   return nextStepCopy.skippedUnknown;
 };

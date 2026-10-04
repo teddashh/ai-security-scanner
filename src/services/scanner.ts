@@ -57,6 +57,7 @@ import type {
   LocalNetworkCandidateInventory,
   ScanReadiness,
   SelectMcpConfigurationInput,
+  SelectAgenticFrameworkInput,
 } from "../types";
 import { buildNativeExportCaseArguments } from "../exportRequest";
 import { findRequestedExportRun } from "../exportRunSelection";
@@ -99,6 +100,7 @@ export const COMMANDS = {
   connectSourceSnapshot: "connect_source_snapshot",
   attachWorkspaceSnapshot: "attach_workspace_snapshot",
   selectMcpConfiguration: "select_mcp_configuration",
+  selectAgenticFramework: "select_agentic_framework",
   approveScope: "approve_scope",
   updateFindingWorkflow: "update_finding_workflow",
   groupFindings: "group_findings",
@@ -745,6 +747,16 @@ export const scannerService = {
         "Open the desktop app to select an MCP configuration.",
         "請開啟桌面版選擇 MCP 設定。",
       ),
+      true,
+    );
+  },
+
+  async selectAgenticFramework(input: SelectAgenticFrameworkInput): Promise<ServiceResult<ActionResponse>> {
+    return actionResult(
+      COMMANDS.selectAgenticFramework,
+      { ...input },
+      serviceText("The AI workflow inventory selection is saved.", "已儲存 AI 工作流程盤點選項。"),
+      serviceText("Open the desktop app to choose an AI workflow framework.", "請開啟桌面版選擇 AI 工作流程框架。"),
       true,
     );
   },

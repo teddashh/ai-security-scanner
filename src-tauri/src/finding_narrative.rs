@@ -1503,6 +1503,10 @@ pub fn control_mapping_rationale_zh_hant(english: &str) -> Option<String> {
 /// case record. Explanations with retained values are matched by shape below.
 const COVERAGE_RECORD_DETAIL_PROSE: &[(&str, &str)] = &[
     (
+        "Choose the AI workflow framework for this repository before running its workflow inventory.",
+        "請先選擇這個專案的 AI 工作流程框架，再執行工作流程盤點。",
+    ),
+    (
         "The source is connected, but no attributable discovery has completed and no assets are known. Coverage is not established.",
         "來源已連線，但尚未完成可歸屬的探索，也沒有已知資產。尚未建立涵蓋。",
     ),
@@ -2144,6 +2148,10 @@ const COVERAGE_GAP_PROSE: &[(&str, &str)] = &[
     (
         "Return to scan setup and choose which MCP configuration to check.",
         "回到掃描設定，選擇要檢查的 MCP 設定。",
+    ),
+    (
+        "Return to scan setup and choose the AI workflow framework for inventory.",
+        "回到掃描設定，選擇要盤點的 AI 工作流程框架。",
     ),
     (
         "MCP configuration discovery did not finish. Continue with the other checks.",

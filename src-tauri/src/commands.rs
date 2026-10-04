@@ -2418,6 +2418,75 @@ pub fn select_mcp_configuration(
 }
 
 #[tauri::command]
+pub fn select_agentic_framework(
+    case_id: Id,
+    asset_id: Id,
+    framework: Option<crate::agentic_radar_input::AgenticFramework>,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> AppResult<AssessmentCase> {
+    let case = state.case_service().show_case(&case_id)?;
+    if case.is_demo || case.status == CaseStatus::Archived {
+        return Err(AppError::NotAuthorized(
+            "demo or archived cases cannot change AI workflow framework selection".into(),
+        ));
+    }
+    let asset = case
+        .assets
+        .iter()
+        .find(|asset| asset.id == asset_id)
+        .ok_or_else(|| AppError::InvalidRequest(format!("asset not found: {asset_id}")))?;
+    let references = asset
+        .discovered_from
+        .iter()
+        .filter_map(|source_id| {
+            case.data_sources.iter().find(|source| {
+                source.id == *source_id
+                    && source.read_only
+                    && source.status == SourceConnectionStatus::Connected
+            })
+        })
+        .filter_map(|source| {
+            source
+                .metadata
+                .get(WORKSPACE_SNAPSHOT_REFERENCE_METADATA_KEY)
+        })
+        .map(|value| {
+            serde_json::from_value::<WorkspaceSnapshotReference>(value.clone()).map_err(|_| {
+                AppError::InvalidRequest(
+                    "workspace source has an invalid backend snapshot reference".into(),
+                )
+            })
+        })
+        .collect::<AppResult<Vec<_>>>()?;
+    let [reference] = references.as_slice() else {
+        return Err(AppError::NotAuthorized(
+            "AI workflow framework selection requires exactly one immutable repository snapshot"
+                .into(),
+        ));
+    };
+    if asset
+        .metadata
+        .get("workspace_snapshot_sha256")
+        .and_then(serde_json::Value::as_str)
+        != Some(reference.sha256.as_str())
+    {
+        return Err(AppError::NotAuthorized(
+            "workspace asset digest does not match its backend snapshot reference".into(),
+        ));
+    }
+    inspect_workspace_snapshot(state.artifact_root(), &case_id, reference)?;
+    let updated = state.case_service().select_agentic_framework(
+        &case_id,
+        &asset_id,
+        &reference.sha256,
+        framework,
+    )?;
+    emit(&app, COVERAGE_CHANGED_EVENT, &updated)?;
+    Ok(updated)
+}
+
+#[tauri::command]
 pub fn seed_demo_case(state: State<'_, AppState>) -> AppResult<AssessmentCase> {
     if let Some(summary) = state
         .case_service()
@@ -6780,6 +6849,18 @@ fn resolve_execution_workspace(
             ));
         };
         verify_mcp_configuration_selection(asset, &resolved.manifest)?;
+    }
+    if execution.manifest.id == crate::agentic_radar_input::AGENTIC_RADAR_ENGINE_ID {
+        let [asset] = execution.assets.as_slice() else {
+            return Err(AppError::InvalidRequest(
+                "AI workflow inventory requires exactly one immutable repository asset".into(),
+            ));
+        };
+        if crate::agentic_radar_input::selected_framework(asset)?.is_none() {
+            return Err(AppError::NotAuthorized(
+                "Choose an AI workflow framework before running inventory".into(),
+            ));
+        }
     }
     Ok(Some(resolved))
 }

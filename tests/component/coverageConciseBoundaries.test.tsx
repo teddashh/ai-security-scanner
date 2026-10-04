@@ -34,6 +34,7 @@ type RouteOptions = Pick<React.ComponentProps<typeof CoveragePage>, "assessmentI
   engineManifests?: EngineManifest[];
   onStartScan?: React.ComponentProps<typeof CoveragePage>["onStartScan"];
   onStartEnvironmentScan?: React.ComponentProps<typeof CoveragePage>["onStartEnvironmentScan"];
+  onSelectAgenticFramework?: React.ComponentProps<typeof CoveragePage>["onSelectAgenticFramework"];
 };
 
 const routeElement = ({
@@ -49,6 +50,7 @@ const routeElement = ({
   engineManifests = [],
   onStartScan = () => Promise.resolve(true),
   onStartEnvironmentScan = () => Promise.resolve(true),
+  onSelectAgenticFramework,
 }: RouteOptions) => (
   <I18nProvider>
     <CoveragePage
@@ -71,6 +73,7 @@ const routeElement = ({
       onAuthorizationChanged={() => Promise.resolve()}
       onStartScan={onStartScan}
       onStartEnvironmentScan={onStartEnvironmentScan}
+      onSelectAgenticFramework={onSelectAgenticFramework}
     />
   </I18nProvider>
 );
@@ -1551,4 +1554,89 @@ test("changing a mixed run's website profile requires review and keeps local eng
   });
   expect(routes.find((route: { engineId: string }) => route.engineId === "zap")).toEqual({ engineId: "zap", assetIds: ["website-public"] });
   expect(routes.filter((route: { engineId: string }) => route.engineId !== "zap").every((route: { assetIds: string[] }) => route.assetIds.length === 1 && route.assetIds[0] === "repo-a")).toBe(true);
+});
+
+
+const agenticManifest: EngineManifest = {
+  id: "agentic-radar", name: "Agentic Radar", category: "ai_agent_framework", version: "0.14.1",
+  imageDigest: "sha256:synthetic-admission", license: "Apache-2.0", redistribution: "on_demand",
+  platforms: ["code"], supportedProviders: [], status: "ready", runnable: true,
+  blockedBy: [], compatibilityValid: true, providerExecutionProfiles: [], supportStatus: "supported",
+};
+
+for (const locale of ["en", "zh-TW"] as const) {
+  test(`optional workflow inventory waits for persisted framework selection in ${locale}`, async () => {
+    window.localStorage.setItem(localeStorageKey, locale);
+    const onStartScan = vi.fn().mockResolvedValue(false);
+    const onSelectAgenticFramework = vi.fn().mockResolvedValue(true);
+    const repository = pendingAsset({ name: "agent-copy", localInputProfile: "repository_working_tree" });
+    const options: RouteOptions = {
+      assessmentIntent: "ai_application", requestedActivities: ["local_artifact_analysis"],
+      assets: [repository], engineManifests: [agenticManifest], nativeMode: false,
+      onStartScan, onSelectAgenticFramework,
+    };
+    const { container, getByLabelText, rerender } = renderRoute(options);
+    await waitFor(() => expect(container.querySelector(".coverage-guided-boundary")).not.toBeNull());
+    const label = locale === "en" ? "Workflow framework" : "工作流程框架";
+    const selector = getByLabelText(label) as HTMLSelectElement;
+    expect(selector.value).toBe("");
+    expect(container.querySelector<HTMLDetailsElement>("[data-agentic-inventory]")!.open).toBe(false);
+    const start = container.querySelector<HTMLButtonElement>(".scope-confirmation-panel button[type=submit]")!;
+    fireEvent.click(start);
+    await waitFor(() => expect(onStartScan).toHaveBeenCalledTimes(1));
+    expect(onStartScan.mock.calls[0]![4]).not.toContain("agentic-radar");
+    onStartScan.mockClear();
+    fireEvent.change(selector, { target: { value: "openai-agents" } });
+    expect(onSelectAgenticFramework).toHaveBeenCalledWith(repository.id, "openai-agents");
+    // The selected value is controlled by the backend-saved asset, not optimistic local state.
+    expect(selector.value).toBe("");
+    rerender(routeElement({ ...options, assets: [{ ...repository, agenticRadarFramework: "openai-agents" }] }));
+    await waitFor(() => expect((getByLabelText(label) as HTMLSelectElement).value).toBe("openai-agents"));
+    fireEvent.click(container.querySelector<HTMLButtonElement>(".scope-confirmation-panel button[type=submit]")!);
+    await waitFor(() => expect(onStartScan).toHaveBeenCalledTimes(1));
+    expect(onStartScan.mock.calls[0]![4]).toContain("agentic-radar");
+    expect(onStartScan.mock.calls[0]![0]).toEqual([repository.id]);
+    expect(onStartScan.mock.calls[0]![1]).toEqual(["local_artifact"]);
+    fireEvent.change(getByLabelText(label), { target: { value: "" } });
+    expect(onSelectAgenticFramework).toHaveBeenLastCalledWith(repository.id, null);
+  });
+}
+
+test("workflow inventory is hidden without an admitted image and outside repository inputs", () => {
+  const options: RouteOptions = { assessmentIntent: "ai_application", requestedActivities: ["local_artifact_analysis"],
+    assets: [pendingAsset({ localInputProfile: "repository_working_tree", agenticRadarFramework: "langgraph" })],
+    engineManifests: [{ ...agenticManifest, runnable: false }], nativeMode: false,
+  };
+  const { container, rerender } = renderRoute(options);
+  expect(container.querySelector("[data-agentic-inventory]")).toBeNull();
+  rerender(routeElement({ ...options, assessmentIntent: "container_image", engineManifests: [agenticManifest],
+    assets: [pendingAsset({ type: "image", platform: "container", localInputProfile: "container_image_oci_layout" })] }));
+  expect(container.querySelector("[data-agentic-inventory]")).toBeNull();
+});
+
+test("mixed workflow inventory dispatch stays on its selected repository and requires fresh review", async () => {
+  const onStartEnvironmentScan = vi.fn().mockResolvedValue(false);
+  const onSelectAgenticFramework = vi.fn().mockResolvedValue(true);
+  const assets = oneRepositoryAndOneWebsiteEnvironmentAssets();
+  const options: RouteOptions = { assessmentIntent: "internal_it_environment",
+    requestedActivities: ["local_artifact_analysis", "active_external_vulnerability_tests"],
+    nativeMode: false, engineManifests: [agenticManifest], assets,
+    onStartEnvironmentScan, onSelectAgenticFramework,
+  };
+  const { container, getByLabelText, rerender } = renderRoute(options);
+  const confirmation = Array.from(container.querySelectorAll<HTMLInputElement>('input[type=checkbox]'))
+    .find(input => input.closest('label')?.textContent?.includes('I confirm I am allowed'))!;
+  fireEvent.click(confirmation);
+  fireEvent.change(getByLabelText("Workflow framework"), { target: { value: "langgraph" } });
+  expect(confirmation.checked).toBe(false);
+  expect(onSelectAgenticFramework).toHaveBeenCalledWith("repo-a", "langgraph");
+  rerender(routeElement({ ...options, assets: assets.map(asset => asset.id === "repo-a"
+    ? { ...asset, agenticRadarFramework: "langgraph" } : asset) }));
+  fireEvent.click(confirmation);
+  fireEvent.click(container.querySelector<HTMLButtonElement>('form button[type=submit]')!);
+  await waitFor(() => expect(onStartEnvironmentScan).toHaveBeenCalledTimes(1));
+  const [authorizations, routes] = onStartEnvironmentScan.mock.calls[0]!;
+  expect(routes.find((route: { engineId: string }) => route.engineId === "agentic-radar"))
+    .toEqual({ engineId: "agentic-radar", assetIds: ["repo-a"] });
+  expect(authorizations.find((a: { assetIds: string[] }) => a.assetIds.includes("repo-a")).modes).toEqual(["local_artifact"]);
 });

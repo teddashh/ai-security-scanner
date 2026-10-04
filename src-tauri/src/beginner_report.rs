@@ -4835,6 +4835,10 @@ fn not_tested_next_action(task: &EngineRun) -> (NextActionCode, &'static str) {
             NextActionCode::ReviewScopeAndRetry,
             "Return to scan setup and choose which MCP configuration to check.",
         ),
+        Some("agentic_framework_unselected") => (
+            NextActionCode::ReviewScopeAndRetry,
+            "Return to scan setup and choose the AI workflow framework for inventory.",
+        ),
         Some("mcp_configuration_discovery_incomplete") => (
             NextActionCode::NoActionUnlessScopeChanges,
             "MCP configuration discovery did not finish. Continue with the other checks.",

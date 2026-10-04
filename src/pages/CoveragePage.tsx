@@ -4,6 +4,7 @@ import { coverageMeta, platformMeta } from "../lib";
 import type {
   AssessmentActivity,
   Asset,
+  AgenticRadarFramework,
   AttachWorkspaceSnapshotInput,
   ConnectSourceSnapshotInput,
   ConnectedSource,
@@ -63,6 +64,7 @@ import {
   type LocalInputProfile,
 } from "../localInputProfiles";
 import { engineOutcomeForId } from "../scanPresentation";
+import { agenticRadarFramework, agenticRadarFrameworks } from "../agenticRadarProfile";
 
 import "../coverage-page.css";
 
@@ -85,6 +87,7 @@ export interface CoveragePageProps {
   onChooseWorkspace: () => Promise<string | null>;
   onAttachWorkspaceSnapshot: (input: AttachWorkspaceSnapshotInput) => Promise<boolean>;
   onSelectMcpConfiguration: (assetId: string, relativePath: string) => Promise<boolean>;
+  onSelectAgenticFramework?: (assetId: string, framework: AgenticRadarFramework | null) => Promise<boolean>;
   onStartDiscovery: () => Promise<void>;
   onAuthorizationChanged: () => Promise<void>;
   onStartScan: (
@@ -329,6 +332,10 @@ const pageCopy = {
   inputTechnicalSummary: bilingual("Technical input details", "輸入技術細節"),
   localEngineDetail: bilingual("Bound scanner engines: {engines}.", "綁定的掃描引擎：{engines}。"),
   mcpConfigurationLabel: bilingual("MCP configuration to check", "要檢查的 MCP 設定"),
+  agenticInventoryTitle: bilingual("AI workflow inventory (optional)", "AI 工作流程盤點（選用）"),
+  agenticFrameworkLabel: bilingual("Workflow framework", "工作流程框架"),
+  agenticInventoryOff: bilingual("Skip workflow inventory", "不加入工作流程盤點"),
+  agenticInventoryHelp: bilingual("Agentic Radar reads the saved copy to list agents, tools, and their connections. Inventory supplements the security checks.", "Agentic Radar 會讀取保存副本，列出 Agent、工具與連接關係；盤點可補充安全檢查結果。"),
   mcpConfigurationHelp: bilingual(
     "MCP Armor reads only this file from the private snapshot. It does not start or contact any MCP server.",
     "MCP Armor 只會讀取私密快照中的這一份檔案，不會啟動或連線任何 MCP 伺服器。",
@@ -840,6 +847,7 @@ export function CoveragePage({
   onChooseWorkspace,
   onAttachWorkspaceSnapshot,
   onSelectMcpConfiguration,
+  onSelectAgenticFramework,
   onStartDiscovery,
   onAuthorizationChanged,
   onStartScan,
@@ -921,12 +929,48 @@ export function CoveragePage({
   const mcpArmorRunnable = engineManifests.some((manifest) => (
     manifest.id === "mcp-armor" && manifest.runnable === true && manifest.compatibilityValid
   ));
+  const agenticRadarRunnable = engineManifests.some((manifest) => (
+    manifest.id === "agentic-radar" && manifest.runnable === true && manifest.compatibilityValid
+  ));
   const localEngineIdsForAsset = (asset: Asset): string[] => [
     ...(asset.localInputProfile ? localInputEngineIds[asset.localInputProfile] : []),
     ...(mcpArmorRunnable && asset.localInputProfile === "repository_working_tree" && asset.selectedMcpConfiguration
       ? ["mcp-armor"]
       : []),
+    ...(agenticRadarRunnable && asset.localInputProfile === "repository_working_tree" && asset.agenticRadarFramework
+      ? ["agentic-radar"]
+      : []),
   ];
+  const agenticInventorySelection = (selected: readonly Asset[]) => {
+    const repositories = selected.filter((asset) => asset.localInputProfile === "repository_working_tree");
+    if (!agenticRadarRunnable || repositories.length === 0) return null;
+    return (
+      <details className="coverage-form-technical coverage-scan-advanced" data-agentic-inventory>
+        <summary>{text(pageCopy.agenticInventoryTitle)}</summary>
+        <p>{text(pageCopy.agenticInventoryHelp)}</p>
+        {repositories.map((asset) => (
+          <label className="field" key={`${asset.id}-agentic-framework`}>
+            <span>{text(pageCopy.agenticFrameworkLabel)}{repositories.length > 1 ? ` · ${asset.name}` : ""}</span>
+            <select
+              disabled={busy || !onSelectAgenticFramework}
+              value={asset.agenticRadarFramework ?? ""}
+              onChange={(event) => {
+                const framework = agenticRadarFramework(event.target.value);
+                if (framework || event.target.value === "") {
+                  setEnvironmentNetworkConfirmed(false);
+                  setOwnershipConfirmed(false);
+                  void onSelectAgenticFramework?.(asset.id, framework ?? null);
+                }
+              }}
+            >
+              <option value="">{text(pageCopy.agenticInventoryOff)}</option>
+              {agenticRadarFrameworks.map((framework) => <option value={framework.id} key={framework.id}>{framework.label}</option>)}
+            </select>
+          </label>
+        ))}
+      </details>
+    );
+  };
   const environmentLocalAssets = useMemo(
     () => scopeEligibleAssets.filter((asset) => Boolean(asset.localInputProfile)),
     [scopeEligibleAssets],
@@ -2190,6 +2234,7 @@ export function CoveragePage({
                     </label>
                   ))}
                 </div>
+                {agenticInventorySelection(selectedEnvironmentLocalAssets)}
               </fieldset>
             )}
 
@@ -2606,6 +2651,7 @@ export function CoveragePage({
 
             {guidedLocalConsent && (
               <>
+                {agenticInventorySelection(selectedScopeAssets)}
                 {mcpArmorRunnable && selectedScopeAssets.map((asset) => asset.mcpConfigurationCandidates && asset.mcpConfigurationCandidates.length > 1 ? (
                   <label className="field" key={`${asset.id}-mcp-configuration`}>
                     <span>{text(pageCopy.mcpConfigurationLabel)}</span>

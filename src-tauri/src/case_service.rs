@@ -1724,6 +1724,38 @@ impl<'a> CaseService<'a> {
         Ok(case)
     }
 
+    pub fn select_agentic_framework(
+        &self,
+        case_id: &str,
+        asset_id: &str,
+        snapshot_sha256: &str,
+        framework: Option<crate::agentic_radar_input::AgenticFramework>,
+    ) -> AppResult<AssessmentCase> {
+        let mut case = self.mutable_case(case_id, "select an AI workflow framework")?;
+        ensure_no_active_scan(&case, "change an AI workflow framework")?;
+        let asset = case
+            .assets
+            .iter_mut()
+            .find(|asset| asset.id == asset_id)
+            .ok_or_else(|| AppError::InvalidRequest(format!("asset not found: {asset_id}")))?;
+        if asset
+            .metadata
+            .get("workspace_snapshot_sha256")
+            .and_then(Value::as_str)
+            != Some(snapshot_sha256)
+        {
+            return Err(AppError::NotAuthorized(
+                "AI workflow selection does not match the immutable snapshot".into(),
+            ));
+        }
+        crate::agentic_radar_input::select_framework(asset, framework)?;
+        case.touch();
+        refresh_coverage_ledger(&mut case, self.engines.manifests(), Utc::now());
+        self.storage
+            .save_case(&mut case, "source.agentic_framework_selected")?;
+        Ok(case)
+    }
+
     pub fn reconcile_discovery_batch(
         &self,
         case_id: &str,
@@ -8912,6 +8944,7 @@ fn default_scan_admission_issues(
 pub const PLANNER_NOT_EXECUTED_REASON_CODES: &[&str] = &[
     "adapter_unavailable",
     "adapter_version_mismatch",
+    "agentic_framework_unselected",
     "authorization_reference_empty",
     "command_unavailable",
     "direct_network_protocol_mismatch",
@@ -9085,6 +9118,12 @@ fn incompatible_authorized_assets_reason(
         }
         if let Some(reason) = mcp_configuration_not_executed_reason(&incompatibilities) {
             return reason;
+        }
+        if incompatibilities.contains(&LocalInputCompatibility::AgenticFrameworkUnselected) {
+            return planner_not_executed_reason(
+                "agentic_framework_unselected",
+                "Choose the AI workflow framework for this repository before running its workflow inventory.",
+            );
         }
         return readiness_planner_skip(ScanReadinessBlocker::WorkspaceSnapshotUnavailable);
     }
@@ -9728,6 +9767,7 @@ enum LocalInputCompatibility {
     McpConfigurationAbsent,
     McpConfigurationUnselected,
     McpConfigurationDiscoveryIncomplete,
+    AgenticFrameworkUnselected,
 }
 
 fn local_input_metadata_matches(
@@ -9799,6 +9839,14 @@ fn local_input_compatibility(
                 LocalInputCompatibility::McpConfigurationDiscoveryIncomplete
             }
         };
+    }
+    if manifest.id == crate::agentic_radar_input::AGENTIC_RADAR_ENGINE_ID
+        && !matches!(
+            crate::agentic_radar_input::selected_framework(asset),
+            Ok(Some(_))
+        )
+    {
+        return LocalInputCompatibility::AgenticFrameworkUnselected;
     }
     LocalInputCompatibility::Compatible
 }
@@ -20839,6 +20887,38 @@ mod tests {
         EngineRegistry::load_builtin().unwrap()
     }
 
+    // Synthetic admission keeps planner properties independent of the current
+    // publication state. It never executes or publishes an image.
+    fn agentic_test_registry(runnable: bool) -> EngineRegistry {
+        let mut entries: Vec<Value> =
+            serde_json::from_str(include_str!("../../engines/catalog.json")).unwrap();
+        let entry = entries
+            .iter_mut()
+            .find(|entry| entry["id"] == "agentic-radar")
+            .unwrap();
+        entry["compatibility"]["runnable"] = Value::Bool(runnable);
+        entry["compatibility"]["blocked_by"] = if runnable {
+            serde_json::json!([])
+        } else {
+            serde_json::json!(["Synthetic unavailable image"])
+        };
+        entry["status"] = serde_json::json!(if runnable {
+            "integrated"
+        } else {
+            "experimental"
+        });
+        entry["image"] = if runnable {
+            serde_json::json!({
+                "repository": "ghcr.io/teddashh/ai-security-scanner-engine-agentic-radar",
+                "tag": "synthetic-test", "digest": format!("sha256:{}", "1".repeat(64)),
+                "signature_identity": null
+            })
+        } else {
+            Value::Null
+        };
+        EngineRegistry::load_catalog(&serde_json::to_string(&entries).unwrap()).unwrap()
+    }
+
     fn typed_syft_engine_registry(container_command: &[&str]) -> EngineRegistry {
         let mut entries: Vec<Value> =
             serde_json::from_str(include_str!("../../engines/catalog.json")).unwrap();
@@ -27832,10 +27912,8 @@ mod tests {
             "this repository fixture has no MCP configuration, so MCP Armor is not compatible-authorized"
         );
         assert!(
-            fixture.engines.manifests().iter().any(|manifest| {
-                compatible.contains(&manifest.id) && manifest.release_blocker().is_some()
-            }),
-            "the exclusion of release-blocked manifests must be exercised by this fixture"
+            !compatible.contains("agentic-radar"),
+            "optional workflow inventory needs an explicit framework selection"
         );
 
         let expected = compatible
@@ -27928,12 +28006,127 @@ mod tests {
     }
 
     #[test]
-    fn default_plan_omits_a_check_this_app_version_does_not_include() {
+    fn agentic_framework_selection_persists_only_for_the_current_snapshot() {
+        use crate::agentic_radar_input::{AgenticFramework, selected_framework};
         let fixture = Fixture::new();
+        let created = fixture.create();
+        let (saved, asset_id) = fixture.discovered_asset(&created.id, AssetKind::Repository);
+        let sha = saved
+            .assets
+            .iter()
+            .find(|a| a.id == asset_id)
+            .unwrap()
+            .metadata["workspace_snapshot_sha256"]
+            .as_str()
+            .unwrap();
+        let service = fixture.service();
+        assert!(
+            service
+                .select_agentic_framework(
+                    &created.id,
+                    &asset_id,
+                    &"f".repeat(64),
+                    Some(AgenticFramework::N8n)
+                )
+                .is_err()
+        );
+        assert_eq!(
+            selected_framework(&service.show_case(&created.id).unwrap().assets[0]).unwrap(),
+            None
+        );
+        let selected = service
+            .select_agentic_framework(&created.id, &asset_id, sha, Some(AgenticFramework::N8n))
+            .unwrap();
+        assert!(selected.scope_grants.is_empty());
+        assert_eq!(
+            selected_framework(&selected.assets[0]).unwrap(),
+            Some(AgenticFramework::N8n)
+        );
+        assert_eq!(
+            selected_framework(&service.show_case(&created.id).unwrap().assets[0]).unwrap(),
+            Some(AgenticFramework::N8n)
+        );
+        let cleared = service
+            .select_agentic_framework(&created.id, &asset_id, sha, None)
+            .unwrap();
+        assert_eq!(selected_framework(&cleared.assets[0]).unwrap(), None);
+        assert_eq!(cleared.assets[0].metadata["workspace_snapshot_sha256"], sha);
+    }
+
+    #[test]
+    fn agentic_inventory_requires_selection_and_freezes_only_its_selected_repository() {
+        use crate::agentic_radar_input::{AgenticFramework, selected_framework};
+        let fixture = Fixture::with_engines(agentic_test_registry(true));
+        let created = fixture.create();
+        let (saved, first) = fixture.discovered_asset(&created.id, AssetKind::Repository);
+        let sha = saved
+            .assets
+            .iter()
+            .find(|a| a.id == first)
+            .unwrap()
+            .metadata["workspace_snapshot_sha256"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let (_, second) = fixture.discovered_asset(&created.id, AssetKind::Repository);
+        let service = fixture.service();
+        approve_repository_local_artifact_read(&service, &created.id, first.clone());
+        approve_repository_local_artifact_read(&service, &created.id, second.clone());
+        let request = ScanPlanRequest {
+            engine_ids: vec!["agentic-radar".into()],
+            engine_asset_routes: vec![],
+        };
+        let unselected = service.plan_scan(&created.id, request.clone()).unwrap();
+        assert!(unselected.executable.is_empty());
+        assert_eq!(
+            unselected.not_executed[0].reason_code,
+            "agentic_framework_unselected"
+        );
+        service
+            .select_agentic_framework(&created.id, &first, &sha, Some(AgenticFramework::Langgraph))
+            .unwrap();
+        let plan = service.plan_scan(&created.id, request).unwrap();
+        assert_eq!(plan.executable.len(), 1);
+        assert!(plan.not_executed.is_empty());
+        let execution = &plan.executable[0];
+        assert_eq!(execution.assets.len(), 1);
+        assert_eq!(execution.assets[0].id, first);
+        assert_eq!(
+            selected_framework(&execution.assets[0]).unwrap(),
+            Some(AgenticFramework::Langgraph)
+        );
+        assert!(
+            service
+                .select_agentic_framework(
+                    &created.id,
+                    &first,
+                    &sha,
+                    Some(AgenticFramework::Autogen)
+                )
+                .is_err()
+        );
+        assert_eq!(
+            selected_framework(
+                service
+                    .show_case(&created.id)
+                    .unwrap()
+                    .assets
+                    .iter()
+                    .find(|a| a.id == first)
+                    .unwrap()
+            )
+            .unwrap(),
+            Some(AgenticFramework::Langgraph)
+        );
+    }
+
+    #[test]
+    fn default_plan_omits_a_check_this_app_version_does_not_include() {
+        let fixture = Fixture::with_engines(agentic_test_registry(false));
         let created = fixture.create();
         let (_, asset_id) = fixture.discovered_asset(&created.id, AssetKind::Repository);
         let service = fixture.service();
-        approve_repository_local_artifact_read(&service, &created.id, asset_id);
+        approve_repository_local_artifact_read(&service, &created.id, asset_id.clone());
 
         let radar = fixture
             .engines
@@ -27941,6 +28134,23 @@ mod tests {
             .expect("agentic-radar catalog entry");
         assert!(radar.supported_asset_kinds.contains(&AssetKind::Repository));
         assert!(radar.release_blocker().is_some());
+        let saved = service.show_case(&created.id).unwrap();
+        let sha = saved
+            .assets
+            .iter()
+            .find(|a| a.id == asset_id)
+            .unwrap()
+            .metadata["workspace_snapshot_sha256"]
+            .as_str()
+            .unwrap();
+        service
+            .select_agentic_framework(
+                &created.id,
+                &asset_id,
+                sha,
+                Some(crate::agentic_radar_input::AgenticFramework::Langgraph),
+            )
+            .unwrap();
 
         let scoped = service.show_case(&created.id).unwrap();
         let now = Utc::now();

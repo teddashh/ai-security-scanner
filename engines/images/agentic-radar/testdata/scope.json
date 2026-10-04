@@ -1,0 +1,35 @@
+{
+  "schema_version": "1",
+  "engine_id": "agentic-radar",
+  "generated_at": "2026-10-04T00:00:00Z",
+  "assets": [
+    {
+      "id": "asset-agentic-radar-smoke",
+      "name": "Agentic Radar static inventory fixture",
+      "kind": "repository",
+      "provider": null,
+      "region": null,
+      "identifiers": [
+        {
+          "namespace": "ai-security-scanner:workspace-snapshot-sha256",
+          "value": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        {
+          "namespace": "ai-security-scanner:agentic-radar-framework",
+          "value": "langgraph"
+        }
+      ],
+      "grants": [
+        {
+          "id": "grant-agentic-radar-smoke",
+          "permission": "local_artifact_read",
+          "confirmed_by": "fixture owner",
+          "confirmed_at": "2026-09-14T00:00:00Z",
+          "expires_at": null,
+          "authorization_reference": null,
+          "external_scope": null
+        }
+      ]
+    }
+  ]
+}

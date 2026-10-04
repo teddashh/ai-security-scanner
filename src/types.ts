@@ -268,6 +268,14 @@ export interface SelectMcpConfigurationInput {
   relativePath: string;
 }
 
+export type AgenticRadarFramework = "langgraph" | "crewai" | "n8n" | "openai-agents" | "autogen";
+
+export interface SelectAgenticFrameworkInput {
+  caseId: string;
+  assetId: string;
+  framework: AgenticRadarFramework | null;
+}
+
 export type ProviderSourceProfile =
   | "aws_organization_read_only_session"
   | "azure_tenant_read_only_access_token"
@@ -598,6 +606,7 @@ export interface Asset {
   }>;
   /** The one candidate bound to MCP Armor, if selection is unambiguous. */
   selectedMcpConfiguration?: string;
+  agenticRadarFramework?: AgenticRadarFramework;
   declaredWebService?: {
     protocol: "http" | "https";
     port: number;

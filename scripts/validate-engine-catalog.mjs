@@ -97,6 +97,39 @@ const managedLocalSmokeOutputFiles = new Map([
   ["kube-bench", "kube-bench.json"],
 ]);
 const managedLocalK8sContracts = new Map([
+  ["agentic-radar", {
+    tag: "0.14.1-1",
+    planKind: "managed_build",
+    license: { disposition: "allow", sourceOfferPath: null },
+    entrypoint: "/usr/local/bin/ai-security-scanner-agentic-radar-entrypoint",
+    launcherPath: "engines/images/agentic-radar/launcher/main.go",
+    launcherDockerfileCopy: "COPY engines/images/agentic-radar/launcher/go.mod engines/images/agentic-radar/launcher/main.go engines/images/agentic-radar/launcher/main_test.go ./",
+    command: ["--engine", "agentic-radar", "--workspace", "/workspace", "--output", "/output"],
+    outputFormats: ["json"],
+    sourceArchiveSha256: "sha256:433fe72ee2d31135730b781ef812d50c2abeaeb1ec217e90d2f6acf0d455f713",
+    sourceDateEpoch: 1764257310,
+    sourcePatch: {
+      path: "docs/research/patches/agentic-radar-0.14.1-machine-json.patch",
+      sha256: "sha256:d32c61e4c2134141686e950a3f025c1b521a1f0096e5572c6846b65d0afb9d72",
+    },
+    immutableLauncherInputs: [
+      '"-I", "-B", "-m", "agentic_radar", "scan", framework',
+      '"--export-graph-json"',
+      '"PYTHON_DOTENV_DISABLED=1"',
+      'command.Dir = "/tmp/ai-security-scanner-home"',
+      "requireReadOnlyWorkspace(*workspace)",
+      "validateTerminalEvidence(reportPath, framework)",
+      'envelope.Framework != framework',
+    ],
+    immutableDockerfileInputs: [
+      "--only-binary=:all:", "--require-hashes", "--no-build-isolation", "--no-deps",
+      "tests/graph_json_export_test.py",
+      "engines/images/agentic-radar/build-requirements.lock",
+      "engines/images/agentic-radar/PATCHES.md",
+      "git apply --check /tmp/agentic-radar-machine-json.patch",
+      'io.ai-security-scanner.patch-sha256="d32c61e4c2134141686e950a3f025c1b521a1f0096e5572c6846b65d0afb9d72"',
+    ],
+  }],
   ["semgrep", {
     tag: "1.174.0-4",
     planKind: "managed_build",
@@ -307,6 +340,7 @@ const managedGreenboneContract = {
 const greenbonePublicationBlocker =
   "Publish and independently verify the Greenbone 23.50.24-feed202610010558-1 image for linux/amd64 and linux/arm64, then record its immutable digest and exact publication evidence.";
 const managedEvidenceWorkflows = [
+  ".github/workflows/engine-image-agentic-radar.yml",
   ".github/workflows/engine-images-cloud.yml",
   ".github/workflows/engine-images-external.yml",
   ".github/workflows/engine-images-m365.yml",
@@ -320,6 +354,7 @@ const managedEvidenceWorkflows = [
 const localK8sWorkflowRelative = ".github/workflows/engine-images-local-k8s.yml";
 const managedEgressGatewayWorkflowRelative = ".github/workflows/managed-egress-gateway-image.yml";
 const newlyPublishedEvidenceWorkflows = [
+  ".github/workflows/engine-image-agentic-radar.yml",
   ".github/workflows/engine-images-external.yml",
   ".github/workflows/engine-images-m365.yml",
   localK8sWorkflowRelative,
@@ -2094,7 +2129,8 @@ function validateUnpublishedManagedBuild(
   }
   const launcher = plan.wrapper;
   const launcherPath = resolve(root, `engines/images/${engine.id}/launcher/main.go`);
-  if (!existsSync(launcherPath) || launcher?.entrypoint !== "/usr/local/bin/ai-security-scanner-mcp-armor-entrypoint" ||
+  const expectedEntrypoint = managedLocalK8sContracts.get(engine.id)?.entrypoint;
+  if (!existsSync(launcherPath) || !expectedEntrypoint || launcher?.entrypoint !== expectedEntrypoint ||
       launcher?.launcher_sha256 !== sha256File(launcherPath) ||
       !dockerfileText.includes(`ENTRYPOINT ${JSON.stringify([launcher.entrypoint])}`)) {
     errors.push(`${planRelative}: locally verified build does not retain its exact non-shell launcher`);
@@ -2192,6 +2228,33 @@ function validateMcpArmorImage(plan, planRelative, engine) {
       !workflowText.includes("engines/images/mcp-armor/Dockerfile") ||
       !workflowText.includes("docs/research/patches/mcp-armor-1.0.2-config-only.patch")) {
     errors.push(`${planRelative}: MCP Armor publication workflow does not bind the reviewed tag, Dockerfile, and machine-output patch`);
+  }
+}
+
+function validateAgenticRadarImage(plan, planRelative, engine) {
+  const contract = managedLocalK8sContracts.get("agentic-radar");
+  if (plan.publish_state === "published_managed_artifact") {
+    validatePublishedLocalK8sImage(plan, planRelative, engine, contract);
+  } else {
+    validatePendingManagedCandidate(plan, planRelative, engine, contract);
+    validateUnpublishedManagedBuild(plan, planRelative, engine, {
+      publishState: "publication_in_progress",
+      artifactTag: contract.tag,
+    });
+  }
+  const buildLock = plan.build_recipe?.build_dependency_lock;
+  const buildLockPath = resolve(root, "engines/images/agentic-radar/build-requirements.lock");
+  if (buildLock?.path !== "engines/images/agentic-radar/build-requirements.lock" ||
+      !existsSync(buildLockPath) || buildLock?.sha256 !== sha256File(buildLockPath) ||
+      buildLock?.require_hashes !== true || buildLock?.only_binary !== true || buildLock?.runtime_included !== false) {
+    errors.push(`${planRelative}: Agentic Radar build/test dependencies require their own hashed lock outside the runtime`);
+  }
+  const workflowPath = resolve(root, ".github/workflows/engine-image-agentic-radar.yml");
+  const workflow = existsSync(workflowPath) ? readFileSync(workflowPath, "utf8") : "";
+  if (!workflow.includes(`IMAGE_TAG: ${contract.tag}`) ||
+      !workflow.includes("engines/images/agentic-radar/Dockerfile") ||
+      !workflow.includes(contract.sourcePatch.path)) {
+    errors.push(`${planRelative}: Agentic Radar publication must bind its reviewed tag, Dockerfile and machine-output patch`);
   }
 }
 
@@ -2781,6 +2844,8 @@ for (const engine of Array.isArray(catalog) ? catalog : []) {
   const localK8sContract = managedLocalK8sContracts.get(engine.id);
   if (engine.id === "mcp-armor") {
     validateMcpArmorImage(plan, planRelative, engine);
+  } else if (engine.id === "agentic-radar") {
+    validateAgenticRadarImage(plan, planRelative, engine);
   } else if (pendingImageReplacement) {
     validatePublishedLocalK8sImage({
       ...plan,

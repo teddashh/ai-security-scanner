@@ -6,7 +6,7 @@
   "support_until": "2026-12-12",
   "maintenance_owner": "teddashh/ai-security-scanner maintainers",
   "update_procedure": "docs/engine-maintenance.md",
-  "publish_state": "managed_artifact_not_published",
+  "publish_state": "publication_in_progress",
   "source": {
     "repository": "https://github.com/splx-ai/agentic-radar",
     "revision": "65a7e4bd01e2034c7cb52e9620eeed287688cc53",
@@ -16,18 +16,182 @@
   "verified_upstream_artifact": null,
   "final_artifact": {
     "repository": "ghcr.io/teddashh/ai-security-scanner-engine-agentic-radar",
-    "tag": null,
+    "tag": "0.14.1-1",
     "digest": null
   },
-  "build_recipe": null,
+  "build_recipe": {
+    "source_revision": "65a7e4bd01e2034c7cb52e9620eeed287688cc53",
+    "source_archive": {
+      "url": "https://github.com/splx-ai/agentic-radar/archive/65a7e4bd01e2034c7cb52e9620eeed287688cc53.tar.gz",
+      "sha256": "sha256:433fe72ee2d31135730b781ef812d50c2abeaeb1ec217e90d2f6acf0d455f713"
+    },
+    "source_patch": {
+      "path": "docs/research/patches/agentic-radar-0.14.1-machine-json.patch",
+      "sha256": "sha256:d32c61e4c2134141686e950a3f025c1b521a1f0096e5572c6846b65d0afb9d72"
+    },
+    "dependency_lock": {
+      "path": "engines/images/agentic-radar/requirements.lock",
+      "sha256": "sha256:4345d805c8c9838f27d0f08cdf37a3cbec74a0a75e8bd4bd00f6c20e9b5f7f3c",
+      "records": 30,
+      "require_hashes": true,
+      "only_binary": true,
+      "excluded_packages": [
+        "agents",
+        "crewai",
+        "crewai-tools",
+        "langgraph",
+        "autogen",
+        "torch",
+        "transformers"
+      ]
+    },
+    "source_date_epoch": 1764257310,
+    "target_platforms": [
+      "linux/amd64",
+      "linux/arm64"
+    ],
+    "dockerfile_frontend": {
+      "repository": "docker/dockerfile",
+      "tag": "1.7",
+      "digest": "sha256:a57df69d0ea827fb7266491f2813635de6f17269be881f696fbfdf2d83dda33e"
+    },
+    "base_images": [
+      {
+        "repository": "golang",
+        "tag": "1.26.3-alpine",
+        "digest": "sha256:91eda9776261207ea25fd06b5b7fed8d397dd2c0a283e77f2ab6e91bfa71079d",
+        "uses": [
+          "source_patch",
+          "launcher"
+        ]
+      },
+      {
+        "repository": "python",
+        "tag": "3.11.16-slim",
+        "digest": "sha256:9c900dea9e8fb7e16277c179b555cc72d29a352dbc33cff48ad5a0412fd5bfc7",
+        "uses": [
+          "build",
+          "runtime"
+        ]
+      }
+    ],
+    "build_context": {
+      "path": ".",
+      "dockerignore_path": ".dockerignore",
+      "dockerignore_sha256": "sha256:5c5cf89412a2b3ff5c5bffb5c67bf126ee1be5ae973ed1d31f11b3063d462557"
+    },
+    "static_steps": [
+      [
+        "go",
+        "test",
+        "./..."
+      ],
+      [
+        "python",
+        "-m",
+        "pip",
+        "install",
+        "--only-binary=:all:",
+        "--require-hashes",
+        "--requirement=/tmp/requirements.lock"
+      ],
+      [
+        "python",
+        "-m",
+        "pytest",
+        "-q",
+        "/src/agentic-radar/tests/graph_json_export_test.py"
+      ]
+    ],
+    "local_inputs": [
+      {
+        "path": "engines/images/agentic-radar/launcher/go.mod",
+        "sha256": "sha256:bc1405842c891bcf7009f1a6f89c31996889fc269dd89db79d29d911e02aac25",
+        "reason": "Dedicated offline launcher Go module."
+      },
+      {
+        "path": "engines/images/agentic-radar/PATCHES.md",
+        "sha256": "sha256:e9a94f6cf57f1c60d8f84d010c1316bc98a9ea1c1e1dbfb68f332b91dd4d752f",
+        "reason": "Embedded downstream exception and file transition record."
+      },
+      {
+        "path": "engines/images/agentic-radar/build-requirements.lock",
+        "sha256": "sha256:59f3ca12dca8a4572c7a84cb443c51140fd7e42dacffc62bc046af2dda4ef4db",
+        "reason": "Hash-locked wheel build and native patch-test tools; excluded from runtime."
+      }
+    ],
+    "patch_audit": {
+      "reviewed_on": "2026-10-04",
+      "review_due": "2026-11-01",
+      "applicable_upstream_version": "0.14.1",
+      "applicable_source_revision": "65a7e4bd01e2034c7cb52e9620eeed287688cc53",
+      "capability": "Wrap the native static parser graph in a versioned envelope with exact framework, empty-state and diagnostic completeness; disable hosted assessment only in JSON mode.",
+      "contribution_status": "not_submitted",
+      "contribution_reason": "No upstream contribution has been submitted. A public machine schema and explicit offline mode need upstream compatibility agreement; local issue/PR drafts remain unsent. Retain the reviewed exception during this authorized integration and re-audit every update.",
+      "security_owner": "teddashh/ai-security-scanner maintainers",
+      "license_owner": "teddashh/ai-security-scanner maintainers",
+      "maintenance_owner": "teddashh/ai-security-scanner maintainers",
+      "removal_condition": "A documented native static JSON contract with equivalent version, framework, empty-state and completeness semantics, and no hosted assessment, replaces the patch.",
+      "dedicated_fixtures": [
+        "tests/graph_json_export_test.py in patched upstream (9 tests)",
+        "docs/research/fixtures/agentic-radar/",
+        "engines/images/agentic-radar/launcher/main_test.go",
+        "engines/images/agentic-radar/testdata/workspace/"
+      ],
+      "source_hash_semantics": "Sequential pre/post images in declared application order; a null before or after hash means an added or deleted file. Original-source links name the pinned upstream baseline.",
+      "patches": [
+        {
+          "path": "docs/research/patches/agentic-radar-0.14.1-machine-json.patch",
+          "sha256": "sha256:d32c61e4c2134141686e950a3f025c1b521a1f0096e5572c6846b65d0afb9d72",
+          "files": [
+            {
+              "path": "agentic_radar/analysis/openai_agents/analyze.py",
+              "upstream_source": "https://github.com/splx-ai/agentic-radar/blob/65a7e4bd01e2034c7cb52e9620eeed287688cc53/agentic_radar/analysis/openai_agents/analyze.py",
+              "before_sha256": "sha256:9d608a2c18ee308fb3e3322d0a01541310eb63f5027de7eed6d68a9a8aa70cdc",
+              "after_sha256": "sha256:8e6b284e2ff65ace79887f2e69c0c3ac318dff6679b7dae369f88338ac7c914c"
+            },
+            {
+              "path": "agentic_radar/cli.py",
+              "upstream_source": "https://github.com/splx-ai/agentic-radar/blob/65a7e4bd01e2034c7cb52e9620eeed287688cc53/agentic_radar/cli.py",
+              "before_sha256": "sha256:a9ff61e626b21ba58ea677b15834d0986609c4ba8d5a6ebff593b689c8ada0a2",
+              "after_sha256": "sha256:e982af1348d006811bfd8efa1f0d2b521bc7cd0914e1df4f587a53ed2a7c7914"
+            },
+            {
+              "path": "agentic_radar/graph.py",
+              "upstream_source": "https://github.com/splx-ai/agentic-radar/blob/65a7e4bd01e2034c7cb52e9620eeed287688cc53/agentic_radar/graph.py",
+              "before_sha256": "sha256:760e6badf7b0d61af20a62a4bf0eb3bac67d04d9d39f1cefdb8aa2ffc5030b0d",
+              "after_sha256": "sha256:2928ce0926aa819a589995ada093199fffe1da960f6d4a295d24051eb49f7fa7"
+            },
+            {
+              "path": "tests/graph_json_export_test.py",
+              "upstream_source": "https://github.com/splx-ai/agentic-radar/blob/65a7e4bd01e2034c7cb52e9620eeed287688cc53/tests/graph_json_export_test.py",
+              "before_sha256": null,
+              "after_sha256": "sha256:980292e25b4b4b66f85fa04dc90964b296c688551446fec96637edbbedfdfdb4"
+            }
+          ]
+        }
+      ]
+    },
+    "build_dependency_lock": {
+      "path": "engines/images/agentic-radar/build-requirements.lock",
+      "sha256": "sha256:59f3ca12dca8a4572c7a84cb443c51140fd7e42dacffc62bc046af2dda4ef4db",
+      "records": 6,
+      "require_hashes": true,
+      "only_binary": true,
+      "runtime_included": false
+    }
+  },
   "dockerfile": {
-    "emitted": false,
-    "reason": "Nothing has been built. This plan records the reviewed source pin and local machine-output patch behind the adapter, not an image; a Dockerfile would claim packaging work that has not been authorized or performed."
+    "emitted": true,
+    "path": "engines/images/agentic-radar/Dockerfile",
+    "sha256": "sha256:876219c069b519cd4d67459fd06a35933caca3d832c60c1db709046d6cf01281",
+    "reason": null
   },
   "wrapper": {
     "required": true,
     "strategy": "Accept one immutable repository snapshot and one typed supported-framework selection, keep execution offline, emit the reviewed JSON envelope, and pass only that artifact to the adapter.",
-    "entrypoint": null
+    "entrypoint": "/usr/local/bin/ai-security-scanner-agentic-radar-entrypoint",
+    "launcher_sha256": "sha256:ba0a85a83af873447e29d95823143850010302bdfc1f4908493461d3c20c37e2"
   },
   "command": [
     "--engine",
@@ -49,8 +213,29 @@
     "source_offer_path": null
   },
   "blockers": [
-    "no packaged image: the pinned source and local machine-output patch have never been built or tested as a product image, or published",
-    "no typed framework-selection path exists to freeze one of the five supported analyzers and verify that the reported framework matches the reviewed request",
-    "the machine-output contract requires a local patch that is not part of an accepted upstream release"
-  ]
+    "no verified published digest: build and independently verify the managed image for linux/amd64 and linux/arm64, then freeze its anonymous-pull and signed publication evidence"
+  ],
+  "publication": null,
+  "managed_runtime": {
+    "non_root_user": "65532:65532",
+    "read_only_rootfs": true,
+    "entrypoint": [
+      "/usr/local/bin/ai-security-scanner-agentic-radar-entrypoint"
+    ],
+    "network_mode": "disabled",
+    "network_destinations": [],
+    "cache_path": "/tmp/ai-security-scanner-cache",
+    "environment": {
+      "PYTHON_DOTENV_DISABLED": "1",
+      "PYTHONNOUSERSITE": "1",
+      "PYTHONDONTWRITEBYTECODE": "1"
+    }
+  },
+  "local_build_evidence": {
+    "platform": "linux/amd64",
+    "local_image_id": "sha256:6388c14f2ba1084ae0425551e899e8ced456138174ba34749a8fbbe8a1f4aeb9",
+    "scope_fixture": "engines/images/agentic-radar/testdata/scope.json",
+    "input_fixture": "engines/images/agentic-radar/testdata/workspace/mcp1.py",
+    "result": "Native 0.14.1 offline static export passed all five frameworks, an empty directory and dotenv/target-code isolation under read-only rootfs, network=none and uid65532. CrewAI preserved five diagnostics as incomplete inventory; all graph vulnerability arrays remained empty. Nine patched native tests and launcher boundary tests passed. Local amd64 evidence does not admit a published artifact or claim arm64 execution."
+  }
 }

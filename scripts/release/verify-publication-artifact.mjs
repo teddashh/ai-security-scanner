@@ -41,6 +41,12 @@ const ENGINE_SPECS = Object.freeze({
     workflow: ".github/workflows/engine-image-mcp-armor.yml",
     smokeFiles: ["mcp-armor.json"],
   },
+  "agentic-radar": {
+    tag: "0.14.1-1",
+    group: "local",
+    workflow: ".github/workflows/engine-image-agentic-radar.yml",
+    smokeFiles: ["agentic-radar.json"],
+  },
   scubagear: { tag: "1.8.0-8", group: "m365", workflow: ".github/workflows/engine-images-m365.yml" },
   maester: { tag: "2.0.0-9", group: "m365", workflow: ".github/workflows/engine-images-m365.yml" },
   "egress-gateway": { tag: "0.3.0-1", group: "gateway", workflow: ".github/workflows/managed-egress-gateway-image.yml" },

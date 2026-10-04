@@ -40,6 +40,7 @@ const specs = {
   grype: { tag: "0.117.0-4", group: "local", smokeFiles: ["grype.json"] },
   kubescape: { tag: "4.0.12-3", group: "local", smokeFiles: ["kubescape.json"] },
   "kube-bench": { tag: "0.16.0-4", group: "local", smokeFiles: ["kube-bench.json"] },
+  "agentic-radar": { tag: "0.14.1-1", group: "local", smokeFiles: ["agentic-radar.json"], workflow: ".github/workflows/engine-image-agentic-radar.yml" },
   scubagear: { tag: "1.8.0-8", group: "m365" },
   maester: { tag: "2.0.0-9", group: "m365" },
   "egress-gateway": { tag: "0.3.0-1", group: "gateway" },
@@ -209,7 +210,7 @@ function fakeBundle(image, digest, predicateType, predicate) {
 
 async function createArtifact(testContext, engine) {
   const spec = specs[engine];
-  const workflow = workflows[spec.group];
+  const workflow = spec.workflow ?? workflows[spec.group];
   const root = await mkdtemp(path.join(os.tmpdir(), `publication-${engine}-`));
   testContext.after(() => rm(root, { recursive: true, force: true }));
   const nested = path.join(root, engine);

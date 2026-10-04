@@ -2,7 +2,7 @@
 
 Recipe and patch records reviewed on 2026-10-03; the source baseline before this maintenance work is `38f912f`. This index describes the recipes that exist; it does not certify that every current recipe builds or matches its published image. The per-engine pages contain the detailed invocation, adapter fields, fixtures, downstream changes and incident history.
 
-There are **25 catalog engines with 25 distinct primary upstream repositories**, **21 scanner Dockerfiles**, and **one additional egress gateway Dockerfile**. KICS and ZAP use upstream images. garak and Agentic Radar have plans but no Dockerfiles or runnable images. Plugins, rule repositories, Semgrep submodules, PowerShell modules, feeds, vulnerability databases and toolchains add more upstream inputs; 25 is not the count of the complete dependency closure.
+There are **25 catalog engines with 25 distinct primary upstream repositories**, **22 scanner Dockerfiles**, and **one additional egress gateway Dockerfile**. KICS and ZAP use upstream images. garak has a plan but no Dockerfile or runnable image. Agentic Radar has a locally tested dedicated recipe; its verified public image is pending. Plugins, rule repositories, Semgrep submodules, PowerShell modules, feeds, vulnerability databases and toolchains add more upstream inputs; 25 is not the count of the complete dependency closure.
 
 The checked-in Semgrep submodule lock alone declares **36 additional repository URLs**, disjoint from those 25 primary URLs: **61 declared repositories** before counting the other engines' secondary sources or package dependencies. This is a source-input inventory, not 61 scanner images. Repository renames, alternate URLs and different revisions still need reconciliation when changing an acquisition pin.
 
@@ -45,9 +45,9 @@ Run these from the repository root. **Dockerfile location is not the build conte
 | [kube-bench](kube-bench.md) | [Dockerfile](../../engines/images/kube-bench/Dockerfile) / `.` | None; upstream benchmark files plus the product's snapshot path config are bundled. |
 | [MCP Armor](mcp-armor.md) | [Dockerfile](../../engines/images/mcp-armor/Dockerfile) / `.` | None; source, config-only patch and requirements lock are build inputs. |
 | [KICS](kics.md) | No local Dockerfile | Pull the catalog's upstream image by digest; queries belong to that image. |
-| [ZAP](zap.md) | No local Dockerfile | Upstream image pin exists, but product execution remains blocked. |
+| [ZAP](zap.md) | No local Dockerfile | Digest-pinned native passive website execution; bounded automation plan and exact gateway scope. |
 | [garak](garak.md) | No local Dockerfile | Plan only; no build recipe or published image. |
-| [Agentic Radar](agentic-radar.md) | No local Dockerfile | Plan/research only; no build recipe or published image. |
+| [Agentic Radar](agentic-radar.md) | [Dockerfile](../../engines/images/agentic-radar/Dockerfile) / `.` | None; hashed native source, machine-output patch, dedicated launcher and separate runtime/build wheel locks. Local native five-framework QA passed; public digest verification pending. |
 | [Egress gateway](egress-gateway.md) | [Dockerfile](../../engines/images/egress-gateway/Dockerfile) / `.` | None; project Rust source. Runtime pin is in [managed-egress-gateway.json](../../runtime/managed-egress-gateway.json), outside the scanner catalog. |
 
 For an engine with a Dockerfile, this builds a **local, single-platform review image**:
@@ -126,7 +126,7 @@ Common to every update: actual acquisition pin, catalog/provenance and plan fact
 | MCP Armor | Two existing static configuration checks | Config-only patch, source digest, requirements lock, own launcher, version-bound adapter, research fixtures and validator hashes are coupled. Re-check no server/model contact, selected configuration path/hash, redaction and complete-check ledger. Copied upstream license text must be reviewed independently of the image's declared license label. |
 | ZAP | Upstream passive scan add-ons; product-generated passive work plan | No local build; preserve the execution blockers. Re-check plan schema/add-on revisions, origin/redirect scope, actual crawl coverage and gateway request/rate limits before enabling it. An upstream image pin alone does not resolve those blockers. |
 | garak | Planned upstream probe/detector closure | No existing build to reproduce. Current plan/image blockers and adapter fixtures describe intended integration, not completed product scans. A future build needs a separately approved bounded endpoint/probe profile. |
-| Agentic Radar | Planned framework/tool inventory | No existing build to reproduce. Research patch/fixtures are evidence for a proposal only. Re-check supported framework selection, structured warnings and inventory semantics before implementing a build. |
+| Agentic Radar | Static native framework/tool inventory | Dedicated offline recipe; machine-output patch, typed framework selector, launcher and both wheel locks move together. Re-run five frameworks, empty state and dotenv/code isolation. Inventory does not count as a security result. |
 | Egress gateway | Project Rust code; no scanner rule pack | Root context includes library `include_str!`/`include_bytes!` inputs beyond Rust source. A new embed needs a COPY and contract test. Runtime policy/status schema must remain compatible with the pinned gateway. Embedded catalog/mappings are build inputs, but a catalog-only edit does not itself justify publication; assess whether gateway behavior uses the changed fields. |
 
 ## Shared launchers and workflow reach
@@ -177,6 +177,6 @@ A desktop patch updates `runtime/managed-egress-gateway.json` → `product_versi
 
 ### Maintenance review — 2026-10-03
 
-The executable-input gate now records the actual bytes of every former uncovered baseline input in the consuming engine plan. Its exclusions and shared support directories remain explicit. Six current downstream source exceptions (Gitleaks, Greenbone, Prowler, ScoutSuite, MCP Armor and httpx) have plan-bound applicability, source pre/post hashes, owners, contribution rationale, fixture references, removal conditions and review dates. Greenbone and Prowler hashes are sequential in declared patch order; new files have a null original hash/reference. ScoutSuite's review patch and actual source preparer were compared independently and agree byte for byte. No upstream issue or contribution has been submitted by this review.
+The executable-input gate now records the actual bytes of every former uncovered baseline input in the consuming engine plan. Its exclusions and shared support directories remain explicit. Seven current downstream source exceptions (Gitleaks, Greenbone, Prowler, ScoutSuite, MCP Armor, httpx and Agentic Radar) have plan-bound applicability, source pre/post hashes, owners, contribution rationale, fixture references, removal conditions and review dates. Greenbone and Prowler hashes are sequential in declared patch order; new files have a null original hash/reference. ScoutSuite's review patch and actual source preparer were compared independently and agree byte for byte. No upstream issue or contribution has been submitted by this review.
 
 Current recipe records remain distinct from historical publication. Gitleaks was rebuilt as signed `8.30.1-2` in this maintenance step; the other unchanged image bytes retain their existing catalog digests. Any later byte change needs a new tag and a fresh publication record.

@@ -1,5 +1,6 @@
 pub mod adapter;
 pub mod adapters;
+pub mod agentic_radar_input;
 pub mod artifact_store;
 pub mod augustus_preflight;
 pub mod augustus_terminal;
@@ -406,6 +407,7 @@ pub fn run() {
             commands::list_provider_bootstrap_cleanup,
             commands::attach_workspace_snapshot,
             commands::select_mcp_configuration,
+            commands::select_agentic_framework,
             commands::seed_demo_case,
             commands::list_engine_manifests,
             commands::list_engine_admission_issues,
