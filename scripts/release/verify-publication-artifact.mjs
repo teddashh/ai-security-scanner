@@ -47,6 +47,10 @@ const ENGINE_SPECS = Object.freeze({
     workflow: ".github/workflows/engine-image-agentic-radar.yml",
     smokeFiles: ["agentic-radar.json"],
   },
+  garak: {
+    tag: "0.17.0-1", group: "local", workflow: ".github/workflows/engine-image-garak.yml",
+    smokeFiles: ["report.jsonl", "garak-execution.json", "native-qa.json"],
+  },
   scubagear: { tag: "1.8.0-8", group: "m365", workflow: ".github/workflows/engine-images-m365.yml" },
   maester: { tag: "2.0.0-9", group: "m365", workflow: ".github/workflows/engine-images-m365.yml" },
   "egress-gateway": { tag: "0.3.0-1", group: "gateway", workflow: ".github/workflows/managed-egress-gateway-image.yml" },
@@ -667,6 +671,62 @@ async function verifyRootSummary({ files, engine, spec, sourceRevision, evidence
   return summary.managedSmokeEvidenceSha256;
 }
 
+async function verifyGarakNativeEvidence(files, evidence) {
+  const prefix = "garak-managed-smoke/";
+  const report = await readInventoryFile(files, `${prefix}report.jsonl`, 32 * 1024 * 1024, "native Garak report");
+  const rows = utf8(report, "native Garak JSONL").trim().split("\n").map((line) => JSON.parse(line));
+  const expected = new Map([
+    ["dan.Dan_11_0", ["dan.DAN", 1]], ["dan.Dan_10_0", ["dan.DAN", 1]],
+    ["dan.Dan_9_0", ["dan.DAN", 1]], ["ansiescape.AnsiEscaped", ["ansiescape.Escaped", 51]],
+  ]);
+  function validateEvals(evals, positive) {
+    assert(evals.length === 4, "Garak native profile must preserve all four detector pairs");
+    for (const [probe, [detector, count]] of expected) {
+      const matches = evals.filter((row) => row.probe === probe);
+      assert(matches.length === 1 && matches[0].detector === detector && matches[0].total_evaluated === count &&
+        matches[0].total_processed === count && matches[0].nones === 0 && matches[0].fails === (positive ? count : 0),
+      `Garak native detector counts differ: ${probe}`);
+    }
+  }
+  const init = rows.filter((row) => row.entry_type === "init");
+  const terminal = rows.filter((row) => row.entry_type === "completion");
+  assert(init.length === 1 && init[0].garak_version === "0.17.0" && typeof init[0].run === "string" && init[0].run &&
+    terminal.length === 1 && terminal[0].run === init[0].run, "Garak native report lacks its matching terminal completion");
+  validateEvals(rows.filter((row) => row.entry_type === "eval"), true);
+  const receipt = await readJson(files, `${prefix}garak-execution.json`, "Garak native execution receipt");
+  const qa = await readJson(files, `${prefix}native-qa.json`, "Garak controlled native QA");
+  assert(qa.schema_version === 1 && qa.platform === "linux/amd64" && qa.native_version === "0.17.0" &&
+    qa.image === `${evidence.image}@${evidence.indexDigest}` && DIGEST_PATTERN.test(qa.image_id) &&
+    qa.network_internal === true && qa.unapproved_destinations === 0, "Garak native QA image or network identity differs");
+  equalSet(qa.cases.map((result) => result.case), ["positive", "clean", "redirect", "bad-tls", "deadline", "cancelled"], "Garak native QA cases");
+  for (const result of qa.cases) {
+    if (result.case === "cancelled") {
+      assert(result.exit_code !== 0 && result.no_requests_after_stop === true && result.receipt?.complete === false &&
+        result.receipt?.reason === "native_cancelled" && HASH_PATTERN.test(result.raw_sha256), "Garak cancellation lost partial native output or continued model contact");
+      continue;
+    }
+    const record = object(result.receipt, "Garak execution receipt");
+    assert(record.schema_version === "1" && record.profile_id === "garak_https_v1" && HASH_PATTERN.test(record.scope_sha256) &&
+      record.max_http_attempts === 64 && record.max_completion_tokens_per_request === 150 && record.max_total_request_bytes === 65536 &&
+      Number.isInteger(record.http_attempts) && record.http_attempts >= 0 && record.http_attempts <= 64 &&
+      Number.isInteger(record.total_request_bytes) && record.total_request_bytes >= 0 && record.total_request_bytes <= 65536,
+    "Garak receipt does not preserve the bounded inference contract");
+    if (["positive", "clean"].includes(result.case)) {
+      assert(result.exit_code === 0 && record.complete === true && record.reason === null && record.http_attempts === 54 &&
+        result.observed_http_requests === 54, "Garak completed run did not perform all native prompts");
+      validateEvals(result.evals, result.case === "positive");
+      if (result.case === "positive") {
+        assert(result.raw_sha256 === sha256(report) && isDeepStrictEqual(record, receipt), "Garak positive raw output or receipt changed");
+      }
+    } else {
+      assert(result.exit_code !== 0 && record.complete === false && result.evals.length === 0, "Garak interrupted native run was labeled complete");
+      if (result.case === "redirect") assert(record.reason === "redirect_refused" && record.http_attempts === 1 && result.observed_http_requests === 1, "Garak redirect was followed");
+      if (result.case === "bad-tls") assert(record.http_attempts === 1 && result.observed_http_requests === 0, "Garak bypassed TLS verification");
+      if (result.case === "deadline") assert(record.reason === "inference_deadline" && record.http_attempts <= 6, "Garak exceeded the short native deadline");
+    }
+  }
+}
+
 async function verifyPublicationArtifact(args) {
   const spec = ENGINE_SPECS[args.engine];
   assert(spec, `unsupported --engine; expected one of: ${Object.keys(ENGINE_SPECS).join(", ")}`);
@@ -714,6 +774,7 @@ async function verifyPublicationArtifact(args) {
     managedSmokeEvidenceSha256 = smoke.receiptSha256;
   }
   if (args.engine === "semgrep") await verifySemgrepNativeEvidence(files, args["source-revision"], spec.tag);
+  if (args.engine === "garak") await verifyGarakNativeEvidence(files, evidence);
 
   const platformDigests = Object.fromEntries(
     PLATFORMS.map((platform) => [platform, platformRecords.get(platform).digest]),

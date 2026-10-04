@@ -41,6 +41,7 @@ const specs = {
   kubescape: { tag: "4.0.12-3", group: "local", smokeFiles: ["kubescape.json"] },
   "kube-bench": { tag: "0.16.0-4", group: "local", smokeFiles: ["kube-bench.json"] },
   "agentic-radar": { tag: "0.14.1-1", group: "local", smokeFiles: ["agentic-radar.json"], workflow: ".github/workflows/engine-image-agentic-radar.yml" },
+  garak: { tag: "0.17.0-1", group: "local", smokeFiles: ["report.jsonl", "garak-execution.json", "native-qa.json"], workflow: ".github/workflows/engine-image-garak.yml" },
   scubagear: { tag: "1.8.0-8", group: "m365" },
   maester: { tag: "2.0.0-9", group: "m365" },
   "egress-gateway": { tag: "0.3.0-1", group: "gateway" },
@@ -364,6 +365,25 @@ async function createArtifact(testContext, engine) {
     const smoke = path.join(root, `${engine}-managed-smoke`);
     await mkdir(smoke);
     for (const file of spec.smokeFiles) await writeFile(path.join(smoke, file), `fixture evidence for ${engine} ${file}\n`);
+    if (engine === "garak") {
+      const raw = await readFile(path.join(projectRoot, "src-tauri/tests/fixtures/adapters/garak-0.17.0-native.jsonl"));
+      const evals = raw.toString("utf8").trim().split("\n").map((line) => JSON.parse(line)).filter((row) => row.entry_type === "eval")
+        .map(({ probe, detector, fails, total_evaluated, total_processed, nones }) => ({ probe, detector, fails, total_evaluated, total_processed, nones }));
+      const receipt = { schema_version: "1", profile_id: "garak_https_v1", complete: true, reason: null, max_http_attempts: 64,
+        max_completion_tokens_per_request: 150, max_total_request_bytes: 65536, http_attempts: 54, total_request_bytes: 20096, scope_sha256: "ab".repeat(32) };
+      const cases = [
+        { case: "positive", exit_code: 0, receipt, evals, observed_http_requests: 54, raw_sha256: sha256(raw) },
+        { case: "clean", exit_code: 0, receipt, evals: evals.map((row) => ({ ...row, fails: 0 })), observed_http_requests: 54 },
+        ...["redirect", "bad-tls", "deadline"].map((name) => ({ case: name, exit_code: 1,
+          receipt: { ...receipt, complete: false, reason: name === "redirect" ? "redirect_refused" : name === "deadline" ? "inference_deadline" : "native_execution_failed", http_attempts: 1, total_request_bytes: 156 },
+          evals: [], observed_http_requests: name === "bad-tls" ? 0 : 1 })),
+        { case: "cancelled", exit_code: 1, receipt: { ...receipt, complete: false, reason: "native_cancelled" }, evals: [], no_requests_after_stop: true, raw_sha256: "ab".repeat(32) },
+      ];
+      await writeFile(path.join(smoke, "report.jsonl"), raw);
+      await writeJson(path.join(smoke, "garak-execution.json"), receipt);
+      await writeJson(path.join(smoke, "native-qa.json"), { schema_version: 1, platform: "linux/amd64", image: `${image}@${indexDigest}`,
+        image_id: platformDigests["linux/amd64"], native_version: "0.17.0", network_internal: true, unapproved_destinations: 0, cases });
+    }
     await writeChecksums(path.join(smoke, "SHA256SUMS.txt"), smoke, spec.smokeFiles);
     smokeReceipt = `sha256:${sha256(await readFile(path.join(smoke, "SHA256SUMS.txt")))}`;
   }
@@ -461,6 +481,30 @@ function runVerifier(engine, artifact, overrides = {}) {
     env: environment,
   });
 }
+
+test("Garak rejects resealed incomplete native output, widened inference budgets and lost cancellation evidence", async (t) => {
+  for (const mutation of ["completion", "budget", "cancellation"]) {
+    const artifact = await createArtifact(t, "garak");
+    const smoke = path.join(artifact, "garak-managed-smoke");
+    const qa = JSON.parse(await readFile(path.join(smoke, "native-qa.json"), "utf8"));
+    if (mutation === "completion") {
+      const raw = await readFile(path.join(smoke, "report.jsonl"), "utf8");
+      const changed = raw.trim().split("\n").filter((line) => JSON.parse(line).entry_type !== "completion").join("\n") + "\n";
+      await writeFile(path.join(smoke, "report.jsonl"), changed);
+      qa.cases.find((result) => result.case === "positive").raw_sha256 = sha256(Buffer.from(changed));
+    } else if (mutation === "budget") qa.cases.find((result) => result.case === "clean").receipt.max_http_attempts = 65;
+    else qa.cases.find((result) => result.case === "cancelled").no_requests_after_stop = false;
+    await writeJson(path.join(smoke, "native-qa.json"), qa);
+    await writeChecksums(path.join(smoke, "SHA256SUMS.txt"), smoke, specs.garak.smokeFiles);
+    const summaryPath = path.join(artifact, "garak-image-manifest.json");
+    const summary = JSON.parse(await readFile(summaryPath, "utf8"));
+    summary.managedSmokeEvidenceSha256 = `sha256:${sha256(await readFile(path.join(smoke, "SHA256SUMS.txt")))}`;
+    await writeJson(summaryPath, summary); await sealRoot(artifact);
+    const result = runVerifier("garak", artifact);
+    assert.notEqual(result.status, 0, mutation);
+    assert.match(result.stderr, mutation === "completion" ? /matching terminal completion/u : mutation === "budget" ? /bounded inference contract/u : /cancellation/u);
+  }
+});
 
 async function mutateNested(root, engine, mutate) {
   const manifest = path.join(root, engine, `${engine}-image-supply-chain.json`);

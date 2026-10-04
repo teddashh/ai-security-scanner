@@ -122,7 +122,7 @@ convention.
 
 | Capability | Upstream engine / source | Pinned license record | Evaluated boundary |
 |---|---|---|---|
-| Model endpoint probes | [garak](https://github.com/NVIDIA/garak/tree/93aa9cdec309ec4170559676f1826ea2a679920c) | Apache-2.0 | Reads probe/detector failure counts without inventing severity; real endpoint testing and packaging remain blocked. |
+| Model endpoint probes | [garak](https://github.com/NVIDIA/garak/tree/93aa9cdec309ec4170559676f1826ea2a679920c) | Apache-2.0 | Preserves four native detector failure counts for 54 fixed DAN/ANSI prompts without inventing severity. The scoped HTTPS input, one-shot local key and native six-case TLS QA are implemented; immutable public image admission remains pending. |
 
 ### Provider scope and credentials
 

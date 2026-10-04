@@ -1,22 +1,55 @@
-# garak
+# Garak
 
-Catalogued but not runnable. garak would send NVIDIA garak's adversarial probe suite to one approved AI model endpoint (`ai_model_endpoint` asset, permission `active_external_testing`) and report, per probe and detector, how many attempts the detector judged as failures. Only the catalog record, the plan and the adapter exist: no image has been built and garak has never run in this product.
+Garak 0.17.0 is implemented and tested locally against a disposable TLS model fixture. The candidate remains non-dispatchable until its immutable public image and source evidence are verified and admitted. The owner authorized this integration for v0.4.0. It contacts one explicitly approved OpenAI-compatible HTTPS chat API and model; no owner endpoint or credential was used for development QA.
 
-| Item | Value |
+| Item | Reviewed input |
 | --- | --- |
-| Upstream | [NVIDIA/garak](https://github.com/NVIDIA/garak) 0.17.0 (catalog `source_ref` `v0.17.0`), revision `93aa9cdec309ec4170559676f1826ea2a679920c`, Apache-2.0 |
-| Image | None. Catalog `image` is null; the plan's `final_artifact` (`ghcr.io/teddashh/ai-security-scanner-engine-garak`) keeps a null tag and digest (`publish_state` `managed_artifact_not_published`). |
-| Build inputs | None. `engines/images/garak/plan.json` is the only file: `build_recipe` null, `dockerfile.emitted` false with a reason. |
-| Launcher | None (`wrapper.entrypoint` null). Recorded strategy: accept only the model endpoint named in the scope grant, refuse every other destination, and hand the adapter only the run's own `report.jsonl`. |
-| Wrapper | None |
-| Adapter | `extract_garak`, `garak_target`, `garak_probe_contexts` and `garak_counts_sentence` in `src-tauri/src/adapters/mod.rs` |
-| Publish workflow | None |
+| Upstream | [NVIDIA/garak](https://github.com/NVIDIA/garak/tree/93aa9cdec309ec4170559676f1826ea2a679920c), native 0.17.0, Apache-2.0 |
+| Native source archive | `sha256:34a7e31c9ca7efb00d00509f3397e8f25e87b88239c2c78d21fc9c54740b5fce` |
+| Managed candidate | `ghcr.io/teddashh/ai-security-scanner-engine-garak:0.17.0-1`; not yet admitted |
+| Build context | Repository root; [Dockerfile](../../engines/images/garak/Dockerfile), [complete recipe and hashes](../../engines/images/garak/plan.json) |
+| Runtime | Python 3.11.16 slim at `sha256:9c900dea9e8fb7e16277c179b555cc72d29a352dbc33cff48ad5a0412fd5bfc7`; uid65532, read-only rootfs, bounded tmpfs, managed egress |
+| Dependencies | 36 hash-locked binary runtime distributions; three separately hash-locked build tools excluded from runtime; unchanged langdetect 1.0.9 source built into a Python 3 wheel |
+| Native modifications | None. The launcher and transport enforce capability boundaries; native prompts, probes and detectors remain unchanged |
+| Output | Native `/output/report.jsonl`; execution/hashed request receipts under `/output/upstream/`, outside adapter input |
+| Publication | [Dedicated workflow](../../.github/workflows/engine-image-garak.yml), immutable guard, controlled native smoke, signed provenance and four per-platform SBOMs, then promotion |
 
-## Local build and update entry
+Start updates with the [all-image notebook](image-build-index.md). Reproduce with `docker buildx build --platform linux/amd64 --load -t aiss-garak-local:0.17.0-1 -f engines/images/garak/Dockerfile .`, then `python3 engines/images/garak/testdata/native_smoke.py --image aiss-garak-local:0.17.0-1 --output-dir <new-empty-task-directory>`. The helper creates its own internal-only network, TLS certificate, mock SOCKS gateway and synthetic key, then removes its own containers, network and temporary output. Cleanup uses uid0 with only DAC_OVERRIDE on the generated fixture directory; the scanner itself retains cap-drop ALL. No external model or owner credential store is used.
 
-There is no Dockerfile or published runnable product image. The existing plan and research describe a proposed integration; there is no completed build recipe to repeat yet.
+## Current input and execution
 
-See the [image build index](image-build-index.md) for the repeatable local build command, shared launcher impact and update record. The sections below retain this engine’s specific patches, output fields, tests and incident history.
+The app saves one canonical HTTPS chat-completions URL and model identifier as typed, non-secret coordinates. This creates an unapproved `ai_model_endpoint` asset; it does not prove ownership or contact the endpoint. Confirmation approves the exact displayed model, provider charges and fixed `garak_https_v1` profile. Public/private network selection stays explicit. A profile is selected without a separate user-editable probe allowlist; its revision is the exact native source above.
+
+The API key stays in Zeroizing app memory for 30 minutes, with idle expiry cleanup, and is consumed once before dispatch. Deleting a case revokes its pending keys. Another or failed check requires a new key. No key enters case JSON, command arguments, Docker environment, report summaries or logs. The runtime mounts one read-only credential document and constructs a fresh child environment for the native REST generator. Cloud credential providers remain separate.
+
+Native probes are `dan.Dan_11_0`, `dan.Dan_10_0`, `dan.Dan_9_0` and `ansiescape.AnsiEscaped`: 1 + 1 + 1 + 51 prompts, one generation each. Primary detectors are `dan.DAN` and `ansiescape.Escaped`; native configuration disables extended detectors and language providers. Request JSON contains one user message, the exact model, `stream=false` and `max_tokens=150`. No configurable provider/CLI argument, target code execution, corpus download or auxiliary hosted service is exposed.
+
+Every request passes through the managed SOCKS gateway and project-owned transport. It requires the exact POST URL/model/header, TLS verification, no redirects, serial execution, one-second start pacing, a 20-second request timeout and a 600-second run deadline. Native backoff retries consume the 64-attempt ceiling. Requests are at most 8 KiB each and 64 KiB total; responses are at most 256 KiB; native JSONL is at most 32 MiB. The maximum **requested** output token count is 9,600; provider charges and token-limit compliance remain provider behavior. A socket audit rejects direct connections outside the numeric managed gateway.
+
+## Current native result contract
+
+The adapter preserves every upstream `probe/detector`, failure count, evaluated/processed count and unjudged count. Severity stays Unknown with `AdversarialProbeFailureRate`; replies are not copied into findings. Probe goal and first user prompt supply technical context. Zero-failure pairs contribute coverage without findings. OWASP LLM 2025 prefix mappings apply only to a declared AI system; native 2023 tags are not relabeled as 2025.
+
+A complete native 0.17 report needs matching init/completion run IDs and all four approved detector pairs totaling 54 evaluated prompts without unjudged attempts. Truncation, malformed counts, missing evaluation, TLS failure, redirects, exhausted limits and cancellation stay incomplete. Completed sibling findings survive. The old 0.13 placeholder fixture remains a legacy adapter test; [the new 0.17 native fixture](../../src-tauri/tests/fixtures/adapters/garak-0.17.0-native.jsonl) is unmodified real upstream output from controlled positive TLS QA.
+
+## Update notes — 2026-10-04
+
+- Native REST/probe base imports require HTTPX, aiohttp, NLTK and langdetect even with no language service enabled. Optional provider/ML SDKs are outside this fixed profile. Do not claim all Garak plugins work or a full `pip check` passed.
+- PyPI's langdetect 1.0.9 wheel is Python 2 only. Build the exact unchanged source archive `sha256:cbc1fef89f8d062739774bd51eda3da3274006b3661d199c2655f6b3f6d605a0` with the separate tool lock; avoid floating build/runtime dependency resolution.
+- Preserve installed module mtimes at source epoch `1788977945`. Otherwise cache invalidation enumerates unused plugins whose dependencies are intentionally absent. Recheck native cache behavior and all four real constructors on every upstream update.
+- Keep Rust, UI and launcher profile IDs, source revision, endpoint normalization, model identifier, grant expiry and budgets aligned. The shared grant contract forbids a profile plus a template allowlist.
+- Reserve and persist each attempt before transmission, including retries and TLS failures. Receipt counters describe attempts; fixture counters describe observed HTTP requests. Never account retries only after success.
+- Keep execution receipts under `output/upstream`, raw reports private, and reject raw output containing the actual API key. Do not rewrite native fixture bytes to obtain expected verdicts.
+- Repeat positive/clean/redirect/TLS/deadline/cancellation QA. Positive and refusal replies each exercise four real detector pairs; redirect cannot reach another destination, invalid TLS sends no HTTP prompt, short expiry stops backoff, and cancellation sends no later request while preserving its private partial native JSONL. The test CA is QA-only; production exposes no trust override. Local native evidence is amd64 only.
+
+Recheck native `eval`, `attempt`, `start_run setup` and init/completion fields, prompt counts and primary detector identifiers before changing this pin. Update the Dockerfile, both locks, local hashes, plan, catalog, dedicated validator, publication verifier, workflow and this page together. Image input changes require a fresh tag. Keep historical bytes and receipts immutable. Independently verify public index/platform/layers, source/signatures/SBOMs and repeat native smoke by public digest before clearing catalog blockers.
+
+Garak 的本機原生檢查已完成，但公開映像與證據通過驗證前仍不可派送。只測試明確核准的 HTTPS 端點與模型，金鑰不寫入案件，派送時使用一次。更新時沿用上面的來源、依賴與六種 TLS 測試紀錄；54 個提示的上游判定、失敗次數與未完成狀態必須保留。
+
+<details>
+<summary>Historical adapter research — before the authorized October 4 integration</summary>
+
+The record below describes the earlier non-packaged adapter. It is retained as incident history; current implementation and update instructions are above.
 
 ## How it is wired
 
@@ -61,3 +94,5 @@ Follow [section 4](../engine-maintenance.md#4-updating-an-engine), then:
 - **Mapping.** `mappings/control-mappings.json` has 11 `prefix` entries to OWASP LLM 2025: ten whole modules (`dan.`, `encoding.`, `latentinjection.`, `sysprompt_extraction.`, `leakreplay.`, `packagehallucination.`, `snowball.`, `misleading.`, `ansiescape.`, `web_injection.`) and one class, `divergence.Repeat/`, whose slash keeps `divergence.RepeatedToken` out. They apply only when the case declares an AI system. Module-wide entries rest on each module's docstring, verified at 93aa9cd; on a new revision re-read them and confirm every module and class still exists. Do not translate garak's own `owasp:` tags, which use 2023 numbering. The garak arm of `engine_rule_identifiers_have_the_shape_their_engine_actually_emits` (`src-tauri/src/adapters/control_mapping.rs`) accepts only `module.` or `module.Class/`. A content change needs a `mapping_version` bump.
 - **Hard-coded tag.** None yet; the plan keeps a null tag and digest. `support_until` is 2026-12-11.
 - **Compare with raw output.** In the raw `report.jsonl`, every `eval` row with `fails` above 0 should be one `probe/detector` finding stating `fails` of `total_evaluated`, rows with `fails` 0 should produce nothing, and the location should match the `start_run setup` row's target.
+
+</details>

@@ -25,6 +25,7 @@ pub mod export_identity;
 pub mod exporters;
 pub mod external_scope;
 pub mod finding_narrative;
+pub mod garak_input;
 #[cfg(any(feature = "desktop", feature = "cli"))]
 pub mod gateway_release;
 pub mod job_manager;
@@ -408,6 +409,8 @@ pub fn run() {
             commands::attach_workspace_snapshot,
             commands::select_mcp_configuration,
             commands::select_agentic_framework,
+            commands::configure_model_endpoint,
+            commands::set_model_endpoint_key,
             commands::seed_demo_case,
             commands::list_engine_manifests,
             commands::list_engine_admission_issues,

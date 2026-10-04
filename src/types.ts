@@ -276,6 +276,17 @@ export interface SelectAgenticFrameworkInput {
   framework: AgenticRadarFramework | null;
 }
 
+export interface ModelEndpointInput {
+  endpoint: string;
+  model: string;
+}
+
+export interface StartModelCheckInput extends ModelEndpointInput {
+  key: string;
+  privateNetwork: boolean;
+  confirmation: string;
+}
+
 export type ProviderSourceProfile =
   | "aws_organization_read_only_session"
   | "azure_tenant_read_only_access_token"
@@ -607,6 +618,7 @@ export interface Asset {
   /** The one candidate bound to MCP Armor, if selection is unambiguous. */
   selectedMcpConfiguration?: string;
   agenticRadarFramework?: AgenticRadarFramework;
+  modelEndpoint?: ModelEndpointInput;
   declaredWebService?: {
     protocol: "http" | "https";
     port: number;

@@ -1,0 +1,8 @@
+# Garak 0.17.0 closed native REST/probe dependency route; Python 3.11 Linux amd64/arm64.
+# Exact versions and immutable wheel hashes verified from primary PyPI version metadata.
+flit_core==3.12.0 \
+    --hash=sha256:e7a0304069ea895172e3c7bb703292e992c5d1555dd1233ab7b5621b5b69e62c
+setuptools==80.9.0 \
+    --hash=sha256:062d34222ad13e0cc312a4c02d73f059e86a4acbfbdea8f8f76b28c99f306922
+wheel==0.45.1 \
+    --hash=sha256:708e7481cc80179af0e556bbf0cc00b8444c7321e2700b8d8580231d13017248

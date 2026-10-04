@@ -7631,6 +7631,88 @@ fn garak_reports_probe_failure_rates_and_keeps_clean_probes_out_of_the_findings(
     );
 }
 
+#[test]
+fn native_garak_017_preserves_all_four_detector_counts_and_withholds_partial_completion() {
+    let raw = include_bytes!("fixtures/adapters/garak-0.17.0-native.jsonl");
+    let output = normalize_bytes(
+        "garak",
+        raw,
+        "report.jsonl",
+        "application/x-ndjson",
+        "native-garak-017",
+    );
+    assert!(output.complete, "{:?}", output.warnings);
+    assert_eq!(output.findings.len(), 4);
+    let rules = output
+        .findings
+        .iter()
+        .map(|f| f.evidence[0].source_rule.clone().unwrap())
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(
+        rules,
+        std::collections::BTreeSet::from([
+            "ansiescape.AnsiEscaped/ansiescape.Escaped".to_owned(),
+            "dan.Dan_10_0/dan.DAN".to_owned(),
+            "dan.Dan_11_0/dan.DAN".to_owned(),
+            "dan.Dan_9_0/dan.DAN".to_owned()
+        ])
+    );
+    for finding in &output.findings {
+        assert_eq!(finding.severity, Severity::Unknown);
+        assert!(finding.title.contains("of") && finding.title.contains("attempts as failures"));
+        assert_eq!(finding.asset_ids, ["asset-1"]);
+        assert!(
+            !serde_json::to_string(finding)
+                .unwrap()
+                .contains("DAN Mode enabled; ")
+        );
+    }
+    let mut rows = String::from_utf8_lossy(raw)
+        .lines()
+        .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+        .collect::<Vec<_>>();
+    for incomplete in [
+        rows.iter()
+            .filter(|r| r["entry_type"] != "completion")
+            .cloned()
+            .collect::<Vec<_>>(),
+        rows.iter()
+            .filter(|r| !(r["entry_type"] == "eval" && r["probe"] == "dan.Dan_9_0"))
+            .cloned()
+            .collect(),
+    ] {
+        let bytes = incomplete
+            .iter()
+            .map(|r| serde_json::to_string(r).unwrap() + "\n")
+            .collect::<String>();
+        let output = normalize_bytes(
+            "garak",
+            bytes.as_bytes(),
+            "report.jsonl",
+            "application/x-ndjson",
+            "native-garak-partial",
+        );
+        assert!(!output.complete);
+        assert!(!output.findings.is_empty());
+    }
+    for row in rows.iter_mut().filter(|r| r["entry_type"] == "eval") {
+        row["fails"] = serde_json::json!(0);
+    }
+    let bytes = rows
+        .iter()
+        .map(|r| serde_json::to_string(r).unwrap() + "\n")
+        .collect::<String>();
+    let clean = normalize_bytes(
+        "garak",
+        bytes.as_bytes(),
+        "report.jsonl",
+        "application/x-ndjson",
+        "native-garak-clean",
+    );
+    assert!(clean.complete, "{:?}", clean.warnings);
+    assert!(clean.findings.is_empty());
+}
+
 /// The catalog reaches garak through a probe namespace, and every OWASP LLM
 /// control it names is declared for AI systems. Both halves are load-bearing.
 ///
@@ -7759,6 +7841,7 @@ fn garak_withholds_completion_for_counts_that_cannot_be_true() {
     assert_eq!(
         impossible.warnings,
         [
+            "garak native run lacks a matching terminal completion; evaluated sibling results were retained",
             "garak eval row at / counted more failures than evaluated attempts; the rate was not shown"
         ]
     );
@@ -7797,17 +7880,22 @@ fn garak_withholds_completion_for_counts_that_cannot_be_true() {
     assert!(!foreign.complete);
     assert_eq!(
         foreign.warnings,
-        ["garak output contained no eval rows, so no probe result was evaluated"]
+        [
+            "garak native run lacks a matching terminal completion; evaluated sibling results were retained",
+            "garak native profile did not evaluate all 54 approved prompts; evaluated sibling results were retained",
+            "garak output contained no eval rows, so no probe result was evaluated"
+        ]
     );
     assert!(foreign.findings.is_empty());
 
     // The other side of that contract. Every probe passing is a real, complete
     // result with nothing to report, and it must not be confused with the one
-    // above -- including when the whole report is a single line, which parses
-    // as a JSON document rather than as JSONL.
+    // above. A clean run still needs its matching terminal completion.
     let clean = normalize(
         "run-garak-clean",
-        r#"{"entry_type":"eval","probe":"a.B","detector":"c.D","passed":10,"nones":0,"total_evaluated":10,"fails":0,"total_processed":10}
+        r#"{"entry_type":"init","garak_version":"0.13.0","run":"fixture-clean"}
+{"entry_type":"eval","probe":"a.B","detector":"c.D","passed":10,"nones":0,"total_evaluated":10,"fails":0,"total_processed":10}
+{"entry_type":"completion","run":"fixture-clean"}
 "#,
     );
     assert!(

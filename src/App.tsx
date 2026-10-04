@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { AppShell } from "./components/AppShell";
+import { modelEndpointScope } from "./garakProfile";
 import { Icon } from "./components/Icon";
 import { RuntimeSetupAssistant } from "./components/RuntimeSetupAssistant";
 import { EmptyState, InlineNotice } from "./components/Shared";
@@ -2579,6 +2580,29 @@ export default function App() {
               "select-agentic-framework",
               () => scannerService.selectAgenticFramework({ caseId: currentCaseId, assetId, framework }),
             )}
+            onStartModelCheck={async (input) => {
+              const caseGeneration = caseSelectionBarrierRef.current.generation;
+              const requestedPage = currentPageRef.current;
+              const current = () => selectedCaseIdRef.current === currentCaseId
+                && caseSelectionBarrierRef.current.generation === caseGeneration
+                && currentPageRef.current === requestedPage;
+              let modelAssetId: string | undefined;
+              const configured = await executeAction("configure-model", () => scannerService.configureModelEndpoint(
+                currentCaseId, { endpoint: input.endpoint, model: input.model }, !input.privateNetwork,
+              ), (response) => {
+                modelAssetId = response.workspace?.assets.find((asset) => asset.modelEndpoint?.endpoint === input.endpoint
+                  && asset.modelEndpoint?.model === input.model)?.id;
+              });
+              if (!configured || !modelAssetId || !current()) { input.key = ""; return false; }
+              const prepared = await executeAction("prepare-model-key", () => scannerService.setModelEndpointKey(currentCaseId, modelAssetId!, input.key));
+              input.key = "";
+              if (!prepared || !current()) return false;
+              return startScan({ caseId: currentCaseId,
+                authorization: { assetIds: [modelAssetId], modes: ["active_external"], confirmation: input.confirmation,
+                  externalScope: modelEndpointScope(input, input.privateNetwork, input.confirmation) },
+                engineAssetRoutes: [{ engineId: "garak", assetIds: [modelAssetId] }],
+              });
+            }}
             onStartDiscovery={() => runAction("discovery", () => scannerService.startDiscovery(currentCaseId))}
             onAuthorizationChanged={async () => {
               await loadSnapshot(currentCaseId, true);

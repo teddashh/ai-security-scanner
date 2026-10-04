@@ -1747,6 +1747,7 @@ pub fn delete_case(
     state
         .source_authorizations
         .revoke_case(&case_id, Utc::now())?;
+    state.model_endpoint_sessions.revoke_case(&case_id)?;
     service.delete_case(&case_id)
 }
 
@@ -2418,6 +2419,46 @@ pub fn select_mcp_configuration(
 }
 
 #[tauri::command]
+pub fn configure_model_endpoint(
+    case_id: String,
+    input: crate::garak_input::ModelEndpointInput,
+    internet_exposed: bool,
+    state: State<'_, AppState>,
+    app: AppHandle,
+) -> AppResult<AssessmentCase> {
+    let updated =
+        state
+            .case_service()
+            .configure_model_endpoint(&case_id, input, internet_exposed)?;
+    emit(&app, COVERAGE_CHANGED_EVENT, &updated)?;
+    Ok(updated)
+}
+
+#[tauri::command]
+pub fn set_model_endpoint_key(
+    case_id: String,
+    asset_id: String,
+    key: String,
+    state: State<'_, AppState>,
+) -> AppResult<()> {
+    let key = zeroize::Zeroizing::new(key);
+    let case = state.case_service().show_case(&case_id)?;
+    if case.scan_runs.iter().any(|run| run.completed_at.is_none()) {
+        return Err(AppError::InvalidRequest(
+            "wait for the active scan before entering a new model key".into(),
+        ));
+    }
+    let asset = case
+        .assets
+        .iter()
+        .find(|a| a.id == asset_id)
+        .ok_or_else(|| AppError::InvalidRequest("model asset not found".into()))?;
+    state
+        .model_endpoint_sessions
+        .put(&case_id, asset, key, Utc::now())
+}
+
+#[tauri::command]
 pub fn select_agentic_framework(
     case_id: Id,
     asset_id: Id,
@@ -2848,7 +2889,16 @@ pub fn approve_scope(
                 asset_id: decision.asset_id,
                 permissions: decision.permissions,
                 confirmed_by: decision.confirmed_by,
-                expires_at: Some(expires_at),
+                expires_at: Some(
+                    if decision.external_scope.as_ref().is_some_and(|scope| {
+                        scope.template_policy.profile_id.as_deref()
+                            == Some(crate::garak_input::PROFILE_ID)
+                    }) {
+                        Utc::now() + Duration::minutes(30)
+                    } else {
+                        expires_at
+                    },
+                ),
                 authorization_reference: decision.authorization_reference,
                 notes: decision.notes,
                 external_scope: decision.external_scope,
@@ -3302,7 +3352,16 @@ pub async fn start_scan(
                         asset_id: decision.asset_id,
                         permissions: decision.permissions,
                         confirmed_by: decision.confirmed_by,
-                        expires_at: Some(expires_at),
+                        expires_at: Some(
+                            if decision.external_scope.as_ref().is_some_and(|scope| {
+                                scope.template_policy.profile_id.as_deref()
+                                    == Some(crate::garak_input::PROFILE_ID)
+                            }) {
+                                Utc::now() + Duration::minutes(30)
+                            } else {
+                                expires_at
+                            },
+                        ),
                         authorization_reference: decision.authorization_reference,
                         notes: decision.notes,
                         external_scope: decision.external_scope,
@@ -6343,6 +6402,19 @@ fn resolve_execution_credentials(
     reserved_provider: Option<&mut ReservedProviderExecutionBundle>,
     provider_context: Option<&ProviderExecutionContext>,
 ) -> AppResult<ScannerCredentialSet> {
+    if execution.manifest.id == crate::garak_input::ENGINE_ID {
+        let [asset] = execution.assets.as_slice() else {
+            return Err(AppError::NotAuthorized(
+                "model check requires one exact model asset".into(),
+            ));
+        };
+        return state.model_endpoint_sessions.take(
+            &execution.case_id,
+            asset,
+            &execution.scope_grants,
+            Utc::now(),
+        );
+    }
     let provider_read = execution
         .manifest
         .required_permissions

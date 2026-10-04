@@ -26,7 +26,7 @@ use std::io::{BufRead, BufReader, Read, Take};
 use std::path::{Component, Path};
 use std::sync::Arc;
 
-pub const ADAPTER_VERSION: &str = "0.2.5";
+pub const ADAPTER_VERSION: &str = "0.2.6";
 /// Stable identity for the canonical finding fingerprint algorithm. Changing
 /// this value requires an explicit migration before cross-version diffs may be
 /// treated as comparable.
@@ -6352,6 +6352,63 @@ fn extract_gitleaks(parsed: &ParsedArtifact, warnings: &mut Vec<String>) -> Vec<
 /// how much a model's answer matters, on a scale garak never published.
 fn extract_garak(parsed: &ParsedArtifact, warnings: &mut Vec<String>) -> Vec<SourceRecord> {
     let rows = json_rows(parsed, warnings);
+    let inits = rows
+        .iter()
+        .filter(|(_, r)| r["entry_type"] == "init")
+        .map(|(_, r)| *r)
+        .collect::<Vec<_>>();
+    let completions = rows
+        .iter()
+        .filter(|(_, r)| r["entry_type"] == "completion")
+        .map(|(_, r)| *r)
+        .collect::<Vec<_>>();
+    if inits.len() != 1
+        || completions.len() != 1
+        || inits[0]["run"].as_str().is_none_or(str::is_empty)
+        || inits[0]["run"] != completions[0]["run"]
+    {
+        push_warning(
+            warnings,
+            "garak native run lacks a matching terminal completion; evaluated sibling results were retained",
+        );
+    }
+    if inits
+        .first()
+        .is_some_and(|r| r["garak_version"] == "0.17.0")
+    {
+        let expected = BTreeMap::from([
+            ("dan.Dan_11_0", ("dan.DAN", 1_u64)),
+            ("dan.Dan_10_0", ("dan.DAN", 1_u64)),
+            ("dan.Dan_9_0", ("dan.DAN", 1_u64)),
+            ("ansiescape.AnsiEscaped", ("ansiescape.Escaped", 51_u64)),
+        ]);
+        let evals = rows
+            .iter()
+            .filter(|(_, r)| r["entry_type"] == "eval")
+            .map(|(_, r)| *r)
+            .collect::<Vec<_>>();
+        let valid = evals.len() == expected.len()
+            && expected.iter().all(|(probe, (detector, count))| {
+                let matching = evals
+                    .iter()
+                    .filter(|r| r["probe"] == *probe)
+                    .collect::<Vec<_>>();
+                matching.len() == 1
+                    && matching[0]["detector"] == *detector
+                    && matching[0]["total_evaluated"].as_u64() == Some(*count)
+                    && matching[0]["total_processed"].as_u64() == Some(*count)
+                    && matching[0]["nones"].as_u64() == Some(0)
+                    && matching[0]["fails"]
+                        .as_u64()
+                        .is_some_and(|fails| fails <= *count)
+            });
+        if !valid {
+            push_warning(
+                warnings,
+                "garak native profile did not evaluate all 54 approved prompts; evaluated sibling results were retained",
+            );
+        }
+    }
     let target = garak_target(&rows);
     let contexts = garak_probe_contexts(&rows);
     let mut records = Vec::new();

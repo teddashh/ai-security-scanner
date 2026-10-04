@@ -697,6 +697,7 @@ impl NetworkPolicy {
 pub enum CredentialSource {
     EphemeralScanRole,
     ExternalReadOnlyGrant,
+    LocalModelEndpoint,
 }
 
 pub struct ScannerCredential {

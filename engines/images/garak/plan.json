@@ -6,7 +6,7 @@
   "support_until": "2026-12-11",
   "maintenance_owner": "teddashh/ai-security-scanner maintainers",
   "update_procedure": "docs/engine-maintenance.md",
-  "publish_state": "managed_artifact_not_published",
+  "publish_state": "publication_in_progress",
   "source": {
     "repository": "https://github.com/NVIDIA/garak",
     "revision": "93aa9cdec309ec4170559676f1826ea2a679920c",
@@ -16,18 +16,114 @@
   "verified_upstream_artifact": null,
   "final_artifact": {
     "repository": "ghcr.io/teddashh/ai-security-scanner-engine-garak",
-    "tag": null,
+    "tag": "0.17.0-1",
     "digest": null
   },
-  "build_recipe": null,
+  "build_recipe": {
+    "source_revision": "93aa9cdec309ec4170559676f1826ea2a679920c",
+    "source_archive": {
+      "url": "https://github.com/NVIDIA/garak/archive/93aa9cdec309ec4170559676f1826ea2a679920c.tar.gz",
+      "sha256": "sha256:34a7e31c9ca7efb00d00509f3397e8f25e87b88239c2c78d21fc9c54740b5fce"
+    },
+    "source_patch": null,
+    "dependency_lock": {
+      "path": "engines/images/garak/requirements.lock",
+      "sha256": "sha256:b4faa094fd163422d300f87533f0f2c38eb9835fa557bb6126aabbf08a7d4d8f",
+      "records": 36,
+      "require_hashes": true,
+      "only_binary": true,
+      "excluded_packages": [
+        "torch",
+        "transformers",
+        "openai",
+        "cohere",
+        "google-generativeai",
+        "anthropic",
+        "pytest"
+      ]
+    },
+    "build_dependency_lock": {
+      "path": "engines/images/garak/build-requirements.lock",
+      "sha256": "sha256:98b9d2d9aa49fa0dbe5c141902cdffa46ce4061447075fcedbc7edd63b1e4af6",
+      "records": 3,
+      "require_hashes": true,
+      "only_binary": true,
+      "runtime_included": false
+    },
+    "dependency_source_archives": [
+      {
+        "package": "langdetect",
+        "version": "1.0.9",
+        "url": "https://files.pythonhosted.org/packages/0e/72/a3add0e4eec4eb9e2569554f7c70f4a3c27712f40e3284d483e88094cc0e/langdetect-1.0.9.tar.gz",
+        "sha256": "sha256:cbc1fef89f8d062739774bd51eda3da3274006b3661d199c2655f6b3f6d605a0",
+        "reason": "PyPI has no Python3 wheel. Build unchanged pure-Python wheel from the exact native source using separately hash-locked build tools."
+      }
+    ],
+    "source_date_epoch": 1788977945,
+    "target_platforms": [
+      "linux/amd64",
+      "linux/arm64"
+    ],
+    "dockerfile_frontend": {
+      "repository": "docker/dockerfile",
+      "tag": "1.7",
+      "digest": "sha256:a57df69d0ea827fb7266491f2813635de6f17269be881f696fbfdf2d83dda33e"
+    },
+    "base_images": [
+      {
+        "repository": "python",
+        "tag": "3.11.16-slim",
+        "digest": "sha256:9c900dea9e8fb7e16277c179b555cc72d29a352dbc33cff48ad5a0412fd5bfc7",
+        "uses": [
+          "build",
+          "runtime"
+        ]
+      }
+    ],
+    "build_context": {
+      "path": ".",
+      "dockerignore_path": ".dockerignore",
+      "dockerignore_sha256": "sha256:5c5cf89412a2b3ff5c5bffb5c67bf126ee1be5ae973ed1d31f11b3063d462557"
+    },
+    "local_inputs": [
+      {
+        "path": "engines/images/garak/launcher/main.py",
+        "sha256": "sha256:a5b7db01d2b5365af8002bba30eb2c447da52cbb38a47b4301ba27a3ab9c8f4a",
+        "reason": "Dedicated launcher boundary and native transport or build-only boundary tests; no upstream detector patch."
+      },
+      {
+        "path": "engines/images/garak/launcher/main_test.py",
+        "sha256": "sha256:f8abfeb8b47783bc7ee8cc80bd4023b5f74deeda8d317f05fa826f0adb550a2c",
+        "reason": "Dedicated launcher boundary and native transport or build-only boundary tests; no upstream detector patch."
+      },
+      {
+        "path": "engines/images/garak/launcher/runner.py",
+        "sha256": "sha256:8a16a3d51f3da66cebb0d39cb17c9cb19b1c60589616eed4887119491dca1700",
+        "reason": "Dedicated launcher boundary and native transport or build-only boundary tests; no upstream detector patch."
+      }
+    ],
+    "static_steps": [
+      [
+        "python",
+        "-I",
+        "-B",
+        "/src/launcher/main_test.py"
+      ]
+    ],
+    "dependency_notes": "This image includes the import closure of the fixed native REST/DAN/ANSI profile. Native optional SDK declarations do not describe this closed runtime; full pip check is not claimed. Preserve installed module mtimes at SOURCE_DATE_EPOCH so the shipped plugin cache does not enumerate unused plugins."
+  },
   "dockerfile": {
-    "emitted": false,
-    "reason": "Nothing has been built. This plan records the reviewed source pin behind the adapter, not an image; a Dockerfile would claim a build that no one has run, tested, or published."
+    "emitted": true,
+    "path": "engines/images/garak/Dockerfile",
+    "sha256": "sha256:a7fe29ba7e850cbeed3af897960b8c3c263c442aa4279660ce0e38c842cf3d97",
+    "reason": null
   },
   "wrapper": {
     "required": true,
-    "strategy": "Accept only the model endpoint named in the scope grant, refuse every other destination, and hand the adapter only the run's own report.jsonl.",
-    "entrypoint": null
+    "strategy": "Run the fixed native REST profile through a bounded transport for one exact HTTPS endpoint and model; accept one transient local key and preserve native JSONL only.",
+    "entrypoint": "/usr/local/bin/python3",
+    "launcher_sha256": "sha256:a5b7db01d2b5365af8002bba30eb2c447da52cbb38a47b4301ba27a3ab9c8f4a",
+    "transport_sha256": "sha256:8a16a3d51f3da66cebb0d39cb17c9cb19b1c60589616eed4887119491dca1700"
   },
   "command": [
     "--engine",
@@ -41,7 +137,7 @@
     "primary_format": "jsonl",
     "path": "/output/report.jsonl",
     "media_type": "application/x-ndjson",
-    "adapter_state": "workspace_unreleased"
+    "adapter_state": "released"
   },
   "license": {
     "disposition": "allow",
@@ -49,8 +145,45 @@
     "source_offer_path": null
   },
   "blockers": [
-    "no packaged image: the pinned source has never been built, tested, or published for this product",
-    "no scope-grant path exists for an AI model endpoint, so no run could be authorized against one",
-    "no credential path exists for a model endpoint that requires a key"
-  ]
+    "the locally verified Garak image awaits immutable publication and independent verification"
+  ],
+  "publication": null,
+  "managed_runtime": {
+    "non_root_user": "65532:65532",
+    "read_only_rootfs": true,
+    "entrypoint": [
+      "/usr/local/bin/python3",
+      "-I",
+      "-B",
+      "/usr/local/lib/aiss-garak/main.py"
+    ],
+    "network_mode": "managed_allowlist",
+    "credentials": "one opaque REST_API_KEY from the local_model_endpoint mount; fresh child environment only",
+    "profile": {
+      "id": "garak_https_v1",
+      "revision": "93aa9cdec309ec4170559676f1826ea2a679920c",
+      "probes": [
+        "dan.Dan_11_0",
+        "dan.Dan_10_0",
+        "dan.Dan_9_0",
+        "ansiescape.AnsiEscaped"
+      ],
+      "native_prompts": 54,
+      "max_http_attempts": 64,
+      "max_request_bytes": 8192,
+      "max_total_request_bytes": 65536,
+      "max_response_bytes": 262144,
+      "requested_completion_tokens": 150,
+      "requests_per_second": 1,
+      "concurrency": 1,
+      "timeout_seconds": 20,
+      "deadline_seconds": 600
+    }
+  },
+  "local_build_evidence": {
+    "platform": "linux/amd64",
+    "local_image_id": "sha256:6445ec1e31d704bd3a6742fc0642816392deb1081abb18c16af81538d56cdda7",
+    "smoke_runner": "engines/images/garak/testdata/native_smoke.py",
+    "result": "Final local native 0.17.0 build passed positive and clean runs (54 prompts/four native detector pairs), redirect refusal, TLS refusal, six-second deadline, and graceful cancellation with private partial native JSONL retained and no requests after stop. The repeatable helper cleaned its own isolated fixture. No public artifact or arm64 native execution is claimed."
+  }
 }

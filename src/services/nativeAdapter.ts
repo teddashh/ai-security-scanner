@@ -1,4 +1,5 @@
 import { agenticRadarFramework } from "../agenticRadarProfile";
+import { validatedModelEndpoint } from "../garakProfile";
 import type {
   AppSnapshot,
   AssessmentCase,
@@ -2431,6 +2432,12 @@ export const adaptNativeCase = (
         ? asset.metadata.mcp_configuration_selected
         : undefined,
       agenticRadarFramework: agenticRadarFramework(asset.metadata?.agentic_radar_framework),
+      modelEndpoint: asset.kind === "ai_model_endpoint"
+        && typeof (asset.metadata?.model_endpoint as { endpoint?: unknown } | undefined)?.endpoint === "string"
+        && typeof (asset.metadata?.model_endpoint as { model?: unknown } | undefined)?.model === "string"
+        ? validatedModelEndpoint((asset.metadata!.model_endpoint as { endpoint: string }).endpoint,
+            (asset.metadata!.model_endpoint as { model: string }).model)
+        : undefined,
       declaredWebService: adaptDeclaredWebServiceMetadata(asset.metadata),
       declaredNetworkService: adaptDeclaredNetworkServiceMetadata(asset.metadata),
       declaredHostScan: adaptDeclaredHostScanMetadata(asset.metadata),

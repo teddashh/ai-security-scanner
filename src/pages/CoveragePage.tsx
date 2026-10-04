@@ -65,6 +65,8 @@ import {
 } from "../localInputProfiles";
 import { engineOutcomeForId } from "../scanPresentation";
 import { agenticRadarFramework, agenticRadarFrameworks } from "../agenticRadarProfile";
+import { ModelEndpointPanel } from "../components/ModelEndpointPanel";
+import type { StartModelCheckInput } from "../types";
 
 import "../coverage-page.css";
 
@@ -88,6 +90,7 @@ export interface CoveragePageProps {
   onAttachWorkspaceSnapshot: (input: AttachWorkspaceSnapshotInput) => Promise<boolean>;
   onSelectMcpConfiguration: (assetId: string, relativePath: string) => Promise<boolean>;
   onSelectAgenticFramework?: (assetId: string, framework: AgenticRadarFramework | null) => Promise<boolean>;
+  onStartModelCheck?: (input: StartModelCheckInput) => Promise<boolean>;
   onStartDiscovery: () => Promise<void>;
   onAuthorizationChanged: () => Promise<void>;
   onStartScan: (
@@ -848,6 +851,7 @@ export function CoveragePage({
   onAttachWorkspaceSnapshot,
   onSelectMcpConfiguration,
   onSelectAgenticFramework,
+  onStartModelCheck,
   onStartDiscovery,
   onAuthorizationChanged,
   onStartScan,
@@ -2077,6 +2081,11 @@ export function CoveragePage({
           </div>
         </details>
       </section>
+
+      {onStartModelCheck && (assessmentIntent === "ai_application" || environmentRoute)
+        && engineManifests.some((engine) => engine.id === "garak" && engine.runnable === true && engine.compatibilityValid)
+        && <ModelEndpointPanel key={caseId} nativeMode={nativeMode} busy={busy}
+          initialInput={assets.find((asset) => asset.modelEndpoint)?.modelEndpoint} onStart={onStartModelCheck} />}
 
       {!compactGuidedReview && <section id="coverage-step-2" className="section-block coverage-step-section">
         <div className="section-heading coverage-step-heading">

@@ -2258,6 +2258,111 @@ function validateAgenticRadarImage(plan, planRelative, engine) {
   }
 }
 
+function isPendingGarakPublication(plan, engine) {
+  return engine?.id === "garak" && plan?.publish_state === "publication_in_progress" &&
+    plan.publication === null && engine.image === null && engine.distribution_mode === "pull_pinned_image" &&
+    engine.status === "experimental" && engine.default_enabled === false && engine.compatibility?.runnable === false &&
+    engine.compatibility?.artifact_state === "managed_build_plan" && plan.blockers?.length === 1 &&
+    plan.final_artifact?.repository === `${managedImageRepositoryPrefix}garak` &&
+    plan.final_artifact?.tag === "0.17.0-1" && plan.final_artifact?.digest === null &&
+    engine.provenance?.engine?.artifact_source_revision === null &&
+    engine.provenance?.engine?.source_association === "source_build_required";
+}
+
+function validateGarakImage(plan, planRelative, engine) {
+  const tag = "0.17.0-1";
+  const sourceRevision = "93aa9cdec309ec4170559676f1826ea2a679920c";
+  const repository = `${managedImageRepositoryPrefix}garak`;
+  const recipe = plan.build_recipe;
+  const dockerfileRelative = "engines/images/garak/Dockerfile";
+  const dockerfilePath = resolve(root, dockerfileRelative);
+  const dockerfile = existsSync(dockerfilePath) ? readFileSync(dockerfilePath, "utf8") : "";
+  const runtime = plan.managed_runtime;
+  const entrypoint = ["/usr/local/bin/python3", "-I", "-B", "/usr/local/lib/aiss-garak/main.py"];
+  const profile = {
+    id: "garak_https_v1", revision: sourceRevision,
+    probes: ["dan.Dan_11_0", "dan.Dan_10_0", "dan.Dan_9_0", "ansiescape.AnsiEscaped"],
+    native_prompts: 54, max_http_attempts: 64, max_request_bytes: 8192, max_total_request_bytes: 65536,
+    max_response_bytes: 262144, requested_completion_tokens: 150, requests_per_second: 1, concurrency: 1,
+    timeout_seconds: 20, deadline_seconds: 600,
+  };
+  if (plan.publish_state === "published_managed_artifact") {
+    if (engine.image?.repository !== repository || engine.image?.tag !== tag ||
+        plan.final_artifact?.repository !== repository || plan.final_artifact?.tag !== tag ||
+        plan.final_artifact?.digest !== engine.image?.digest || engine.compatibility?.runnable !== true) {
+      errors.push(`${planRelative}: Garak admission must name its exact independently verified immutable image`);
+    }
+    validatePublishedManagedEvidence(plan, planRelative, engine, { requireManagedSmoke: true });
+  } else if (!isPendingGarakPublication(plan, engine)) {
+    errors.push(`${planRelative}: Garak must remain an isolated candidate until its public image evidence is admitted`);
+  }
+  if (engine.source_revision !== sourceRevision || recipe?.source_revision !== sourceRevision ||
+      lockedRepositories.get(engine.repository_url)?.revision !== sourceRevision || plan.plan_kind !== "managed_build" ||
+      recipe?.source_patch !== null || recipe?.patch_audit !== undefined) {
+    errors.push(`${planRelative}: Garak requires the unchanged reviewed native source and no detector patch`);
+  }
+  if (plan.dockerfile?.emitted !== true || plan.dockerfile?.path !== dockerfileRelative ||
+      plan.dockerfile?.reason !== null || !existsSync(dockerfilePath) || plan.dockerfile?.sha256 !== sha256File(dockerfilePath) ||
+      !dockerfile.includes(`org.opencontainers.image.version="${tag}"`) ||
+      !dockerfile.includes(`org.opencontainers.image.revision="${sourceRevision}"`) ||
+      !deepEqual(JSON.parse(dockerfile.match(/^ENTRYPOINT (\[.*\])$/m)?.[1] ?? "null"), entrypoint) || !/^USER 65532:65532$/m.test(dockerfile)) {
+    errors.push(`${planRelative}: Garak requires its exact non-root Dockerfile and direct isolated Python entrypoint`);
+  }
+  const archives = [recipe?.source_archive, ...(recipe?.dependency_source_archives ?? [])];
+  const expectedArchives = [
+    { url: `https://github.com/NVIDIA/garak/archive/${sourceRevision}.tar.gz`, sha256: "sha256:34a7e31c9ca7efb00d00509f3397e8f25e87b88239c2c78d21fc9c54740b5fce" },
+    { url: "https://files.pythonhosted.org/packages/0e/72/a3add0e4eec4eb9e2569554f7c70f4a3c27712f40e3284d483e88094cc0e/langdetect-1.0.9.tar.gz", sha256: "sha256:cbc1fef89f8d062739774bd51eda3da3274006b3661d199c2655f6b3f6d605a0" },
+  ];
+  if (archives.length !== 2 || archives.some((archive, index) => archive?.url !== expectedArchives[index].url ||
+      archive?.sha256 !== expectedArchives[index].sha256 ||
+      !dockerfile.includes(`ADD --checksum=${archive?.sha256}`) || !dockerfile.includes(archive?.url ?? ""))) {
+    errors.push(`${planRelative}: Garak and langdetect source archives must retain their exact reviewed hashes`);
+  }
+  for (const [field, filename, count] of [["dependency_lock", "requirements.lock", 36], ["build_dependency_lock", "build-requirements.lock", 3]]) {
+    const lock = recipe?.[field]; const relative = `engines/images/garak/${filename}`; const absolute = resolve(root, relative);
+    if (lock?.path !== relative || !existsSync(absolute) || lock?.sha256 !== sha256File(absolute) ||
+        lock?.records !== count || lock?.require_hashes !== true || lock?.only_binary !== true ||
+        !dockerfile.includes(lock?.sha256?.slice(7) ?? "missing") || !dockerfile.includes("--require-hashes") ||
+        !dockerfile.includes("--only-binary=:all:") || field === "build_dependency_lock" && lock?.runtime_included !== false) {
+      errors.push(`${planRelative}: ${field} must retain its separately hash-locked binary dependency closure`);
+    }
+  }
+  const launcher = "engines/images/garak/launcher/main.py";
+  const transport = "engines/images/garak/launcher/runner.py";
+  for (const [relative, field] of [[launcher, "launcher_sha256"], [transport, "transport_sha256"]]) {
+    if (!existsSync(resolve(root, relative)) || plan.wrapper?.[field] !== sha256File(resolve(root, relative)) ||
+        !recipe?.local_inputs?.some((input) => input.path === relative && input.sha256 === sha256File(resolve(root, relative)))) {
+      errors.push(`${planRelative}: Garak must bind its exact launcher and bounded transport sources`);
+    }
+  }
+  const base = "python:3.11.16-slim@sha256:9c900dea9e8fb7e16277c179b555cc72d29a352dbc33cff48ad5a0412fd5bfc7";
+  const actualBases = [...dockerfile.matchAll(/^FROM\s+(\S+)/gm)].map((match) => match[1]);
+  if (actualBases.length !== 2 || actualBases.some((reference) => reference !== base) ||
+      !deepEqual(recipe?.target_platforms, ["linux/amd64", "linux/arm64"]) || recipe?.source_date_epoch !== 1788977945 ||
+      recipe?.build_context?.path !== "." || recipe?.build_context?.dockerignore_path !== ".dockerignore" ||
+      recipe?.build_context?.dockerignore_sha256 !== sha256File(resolve(root, ".dockerignore"))) {
+    errors.push(`${planRelative}: Garak must preserve its reviewed build context, base image, epoch and platforms`);
+  }
+  if (runtime?.non_root_user !== "65532:65532" || runtime?.read_only_rootfs !== true ||
+      !deepEqual(runtime?.entrypoint, entrypoint) || runtime?.network_mode !== "managed_allowlist" ||
+      !deepEqual(runtime?.profile, profile) || engine.execution?.network?.mode !== "managed_allowlist" ||
+      engine.execution?.resources?.timeout_seconds !== 600 || engine.compatibility?.wrapper?.entrypoint !== entrypoint[0] ||
+      plan.wrapper?.entrypoint !== entrypoint[0] || !deepEqual(engine.direct_network_contract, {target_kinds: ["hostname", "address"], protocols: ["https"]})) {
+    errors.push(`${planRelative}: Garak must preserve its exact HTTPS endpoint, native profile, transient key and bounded resource contract`);
+  }
+  const workflowPath = resolve(root, ".github/workflows/engine-image-garak.yml");
+  const workflow = existsSync(workflowPath) ? readFileSync(workflowPath, "utf8") : "";
+  for (const required of [`IMAGE_TAG: ${tag}`, dockerfileRelative, "engines/images/garak/testdata/native_smoke.py",
+    "engine-image-evidence/publication-guard", "engine-image-evidence/promote", "managedSmokeEvidenceSha256",
+    "report.jsonl garak-execution.json native-qa.json", "docker logout ghcr.io"]) {
+    if (!workflow.includes(required)) errors.push(`${planRelative}: Garak publication workflow lacks ${required}`);
+  }
+  if (plan.local_build_evidence?.platform !== "linux/amd64" || !digestPattern.test(plan.local_build_evidence?.local_image_id ?? "") ||
+      plan.local_build_evidence?.smoke_runner !== "engines/images/garak/testdata/native_smoke.py") {
+    errors.push(`${planRelative}: Garak must retain its controlled native smoke entry and local amd64 identity`);
+  }
+}
+
 function isPendingManagedExternalPublication(plan, engine) {
   const contract = managedExternalContracts.get(engine.id);
   const expectedRepository = `${managedImageRepositoryPrefix}${engine.id}`;
@@ -2764,7 +2869,7 @@ for (const engine of Array.isArray(catalog) ? catalog : []) {
     } else if (!isPendingM365Publication(plan, engine) &&
         !isPendingManagedExternalPublication(plan, engine) &&
         !isPendingMcpArmorPublication(plan, engine) &&
-        !isPendingLocalK8sPublication(plan, engine)) {
+        !isPendingLocalK8sPublication(plan, engine) && !isPendingGarakPublication(plan, engine)) {
       errors.push(`${label}.image: only an exactly isolated reviewed publication-in-progress operation may omit its immutable image`);
     }
   } else if (engine.image !== null) {
@@ -2831,7 +2936,7 @@ for (const engine of Array.isArray(catalog) ? catalog : []) {
     if (!deepEqual(plan.final_artifact, { repository: engine.image.repository, tag: engine.image.tag, digest: engine.image.digest })) errors.push(`${planRelative}: final artifact does not match catalog image`);
   } else if (managedCloudIds.has(engine.id) || isPendingM365Publication(plan, engine) ||
       isPendingManagedExternalPublication(plan, engine) || isPendingMcpArmorPublication(plan, engine) ||
-      isPendingLocalK8sPublication(plan, engine)) {
+      isPendingLocalK8sPublication(plan, engine) || isPendingGarakPublication(plan, engine)) {
     const pending = plan.final_artifact;
     if (!pending || typeof pending.repository !== "string" || typeof pending.tag !== "string" || pending.digest !== null || plan.publish_state !== "publication_in_progress") {
       errors.push(`${planRelative}: managed image publication in progress must retain its exact repository/tag and null digest`);
@@ -2846,6 +2951,8 @@ for (const engine of Array.isArray(catalog) ? catalog : []) {
     validateMcpArmorImage(plan, planRelative, engine);
   } else if (engine.id === "agentic-radar") {
     validateAgenticRadarImage(plan, planRelative, engine);
+  } else if (engine.id === "garak") {
+    validateGarakImage(plan, planRelative, engine);
   } else if (pendingImageReplacement) {
     validatePublishedLocalK8sImage({
       ...plan,

@@ -58,6 +58,7 @@ import type {
   ScanReadiness,
   SelectMcpConfigurationInput,
   SelectAgenticFrameworkInput,
+  ModelEndpointInput,
 } from "../types";
 import { buildNativeExportCaseArguments } from "../exportRequest";
 import { findRequestedExportRun } from "../exportRunSelection";
@@ -101,6 +102,8 @@ export const COMMANDS = {
   attachWorkspaceSnapshot: "attach_workspace_snapshot",
   selectMcpConfiguration: "select_mcp_configuration",
   selectAgenticFramework: "select_agentic_framework",
+  configureModelEndpoint: "configure_model_endpoint",
+  setModelEndpointKey: "set_model_endpoint_key",
   approveScope: "approve_scope",
   updateFindingWorkflow: "update_finding_workflow",
   groupFindings: "group_findings",
@@ -759,6 +762,20 @@ export const scannerService = {
       serviceText("Open the desktop app to choose an AI workflow framework.", "請開啟桌面版選擇 AI 工作流程框架。"),
       true,
     );
+  },
+
+  async configureModelEndpoint(caseId: string, input: ModelEndpointInput, internetExposed: boolean): Promise<ServiceResult<ActionResponse>> {
+    return actionResult(COMMANDS.configureModelEndpoint, { caseId, input, internetExposed },
+      serviceText("Model coordinates saved for review.", "已保存模型座標，待確認掃描範圍。"),
+      serviceText("Open the desktop app to configure a model check.", "請開啟桌面版設定模型檢查。"), true);
+  },
+
+  async setModelEndpointKey(caseId: string, assetId: string, key: string): Promise<ServiceResult<ActionResponse>> {
+    if (!isNativeSurface()) return demoResult({ accepted: false, message: serviceText("Open the desktop app to enter a local model key.", "請開啟桌面版輸入本機模型金鑰。") });
+    try {
+      await invoke<void>(COMMANDS.setModelEndpointKey, { caseId, assetId, key });
+      return nativeResult({ accepted: true, message: serviceText("The key is ready for one model check.", "金鑰已準備好，可用於一次模型檢查。") });
+    } catch { return nativeResult({ accepted: false, message: serviceText("The local model key could not be prepared. Enter it again before starting.", "無法準備本機模型金鑰，請在開始前重新輸入。") }); }
   },
 
   async approveScope(input: ScopeApprovalInput): Promise<ServiceResult<ActionResponse>> {

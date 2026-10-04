@@ -1724,6 +1724,79 @@ impl<'a> CaseService<'a> {
         Ok(case)
     }
 
+    /// Records explicit coordinates only; model contact and ownership remain unapproved.
+    pub fn configure_model_endpoint(
+        &self,
+        case_id: &str,
+        input: crate::garak_input::ModelEndpointInput,
+        internet_exposed: bool,
+    ) -> AppResult<AssessmentCase> {
+        use crate::garak_input::{
+            ENDPOINT_NAMESPACE, METADATA_KEY, MODEL_NAMESPACE, ModelEndpointInput,
+        };
+        let input = ModelEndpointInput::validated(&input.endpoint, &input.model)?;
+        let mut case = self.mutable_case(case_id, "configure a model endpoint")?;
+        ensure_no_active_scan(&case, "configure a model endpoint")?;
+        if let Some(existing) = case
+            .assets
+            .iter()
+            .find(|a| crate::garak_input::asset_input(a).ok().as_ref() == Some(&input))
+        {
+            if existing.internet_exposed != Some(internet_exposed) {
+                return Err(AppError::InvalidRequest(
+                    "the existing model endpoint has a different public/private boundary".into(),
+                ));
+            }
+            return Ok(case);
+        }
+        let source_id = new_id();
+        let now = Utc::now();
+        case.data_sources.push(DataSource {
+            id: source_id.clone(),
+            kind: SourceKind::UserDeclared,
+            label: "Configured model endpoint".into(),
+            status: SourceConnectionStatus::Connected,
+            connected_at: Some(now),
+            last_discovered_at: None,
+            read_only: true,
+            metadata: BTreeMap::from([(
+                "declaration_boundary".into(),
+                Value::String(
+                    "user-supplied model coordinates; no endpoint contact or verification".into(),
+                ),
+            )]),
+        });
+        case.assets.push(Asset {
+            id: new_id(),
+            kind: AssetKind::AiModelEndpoint,
+            name: format!("{} ({})", input.model, input.endpoint),
+            provider: None,
+            region: None,
+            identifiers: vec![
+                AssetIdentifier {
+                    namespace: ENDPOINT_NAMESPACE.into(),
+                    value: input.endpoint.clone(),
+                },
+                AssetIdentifier {
+                    namespace: MODEL_NAMESPACE.into(),
+                    value: input.model.clone(),
+                },
+            ],
+            discovered_from: vec![source_id],
+            candidate: true,
+            owner_confirmed: false,
+            internet_exposed: Some(internet_exposed),
+            contains_sensitive_data: None,
+            metadata: BTreeMap::from([(METADATA_KEY.into(), serde_json::to_value(input)?)]),
+        });
+        case.status = CaseStatus::ScopeReview;
+        case.touch();
+        refresh_coverage_ledger(&mut case, self.engines.manifests(), now);
+        self.storage
+            .save_case(&mut case, "source.model_endpoint_configured")?;
+        Ok(case)
+    }
+
     pub fn select_agentic_framework(
         &self,
         case_id: &str,
@@ -8440,10 +8513,22 @@ fn materialize_external_scope(
         allow_sensitive_networks: external.allow_sensitive_networks,
     };
     grant.validate(now)?;
+    if asset.kind == AssetKind::AiModelEndpoint
+        && !crate::garak_input::asset_input(asset)?.matches_scope(&grant, now)?
+    {
+        return Err(AppError::NotAuthorized(
+            "model endpoint requires the exact bounded inference profile".into(),
+        ));
+    }
     Ok(Some(grant))
 }
 
 fn asset_attributable_to_target(asset: &Asset, target: &CanonicalTarget) -> bool {
+    if asset.kind == AssetKind::AiModelEndpoint {
+        return crate::garak_input::asset_input(asset)
+            .and_then(|input| input.target())
+            .is_ok_and(|model_target| model_target == *target);
+    }
     let expected = target.canonical_text();
     asset
         .identifiers
@@ -8907,7 +8992,8 @@ fn default_plan_includes_manifest(
     effective: &[&ScopeGrant],
     now: DateTime<Utc>,
 ) -> bool {
-    if manifest.release_blocker().is_some() {
+    // Model inference requires a fresh explicit selection and one-shot key on every run.
+    if manifest.id == crate::garak_input::ENGINE_ID || manifest.release_blocker().is_some() {
         return false;
     }
     if !compatible_authorized_assets(case, manifest, effective, now).is_empty() {
@@ -9091,6 +9177,10 @@ fn incompatible_authorized_assets_reason(
         .iter()
         .copied()
         .filter(|asset| local_input_metadata_matches(case, manifest, asset))
+        .filter(|asset| {
+            manifest.id != crate::garak_input::ENGINE_ID
+                || crate::garak_input::asset_input(asset).is_ok()
+        })
         .collect::<Vec<_>>();
     if input_ok.is_empty() {
         let incompatibilities = provider_ok
@@ -9238,6 +9328,10 @@ fn compatible_authorized_assets<'a>(
         .filter(|asset| manifest.supports_asset(asset))
         .filter(|asset| provider_target_metadata_matches(case, manifest, asset))
         .filter(|asset| local_input_metadata_matches(case, manifest, asset))
+        .filter(|asset| {
+            manifest.id != crate::garak_input::ENGINE_ID
+                || crate::garak_input::asset_input(asset).is_ok()
+        })
         .filter(|asset| declared_web_service_profile_matches(manifest, asset))
         .filter(|asset| declared_network_service_profile_matches(manifest, asset))
         .filter(|asset| declared_host_scan_profile_matches(manifest, asset))
@@ -9260,6 +9354,15 @@ fn asset_satisfies_engine_permissions(
         grants
             .iter()
             .filter(|grant| classify_external_grant_blocker(manifest, grant).is_none())
+            .filter(|grant| {
+                manifest.id != crate::garak_input::ENGINE_ID
+                    || crate::garak_input::asset_input(asset).is_ok_and(|input| {
+                        grant
+                            .external_scope
+                            .as_ref()
+                            .is_some_and(|scope| input.matches_scope(scope, now).unwrap_or(false))
+                    })
+            })
             .map(|grant| &grant.permission),
     )
 }
@@ -9296,6 +9399,11 @@ fn classify_external_grant_blocker(
     };
     if !grant_has_authorization_reference(grant) {
         return Some(ExternalGrantBlocker::EmptyAuthorizationReference);
+    }
+    if manifest.id != crate::garak_input::ENGINE_ID
+        && scope.template_policy.profile_id.as_deref() == Some(crate::garak_input::PROFILE_ID)
+    {
+        return Some(ExternalGrantBlocker::Unusable);
     }
     if manifest.id == ZAP_ENGINE_ID
         && !matches_zap_passive_profile(
@@ -28058,6 +28166,173 @@ mod tests {
             .unwrap();
         assert_eq!(selected_framework(&cleared.assets[0]).unwrap(), None);
         assert_eq!(cleared.assets[0].metadata["workspace_snapshot_sha256"], sha);
+    }
+
+    #[test]
+    fn model_coordinates_persist_without_ownership_or_scan_authorization() {
+        let fixture = Fixture::new();
+        let created = fixture.create();
+        let service = fixture.service();
+        let input = crate::garak_input::ModelEndpointInput::validated(
+            "https://model.example.test/v1/chat/completions",
+            "fixture/model",
+        )
+        .unwrap();
+        let configured = service
+            .configure_model_endpoint(&created.id, input.clone(), true)
+            .unwrap();
+        let asset = configured
+            .assets
+            .iter()
+            .find(|a| a.kind == AssetKind::AiModelEndpoint)
+            .unwrap();
+        assert!(asset.candidate);
+        assert!(!asset.owner_confirmed);
+        assert!(configured.scope_grants.is_empty());
+        assert_eq!(asset.internet_exposed, Some(true));
+        assert_eq!(crate::garak_input::asset_input(asset).unwrap(), input);
+        let stored = service.show_case(&created.id).unwrap();
+        assert_eq!(stored.assets.len(), configured.assets.len());
+        assert!(
+            service
+                .configure_model_endpoint(&created.id, input.clone(), false)
+                .is_err()
+        );
+        assert_eq!(
+            service
+                .configure_model_endpoint(&created.id, input, true)
+                .unwrap()
+                .assets
+                .len(),
+            configured.assets.len()
+        );
+        assert!(
+            stored
+                .data_sources
+                .iter()
+                .all(|s| s.metadata.contains_key("declaration_boundary"))
+        );
+        assert!(
+            !serde_json::to_string(&stored)
+                .unwrap()
+                .contains("REST_API_KEY")
+        );
+    }
+
+    #[test]
+    fn garak_routes_two_models_on_one_host_to_separate_exact_assets_and_refuses_scope_widening() {
+        use crate::external_scope::{RatePolicy, TemplatePolicy, TransportProtocol};
+        let mut entries: Vec<Value> =
+            serde_json::from_str(include_str!("../../engines/catalog.json")).unwrap();
+        let entry = entries.iter_mut().find(|e| e["id"] == "garak").unwrap();
+        // This fixture tests planning only; the production candidate remains unavailable.
+        entry["status"] = serde_json::json!("integrated");
+        entry["compatibility"]["runnable"] = Value::Bool(true);
+        entry["compatibility"]["blocked_by"] = serde_json::json!([]);
+        entry["image"] = serde_json::json!({"repository":"ghcr.io/teddashh/ai-security-scanner-engine-garak",
+            "tag":"synthetic-test", "digest":format!("sha256:{}", "1".repeat(64)), "signature_identity":null});
+        let fixture = Fixture::with_engines(
+            EngineRegistry::load_catalog(&serde_json::to_string(&entries).unwrap()).unwrap(),
+        );
+        let created = fixture.create();
+        let service = fixture.service();
+        let mut ids = Vec::new();
+        for model in ["fixture/one", "fixture/two"] {
+            let input = crate::garak_input::ModelEndpointInput::validated(
+                "https://model.example.test:8443/v1/chat/completions",
+                model,
+            )
+            .unwrap();
+            let case = service
+                .configure_model_endpoint(&created.id, input.clone(), false)
+                .unwrap();
+            let id = case
+                .assets
+                .iter()
+                .find(|asset| crate::garak_input::asset_input(asset).ok().as_ref() == Some(&input))
+                .unwrap()
+                .id
+                .clone();
+            let request = ScopeApprovalRequest {
+                asset_id: id.clone(),
+                permissions: vec![ScanPermission::ActiveExternalTesting],
+                confirmed_by: "Fixture owner".into(),
+                expires_at: Some(Utc::now() + Duration::minutes(30)),
+                authorization_reference: Some("Controlled fixture with provider charges".into()),
+                notes: None,
+                external_scope: Some(ExternalScopeRequest {
+                    target: "model.example.test".into(),
+                    ports: [8443].into_iter().collect(),
+                    protocol: TransportProtocol::Https,
+                    activity: ExternalActivity::ActiveExternal,
+                    rate_policy: RatePolicy {
+                        requests_per_second: 1,
+                        concurrency: 1,
+                        timeout_seconds: 20,
+                    },
+                    template_policy: TemplatePolicy::conservative_profile(
+                        crate::garak_input::SOURCE_REVISION,
+                        crate::garak_input::PROFILE_ID,
+                    ),
+                    asserted_authority: "Controlled fixture with provider charges".into(),
+                    allow_sensitive_networks: true,
+                }),
+            };
+            for field in ["rate", "port", "profile", "private"] {
+                let mut invalid = request.clone();
+                let external = invalid.external_scope.as_mut().unwrap();
+                match field {
+                    "rate" => external.rate_policy.requests_per_second = 2,
+                    "port" => {
+                        external.ports.insert(443);
+                    }
+                    "profile" => external.template_policy.profile_id = Some("other_profile".into()),
+                    _ => external.allow_sensitive_networks = false,
+                };
+                assert!(
+                    service.approve_scope(&created.id, invalid).is_err(),
+                    "{field}"
+                );
+            }
+            assert_eq!(
+                service.show_case(&created.id).unwrap().scope_grants.len(),
+                ids.len()
+            );
+            service.approve_scope(&created.id, request).unwrap();
+            ids.push(id);
+        }
+        let scoped = service.show_case(&created.id).unwrap();
+        assert!(!default_plan_includes_manifest(
+            &scoped,
+            fixture.engines.get("garak").unwrap(),
+            &effective_grants(&scoped, Utc::now()),
+            Utc::now()
+        ));
+        let plan = service
+            .plan_scan(
+                &created.id,
+                ScanPlanRequest {
+                    engine_ids: vec![],
+                    engine_asset_routes: vec![EngineAssetRoute {
+                        engine_id: "garak".into(),
+                        asset_ids: ids.clone(),
+                    }],
+                },
+            )
+            .unwrap();
+        assert_eq!(plan.executable.len(), 2);
+        assert!(plan.not_executed.is_empty());
+        let frozen = plan
+            .executable
+            .iter()
+            .map(|e| {
+                assert_eq!(e.assets.len(), 1);
+                assert_eq!(e.scope_grants.len(), 1);
+                assert_eq!(e.assets[0].id, e.scope_grants[0].asset_id);
+                e.assets[0].id.clone()
+            })
+            .collect::<BTreeSet<_>>();
+        assert_eq!(frozen, ids.into_iter().collect());
     }
 
     #[test]
