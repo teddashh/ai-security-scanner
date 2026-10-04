@@ -17831,7 +17831,7 @@ fn html_typed_inventory_section(
 /// go in in English. Left that way, a Chinese standard-redacted report carried
 /// three hundred and fifty-three English brackets sitting under translated
 /// labels, in the one export a reader is most likely to hand to someone else.
-const REDACTION_MARKERS: [(&str, &str); 43] = [
+const REDACTION_MARKERS: [(&str, &str); 50] = [
     ("authority assertion", "授權陳述"),
     ("cleanup detail", "清理細節"),
     ("comparison completeness reason", "比對完整性原因"),
@@ -17860,11 +17860,17 @@ const REDACTION_MARKERS: [(&str, &str); 43] = [
     ("location", "位置"),
     ("manual-review control", "待人工判定的控制項"),
     ("manual-review detail", "待人工判定的細節"),
+    ("model", "模型"),
+    ("model identifier", "模型識別碼"),
     ("native ID", "原生 ID"),
     ("observation detail", "觀察細節"),
     ("provider", "供應商"),
     ("purl", "purl"),
     ("region", "區域"),
+    ("relationship condition", "連接條件"),
+    ("relationship endpoint", "連接端點"),
+    ("relationship source", "連接來源"),
+    ("relationship target", "連接目標"),
     ("requested scope", "要求的範圍"),
     ("result pointer", "結果指標"),
     ("scanner-provided description", "掃描工具提供的說明"),
@@ -17874,6 +17880,7 @@ const REDACTION_MARKERS: [(&str, &str); 43] = [
     ("software component", "軟體元件"),
     ("target", "目標"),
     ("version", "版本"),
+    ("workflow component", "工作流程元件"),
     ("purl set", "purl 集合"),
 ];
 

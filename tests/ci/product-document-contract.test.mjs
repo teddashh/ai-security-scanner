@@ -365,7 +365,7 @@ test("public development status stays catalog-backed and excludes local handoff 
   assert.match(
     statusContent,
     new RegExp(
-      `contains ${catalog.length} records: ${integrated.length} integrated, runnable engines and ${experimental.length} experimental\\s+integrations that remain non-runnable`,
+      `contains ${catalog.length} records: ${integrated.length} integrated, runnable engines and ${experimental.length} experimental\\s+integrations? that remains? non-runnable`,
       "iu",
     ),
   );

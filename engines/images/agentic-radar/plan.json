@@ -6,7 +6,7 @@
   "support_until": "2026-12-12",
   "maintenance_owner": "teddashh/ai-security-scanner maintainers",
   "update_procedure": "docs/engine-maintenance.md",
-  "publish_state": "publication_in_progress",
+  "publish_state": "published_managed_artifact",
   "source": {
     "repository": "https://github.com/splx-ai/agentic-radar",
     "revision": "65a7e4bd01e2034c7cb52e9620eeed287688cc53",
@@ -17,7 +17,7 @@
   "final_artifact": {
     "repository": "ghcr.io/teddashh/ai-security-scanner-engine-agentic-radar",
     "tag": "0.14.1-1",
-    "digest": null
+    "digest": "sha256:2a8d16b9ff5ac7974b0aea8e6504219e0da295b804d01f51da0b4267d7cdafae"
   },
   "build_recipe": {
     "source_revision": "65a7e4bd01e2034c7cb52e9620eeed287688cc53",
@@ -205,17 +205,29 @@
     "primary_format": "json",
     "path": "/output/agentic-radar.json",
     "media_type": "application/json",
-    "adapter_state": "workspace_unreleased"
+    "adapter_state": "released"
   },
   "license": {
     "disposition": "allow",
     "rationale": "Apache-2.0 permits redistribution with the upstream license and notices retained.",
     "source_offer_path": null
   },
-  "blockers": [
-    "no verified published digest: build and independently verify the managed image for linux/amd64 and linux/arm64, then freeze its anonymous-pull and signed publication evidence"
-  ],
-  "publication": null,
+  "blockers": [],
+  "publication": {
+    "workflow_run": "https://github.com/teddashh/ai-security-scanner/actions/runs/37177664415",
+    "source_revision": "b11307cf182a888b5e2e1b1d9c0434be4a9778c0",
+    "platforms": [
+      "linux/amd64",
+      "linux/arm64"
+    ],
+    "platform_digests": {
+      "linux/amd64": "sha256:a2b615c2ec3450ffe687cf87be7f83cd97c231e40bc1732d62a2d5b4710d50e3",
+      "linux/arm64": "sha256:df33eca07e4b00d7ffa3309dd80a587ae0f79029d93c08578a7cfe7087ae3f10"
+    },
+    "anonymous_pull_verified": true,
+    "evidence_artifact": "agentic-radar-image-evidence-37177664415-1",
+    "managed_smoke_evidence_sha256": "sha256:c0baf0707963294e13904c0b01b0499a8b509d821da1da76fbfdc3e995690b98"
+  },
   "managed_runtime": {
     "non_root_user": "65532:65532",
     "read_only_rootfs": true,

@@ -62,7 +62,7 @@ Agent 的沙箱擋住下載或應用程式時，它會請你允許那一個指�
 
 ## 串接的工具
 
-main 目前可執行的引擎集合整合了 23 個上游專案。準備中的 v0.4.0 新增可選的 ZAP 被動網站檢查；已發布的 v0.3.1 安裝包仍維持固定的 22 個工具。目錄另外保留實驗性、不可派送的 AI 契約；它們不是目前的掃描能力。詳見[開發狀態](docs/development-status.zh-TW.md)。產品只會針對每個選定資產執行適用工具，保留原始識別碼、嚴重度、證據與修正建議，再把所有已完成結果整理到同一份報告。
+main 目前可執行的引擎集合整合了 24 個上游專案。準備中的 v0.4.0 新增可選的 ZAP 被動網站檢查，以及 Agentic Radar 離線 AI 工作流程盤點；已發布的 v0.3.1 安裝包仍維持固定的 22 個工具。目錄另外保留實驗性、不可派送的 Garak 模型測試契約；它們不是目前的掃描能力。詳見[開發狀態](docs/development-status.zh-TW.md)。產品只會針對每個選定資產執行適用工具，保留原始識別碼、嚴重度、證據與修正建議，再把所有已完成結果整理到同一份報告。
 
 **選定資產與授權 → 薄層轉接器 → 上游掃描器 → 輸出轉換器 → 一份依資產整理的標準化報告**
 
@@ -112,10 +112,11 @@ main 目前可執行的引擎集合整合了 23 個上游專案。準備中的 v
 | [Kubescape](https://github.com/kubescape/kubescape) | 離線檢查使用者明確選定的本機 Kubernetes manifests。 |
 | [kube-bench](https://github.com/aquasecurity/kube-bench) | 檢查不可變的節點設定副本是否符合 CIS，不使用具特權的即時主機掛載。 |
 
-### MCP 設定
+### AI 工作流程與 MCP 設定
 
 | 工具 | ai-security-scanner 的使用方式 |
 | --- | --- |
+| [Agentic Radar](https://github.com/splx-ai/agentic-radar) | 可選的離線工作流程盤點，支援一份已核准儲存庫快照中的 LangGraph、CrewAI、n8n、OpenAI Agents 與 AutoGen；不執行工作流程，也不連線模型。目前已在 main 上提供，將納入 v0.4.0。 |
 | [MCP Armor](https://github.com/aira-security/mcp-armor) | 靜態檢查一份已核准的 MCP 設定快照中的硬編碼憑證與過度工具權限，不啟動或連線 MCP 伺服器，也不載入模型。 |
 
 探索、盤點、SBOM 與 localhost TCP 連線工具會和弱點問題清楚分開。完整固定版本、授權、設定與執行界線記錄在[引擎目錄](docs/engine-catalog.md)。

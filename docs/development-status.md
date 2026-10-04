@@ -2,7 +2,7 @@
 
 [繁體中文](development-status.zh-TW.md) · [Documentation](README.md)
 
-_Updated 2026-10-03._
+_Updated 2026-10-04._
 
 This page summarizes current engineering status for contributors. It is not a product specification
 or release declaration. [The product specification](product-spec.md) remains the source of truth for
@@ -12,12 +12,12 @@ product behavior, and the [current product review](product-audit.md) tracks the 
 
 - The current release, [v0.3.1](https://github.com/teddashh/ai-security-scanner/releases/tag/v0.3.1), is on the stable channel for Linux, macOS, and Windows. See the [release record](release/v0.3.1.md) for exact installer and updater observations.
 - The released desktop includes Prowler failure headlines, approved AWS report grouping, reconnect-and-rescan, blocked-scan continuations, Semgrep `1.174.0-4`, and explicit kube-bench/KICS incomplete-coverage handling.
-- A fresh owner-signed-in Microsoft 365 live rerun remains unobserved. Garak and Agentic Radar remain non-runnable; these records are not additional advertised capabilities.
+- A fresh owner-signed-in Microsoft 365 live rerun remains unobserved. Garak remains non-runnable. Agentic Radar workflow inventory is dispatchable on main and absent from frozen v0.3.1 installers.
 - The paired repository [Agent Skills](getting-started.md#use-with-an-agent-skill) install the
   desktop release, check that a computer can scan, guide a scan in the app, and save its report;
   the Linux source build is documented there for changing the product.
-- The engine catalog contains 25 records: 23 integrated, runnable engines and 2 experimental
-  integrations that remain non-runnable.
+- The engine catalog contains 25 records: 24 integrated, runnable engines and 1 experimental
+  integration that remains non-runnable.
 - Repository, website/API, infrastructure, cloud, Microsoft 365, and Kubernetes paths use bounded
   upstream checks and feed one product-owned report.
 - Report presentation distinguishes measured zero findings from an asset that was not measured, and
@@ -31,19 +31,18 @@ product behavior, and the [current product review](product-audit.md) tracks the 
   wire contracts; unknown permissions and tasks cannot claim authorization, execution, or coverage.
 - No model endpoint or hosted provider was contacted while developing the experimental AI paths.
 
-The owner has selected result integrity, engine build/patch maintenance, and experimental integrations before **v0.4.0 stable**. Result-integrity work now separates Greenbone tasks by exact grant, freezes task grant membership for resume, rejects malformed or unevaluated Kubescape output as complete coverage, and streams large reports within the 512 MiB evidence budget. This is development work; it is not included in the frozen v0.3.1 installer. The Gitleaks fixture rebuild and complete recipe/patch audit are finished. ZAP now has an explicit passive website choice, per-grant dispatch and native per-request pacing; Garak and Agentic Radar activation remain in progress; v0.4.0 has not been packaged or published.
+The owner has selected result integrity, engine build/patch maintenance, and experimental integrations before **v0.4.0 stable**. Result-integrity work now separates Greenbone tasks by exact grant, freezes task grant membership for resume, rejects malformed or unevaluated Kubescape output as complete coverage, and streams large reports within the 512 MiB evidence budget. This is development work; it is not included in the frozen v0.3.1 installer. The Gitleaks fixture rebuild and complete recipe/patch audit are finished. ZAP now has an explicit passive website choice, per-grant dispatch and native per-request pacing; Agentic Radar is published and optionally dispatchable offline; Garak activation remains in progress; v0.4.0 has not been packaged or published.
 
 ## AI integration work
 
 | Integration | Implemented | Current fail-closed boundary |
 | --- | --- | --- |
 | Garak | A thin adapter preserves probe identifiers and failure counts without inventing severity. | No managed image, exact model-endpoint scope grant, or product-owned credential path exists. |
-| Agentic Radar | The dedicated offline image, typed framework selection and native static graph contract are implemented. Controlled amd64 runs cover all five frameworks, empty input and environment/target-code isolation. CrewAI diagnostics remain incomplete inventory; graphs never become vulnerability findings. | No verified published digest yet. Publication and independent signed/anonymous verification remain required before dispatch; the local machine-output exception is fully audited and has not been submitted upstream. |
+| Agentic Radar | The dedicated offline image, typed framework selection and native static graph contract are implemented. Controlled amd64 runs cover all five frameworks, empty input and environment/target-code isolation. CrewAI diagnostics remain incomplete inventory; graphs never become vulnerability findings. | Published, digest-pinned and optionally dispatchable offline on main; absent from frozen v0.3.1 installers. Both anonymous platform bytes and signed source evidence are verified. The audited machine-output exception remains unsent. |
 | MCP Armor | One exact MCP configuration file can be selected from an immutable repository snapshot and checked by a restricted, model-free configuration launcher. The local image produced a complete two-check report and an excessive-permission finding from a synthetic fixture with networking disabled. | The image is published, digest-pinned, and dispatchable, but not default-enabled. It runs with networking disabled over one approved MCP configuration snapshot; it does not start or contact an MCP server or load a model. |
 | Augustus | Research-only, pure-data 14-rule preflight contracts and rejection fixtures define the required endpoint, cost, request, deadline, sandbox, and output boundaries. | No production catalog entry, adapter, launcher, provider connection, credential path, or dispatch path exists yet. |
 
-Garak and Agentic Radar remain `runnable: false`. Research artifacts and local image identifiers are
-not substitutes for a published digest or an authorized runtime path.
+Garak remains `runnable: false`. Agentic Radar has a verified published digest and an optional immutable-snapshot framework path. Research artifacts and local image identifiers alone do not establish dispatch.
 
 ## Other experimental engine integrations
 
@@ -64,6 +63,8 @@ and MCP Armor had no selected MCP configuration. These are results for that fixt
 counts for other repositories. See [the exact pin and recorded result](engine-catalog.md#grype-repository-support).
 
 ## Recorded verification baseline
+
+The October 4 Agentic Radar integration passed 2,097 Rust tests, 798 frontend tests (six explicit skips), 522 component tests, 91 CI contracts and 19 publication-verifier tests, plus formatting, Clippy, desktop compile and the production build. Seven native offline cases passed again using the published amd64 image; both platform bytes, source-bound signatures and four SBOMs were independently verified. Inventory never becomes a security result.
 
 The October 4 ZAP integration passed 2,092 Rust tests, 798 frontend tests (six explicit skips), 518 component tests, formatting, Clippy, and the production build. Controlled native amd64 scans verified frozen hostname resolution, origin boundaries, keep-alive request pacing and cancellation; the report regression preserves all native alert instances. This verifies the current source and controlled fixtures, not a published v0.4.0 installer.
 
@@ -99,7 +100,7 @@ warning, and `complete: true` under `network=none`.
 
 ## Current blockers
 
-- Garak and Agentic Radar remain non-runnable while their catalog blockers exist.
+- Garak remains non-runnable while its catalog blockers exist.
 
 These blockers describe fail-closed admission state; they do not authorize a publication or release
 plan. Publication, packaging, signing, versioning, and compliance posture remain product-owner

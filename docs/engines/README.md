@@ -23,7 +23,8 @@ One page per scanner and per shared launcher. Each page records how the product 
 | | [KICS](kics.md) | Upstream image | None |
 | Kubernetes cluster, Kubernetes node | [Kubescape](kubescape.md), [kube-bench](kube-bench.md) | [Local launcher](local-launcher.md) | `engine-images-local-k8s.yml` |
 | MCP configuration in a repository | [MCP Armor](mcp-armor.md) | Its own entrypoint | `engine-image-mcp-armor.yml` |
-| AI model endpoint, agent repository | [garak](garak.md), [Agentic Radar](agentic-radar.md) (both experimental, not published) | | None |
+| Agent repository snapshot | [Agentic Radar](agentic-radar.md) (optional offline inventory) | Dedicated static launcher | `engine-image-agentic-radar.yml` |
+| AI model endpoint | [garak](garak.md) (experimental, not published) | | None |
 
 Engines that reach a network target or a provider leave their container only through the [egress gateway](egress-gateway.md).
 

@@ -2,7 +2,7 @@
 
 Recipe and patch records reviewed on 2026-10-03; the source baseline before this maintenance work is `38f912f`. This index describes the recipes that exist; it does not certify that every current recipe builds or matches its published image. The per-engine pages contain the detailed invocation, adapter fields, fixtures, downstream changes and incident history.
 
-There are **25 catalog engines with 25 distinct primary upstream repositories**, **22 scanner Dockerfiles**, and **one additional egress gateway Dockerfile**. KICS and ZAP use upstream images. garak has a plan but no Dockerfile or runnable image. Agentic Radar has a locally tested dedicated recipe; its verified public image is pending. Plugins, rule repositories, Semgrep submodules, PowerShell modules, feeds, vulnerability databases and toolchains add more upstream inputs; 25 is not the count of the complete dependency closure.
+There are **25 catalog engines with 25 distinct primary upstream repositories**, **22 scanner Dockerfiles**, and **one additional egress gateway Dockerfile**. KICS and ZAP use upstream images. garak has a plan but no Dockerfile or runnable image. Agentic Radar has a published and independently verified dedicated offline image. Plugins, rule repositories, Semgrep submodules, PowerShell modules, feeds, vulnerability databases and toolchains add more upstream inputs; 25 is not the count of the complete dependency closure.
 
 The checked-in Semgrep submodule lock alone declares **36 additional repository URLs**, disjoint from those 25 primary URLs: **61 declared repositories** before counting the other engines' secondary sources or package dependencies. This is a source-input inventory, not 61 scanner images. Repository renames, alternate URLs and different revisions still need reconciliation when changing an acquisition pin.
 
@@ -47,7 +47,7 @@ Run these from the repository root. **Dockerfile location is not the build conte
 | [KICS](kics.md) | No local Dockerfile | Pull the catalog's upstream image by digest; queries belong to that image. |
 | [ZAP](zap.md) | No local Dockerfile | Digest-pinned native passive website execution; bounded automation plan and exact gateway scope. |
 | [garak](garak.md) | No local Dockerfile | Plan only; no build recipe or published image. |
-| [Agentic Radar](agentic-radar.md) | [Dockerfile](../../engines/images/agentic-radar/Dockerfile) / `.` | None; hashed native source, machine-output patch, dedicated launcher and separate runtime/build wheel locks. Local native five-framework QA passed; public digest verification pending. |
+| [Agentic Radar](agentic-radar.md) | [Dockerfile](../../engines/images/agentic-radar/Dockerfile) / `.` | None; hashed native source, machine-output patch, dedicated launcher and separate runtime/build wheel locks. Published `0.14.1-1`; native five-framework, empty-state and dotenv/code-isolation QA repeated with the public image, anonymous bytes and signed source evidence verified. |
 | [Egress gateway](egress-gateway.md) | [Dockerfile](../../engines/images/egress-gateway/Dockerfile) / `.` | None; project Rust source. Runtime pin is in [managed-egress-gateway.json](../../runtime/managed-egress-gateway.json), outside the scanner catalog. |
 
 For an engine with a Dockerfile, this builds a **local, single-platform review image**:

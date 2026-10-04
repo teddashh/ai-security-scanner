@@ -117,6 +117,11 @@
       "id": "zap",
       "repository": "zaproxy/zaproxy",
       "stars": 15865
+    },
+    {
+      "id": "agentic-radar",
+      "repository": "splx-ai/agentic-radar",
+      "stars": 1057
     }
   ],
   "ruleSources": [

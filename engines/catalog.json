@@ -3251,7 +3251,12 @@
     "homepage_url": "https://github.com/splx-ai/agentic-radar",
     "license_spdx": "Apache-2.0",
     "distribution_mode": "pull_pinned_image",
-    "image": null,
+    "image": {
+      "repository": "ghcr.io/teddashh/ai-security-scanner-engine-agentic-radar",
+      "tag": "0.14.1-1",
+      "digest": "sha256:2a8d16b9ff5ac7974b0aea8e6504219e0da295b804d01f51da0b4267d7cdafae",
+      "signature_identity": null
+    },
     "source_revision": "65a7e4bd01e2034c7cb52e9620eeed287688cc53",
     "engine_version": "0.14.1",
     "rule_version": null,
@@ -3285,9 +3290,9 @@
       "--output",
       "/output"
     ],
-    "status": "experimental",
+    "status": "integrated",
     "notices": [
-      "Managed offline image publication is in progress. Dispatch remains disabled until the immutable digest and signed anonymous-pull evidence are verified.",
+      "The published managed image inventories one selected native framework offline from an immutable repository snapshot. It does not execute project code or contact hosted models.",
       "Agentic Radar output is retained as workflow inventory only. Its generic category-based vulnerability messages are not normalized as findings because they carry no stable rule identifier, severity, or per-result evidence.",
       "A structured warning or incomplete machine-output envelope preserves the partial graph but marks coverage incomplete; it never becomes a clean scan result."
     ],
@@ -3303,8 +3308,8 @@
         "source_revision": "65a7e4bd01e2034c7cb52e9620eeed287688cc53",
         "source_ref": "v0.14.1",
         "acquisition_source": "https://github.com/splx-ai/agentic-radar/commit/65a7e4bd01e2034c7cb52e9620eeed287688cc53",
-        "artifact_source_revision": null,
-        "source_association": "source_build_required"
+        "artifact_source_revision": "b11307cf182a888b5e2e1b1d9c0434be4a9778c0",
+        "source_association": "attested_match"
       },
       "rules": {
         "mode": "not_applicable",
@@ -3323,7 +3328,7 @@
         "version": "0.2.5",
         "acquisition_source": "workspace://src-tauri/src/adapters/mod.rs",
         "source_revision": "d3826fdb018e6ed0d54f00c17d7fdfd0c17aed41",
-        "release_state": "workspace_unreleased"
+        "release_state": "released"
       }
     },
     "compatibility": {
@@ -3331,11 +3336,9 @@
       "support_until": "2026-12-12",
       "maintenance_owner": "teddashh/ai-security-scanner maintainers",
       "update_procedure": "docs/engine-maintenance.md",
-      "runnable": false,
+      "runnable": true,
       "artifact_state": "managed_build_plan",
-      "blocked_by": [
-        "no verified published digest: build and independently verify the managed image for linux/amd64 and linux/arm64, then freeze its anonymous-pull and signed publication evidence"
-      ],
+      "blocked_by": [],
       "knowledge_input": {
         "kind": "runtime_bound",
         "identifier": "repository working-tree snapshot",
@@ -3355,7 +3358,7 @@
         "primary_format": "json",
         "path": "/output/agentic-radar.json",
         "media_type": "application/json",
-        "adapter_state": "workspace_unreleased"
+        "adapter_state": "released"
       },
       "resources": {
         "memory_mb": 1024,

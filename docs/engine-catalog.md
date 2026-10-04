@@ -2,7 +2,7 @@
 
 Status: current source catalog companion
 
-Last updated: 2026-09-20
+Last updated: 2026-10-04
 
 Exact artifact facts: [`engines/catalog.json`](../engines/catalog.json)
 
@@ -91,6 +91,8 @@ The source and license below identify the pinned engine family. Exact release, s
 | Kubernetes posture | [Kubescape](https://github.com/kubescape/kubescape) | Apache-2.0 | Managed OCI image with pinned offline framework inputs over explicit local manifests; submission and host scanning disabled. |
 | Kubernetes CIS | [kube-bench](https://github.com/aquasecurity/kube-bench) | Apache-2.0 | Managed OCI image over an immutable, digest-verified node configuration snapshot; no privileged live-host mounts. |
 | MCP configuration | [MCP Armor](https://github.com/aira-security/mcp-armor/tree/6af4cee4665ab6242f02a88952f9127b6a04922a) | Apache-2.0 source; model terms separately excluded | Published, digest-pinned configuration-only image; dispatchable but not default-enabled. A retained patch runs only the existing hardcoded-secret and excessive-tool-permission checks against one exact configuration snapshot. It cannot contact or start an MCP server and does not import or download the prompt-injection model. Findings from completed checks survive partial coverage; a clean result requires the exact two-check ledger to complete. Missing configuration is not tested. See the [pinned decision](research/mcp-armor-evaluation.md). |
+| Agent workflow inventory | [Agentic Radar](https://github.com/splx-ai/agentic-radar/tree/65a7e4bd01e2034c7cb52e9620eeed287688cc53) | Apache-2.0 | Published offline native static workflow inventory over one typed framework and immutable repository snapshot; preserves incomplete diagnostics and produces observations only, never vulnerability findings. |
+| Website passive findings | [OWASP ZAP](https://github.com/zaproxy/zaproxy/tree/2665d972f6d587ba4773a95053ac39af3fdf8df9) | Apache-2.0 | Explicit advanced passive website choice on main, absent from frozen v0.3.1 installers. Crawls one exact authorized origin at 5 requests/s, preserving upstream alert identity, severity, remediation and per-instance evidence. Native per-request pacing, bounded automation-plan dispatch and recovery ownership are implemented. |
 
 ### Grype repository support
 
@@ -109,10 +111,11 @@ This is current source behavior, not a claim about the earlier public installer.
 also records known inconsistencies in image publication metadata; scan results do not establish
 build provenance.
 
+
 ### Experimental, non-dispatchable engine contracts
 
-These catalog records have thin adapters and pinned evidence contracts, and all remain
-`runnable: false`. None has a verified published image digest. A local build candidate, where
+Experimental records have thin adapters and pinned evidence contracts, and all remain
+`runnable: false`. None has a verified published image digest. Garak is the remaining experimental record. A local build candidate, where
 present, is build evidence only and does not make a record dispatchable. They are not current scan
 capabilities. Their blockers are enforced by the registry rather than left as an operator
 convention.
@@ -120,8 +123,6 @@ convention.
 | Capability | Upstream engine / source | Pinned license record | Evaluated boundary |
 |---|---|---|---|
 | Model endpoint probes | [garak](https://github.com/NVIDIA/garak/tree/93aa9cdec309ec4170559676f1826ea2a679920c) | Apache-2.0 | Reads probe/detector failure counts without inventing severity; real endpoint testing and packaging remain blocked. |
-| Agent workflow inventory | [Agentic Radar](https://github.com/splx-ai/agentic-radar/tree/65a7e4bd01e2034c7cb52e9620eeed287688cc53) | Apache-2.0 | Normalizes a patched machine-readable workflow graph as observations, never its generic category warnings as findings. |
-| Website passive findings | [OWASP ZAP](https://github.com/zaproxy/zaproxy/tree/2665d972f6d587ba4773a95053ac39af3fdf8df9) | Apache-2.0 | Explicit advanced passive website choice on main, absent from frozen v0.3.1 installers. Crawls one exact authorized origin at 5 requests/s, preserving upstream alert identity, severity, remediation and per-instance evidence. Native per-request pacing, bounded automation-plan dispatch and recovery ownership are implemented. |
 
 ### Provider scope and credentials
 

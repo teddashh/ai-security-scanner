@@ -9,7 +9,7 @@ Decision: consume Agentic Radar's static workflow graph as typed inventory obser
 its tool-category warnings or agent-mitigation assessments into findings. The pinned revision
 already has a JSON graph exporter, so the product does not need a second graph builder. The retained
 narrow orchestration patch only supplies a versioned, fail-closed machine envelope around that same
-parser-produced graph. At the original research checkpoint the product record remained experimental and fixture-bound. Owner-authorized integration on 2026-10-04 added a locally tested managed image and typed framework selection; catalog admission still waits for independently verified publication. See the current [engine notebook](../engines/agentic-radar.md).
+parser-produced graph. At the original research checkpoint the product record remained experimental and fixture-bound. Owner-authorized integration on 2026-10-04 added a locally tested managed image and typed framework selection; its subsequent signed publication and independent anonymous verification admitted optional inventory on main. See the current [engine notebook](../engines/agentic-radar.md).
 
 This static review is pinned to
 [`splx-ai/agentic-radar@65a7e4bd01e2034c7cb52e9620eeed287688cc53`](https://github.com/splx-ai/agentic-radar/tree/65a7e4bd01e2034c7cb52e9620eeed287688cc53)
@@ -253,4 +253,4 @@ needed:
   the live issue tracker.
 
 Step 2b and Step 2c are therefore already present and internally consistent. Do not add a second
-catalog entry, adapter, patch, fixture family, or draft. Those three blockers describe the historical research checkpoint. The owner subsequently authorized v0.4.0 integration. As of 2026-10-04, the offline image, typed selection and complete owned downstream-exception record are implemented and native-tested; dispatch remains blocked until public image evidence is verified. Upstream acceptance is not claimed and drafts remain unsent.
+catalog entry, adapter, patch, fixture family, or draft. Those three blockers describe the historical research checkpoint. The owner subsequently authorized v0.4.0 integration. As of 2026-10-04, the offline image, typed selection and complete owned downstream-exception record are implemented and native-tested; public image evidence was subsequently verified and optional offline dispatch admitted on main. Upstream acceptance is not claimed and drafts remain unsent.

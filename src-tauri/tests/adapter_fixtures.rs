@@ -366,10 +366,18 @@ fn registry_covers_exactly_the_twenty_five_catalog_engines() {
         .get("agentic-radar")
         .expect("Agentic Radar manifest");
     assert_eq!(agentic_radar.category, EngineCategory::AiAgentFramework);
-    assert!(!agentic_radar.compatibility.runnable);
+    assert!(agentic_radar.compatibility.runnable);
     assert!(!agentic_radar.default_enabled);
-    assert!(agentic_radar.image.is_none());
-    assert!(agentic_radar.release_blocker().is_some());
+    let image = agentic_radar
+        .image
+        .as_ref()
+        .expect("admitted Agentic Radar image");
+    assert_eq!(image.tag.as_deref(), Some("0.14.1-1"));
+    assert_eq!(
+        image.digest.as_deref(),
+        Some("sha256:2a8d16b9ff5ac7974b0aea8e6504219e0da295b804d01f51da0b4267d7cdafae")
+    );
+    assert!(agentic_radar.release_blocker().is_none());
     assert_eq!(
         agentic_radar.source_revision.as_deref(),
         Some("65a7e4bd01e2034c7cb52e9620eeed287688cc53")

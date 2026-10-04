@@ -162,6 +162,10 @@ fn fixture(engine: &str, outcomes: EngineOutcomes) -> (&'static [u8], &'static s
             include_bytes!("../../docs/research/fixtures/mcp-armor/config-findings.json"),
             "mcp-armor.json",
         ),
+        "agentic-radar" => (
+            include_bytes!("../../docs/research/fixtures/agentic-radar/n8n.json"),
+            "agentic-radar.json",
+        ),
         other => panic!("missing fixture for {other}"),
     }
 }
@@ -851,6 +855,14 @@ fn all_engines_in_one_report<T>(
     let m365 = attach_provider_asset(&service, &connectors, &case.id, SourceKind::Microsoft365Tenant, "microsoft-graph-directory-inventory", br#"{"value":[{"id":"22222222-2222-4222-8222-222222222222","displayName":"Audit tenant"}]}"#, AssetKind::Tenant);
 
     let repo = &local_assets["repo"].0;
+    service
+        .select_agentic_framework(
+            &case.id,
+            repo,
+            &local_assets["repo"].1.sha256,
+            Some(ai_security_scanner_lib::agentic_radar_input::AgenticFramework::N8n),
+        )
+        .unwrap();
     let oci = &local_assets["oci"].0;
     let manifests = &local_assets["manifests"].0;
     let node = &local_assets["node"].0;
@@ -1028,6 +1040,7 @@ fn all_engines_in_one_report<T>(
         ("checkov", repo),
         ("kics", repo),
         ("mcp-armor", repo),
+        ("agentic-radar", repo),
         ("kubescape", manifests),
         ("kube-bench", node),
         ("cloudquery", &aws),
@@ -1400,7 +1413,14 @@ fn the_retired_coordinate_word_is_found_by_its_own_two_characters() {
 
 /// Discovery engines prepare a target for a security check. Their output is
 /// inventory, not a result, in either run.
-const INVENTORY_ONLY_ENGINES: [&str; 5] = ["cloudquery", "httpx", "naabu", "steampipe", "syft"];
+const INVENTORY_ONLY_ENGINES: [&str; 6] = [
+    "agentic-radar",
+    "cloudquery",
+    "httpx",
+    "naabu",
+    "steampipe",
+    "syft",
+];
 
 /// The engines this build will actually run, read from the release contract
 /// rather than listed here.

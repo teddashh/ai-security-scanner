@@ -1,11 +1,11 @@
 # Agentic Radar
 
-The owner-authorized managed integration is built and tested locally; publication is pending. It statically inventories agents, tools, MCP servers and workflow relationships in one immutable repository snapshot. Inventory supplements the security checks and never produces findings or a successful security-scan claim.
+The managed integration is published and optionally dispatchable on main; it is absent from frozen v0.3.1 installers. It statically inventories agents, tools, MCP servers and workflow relationships in one immutable repository snapshot. Inventory supplements the security checks and never produces findings or a successful security-scan claim.
 
 | Item | Value |
 | --- | --- |
 | Upstream | [splx-ai/agentic-radar](https://github.com/splx-ai/agentic-radar/tree/65a7e4bd01e2034c7cb52e9620eeed287688cc53) 0.14.1, revision `65a7e4bd01e2034c7cb52e9620eeed287688cc53`, Apache-2.0 |
-| Image | Candidate `ghcr.io/teddashh/ai-security-scanner-engine-agentic-radar:0.14.1-1`; catalog image and final digest remain null until anonymous access, both platform manifests and signed evidence are independently verified. |
+| Image | `ghcr.io/teddashh/ai-security-scanner-engine-agentic-radar:0.14.1-1@sha256:2a8d16b9ff5ac7974b0aea8e6504219e0da295b804d01f51da0b4267d7cdafae`; verified anonymous amd64/arm64 image bytes, signed provenance and four SBOMs. |
 | Recipe | [Dockerfile](../../engines/images/agentic-radar/Dockerfile), repository-root context; no host preparation. Plan binds the archive, patch, launcher, bases and both dependency locks. |
 | Launcher | Dedicated [Go launcher](../../engines/images/agentic-radar/launcher/main.go), `/usr/local/bin/ai-security-scanner-agentic-radar-entrypoint`; does not change the published MCP Armor launcher. |
 | Exception | [Machine-output patch](../research/patches/agentic-radar-0.14.1-machine-json.patch), SHA-256 `d32c61e4c2134141686e950a3f025c1b521a1f0096e5572c6846b65d0afb9d72`; complete owned audit in [PATCHES.md](../../engines/images/agentic-radar/PATCHES.md). No contribution has been submitted. |
@@ -22,7 +22,7 @@ The image retains upstream and product licenses, the patch, audit, locks and Doc
 
 ## How it is wired
 
-- **Publication boundary.** While the verified public digest is absent, the catalog stays experimental and non-runnable, with one blocker: “no verified published digest”. An explicit request records `engine_release_unavailable`. Publishing a candidate alone does not clear that boundary.
+- **Publication boundary.** The admitted catalog is integrated and runnable, with no blockers and default enablement off. Its immutable image is independently verified against the exact publication source and signed evidence; later candidates retain the unavailable-image boundary until verified.
 - **Typed selection.** The optional repository selector accepts only `langgraph`, `crewai`, `n8n`, `openai-agents` or `autogen`; no automatic framework guessing. The backend verifies the connected immutable snapshot before saving the selection. Its typed metadata and exact `ai-security-scanner:agentic-radar-framework` identifier must agree. With no selection, the default plan omits inventory. The launcher independently compares the native envelope's framework with the frozen request. The same selection is available in project and mixed-environment routes.
 - **Network and resources.** Catalog: networking disabled; 1024 MB memory, 2048 MB disk, 1000 CPU millis, 128 pids, 1800 s.
 - **Invocation.** Fixed launcher command `--engine agentic-radar --workspace /workspace --output /output`. "Required execution boundary before dispatch" in `docs/research/agentic-radar-evaluation.md` allows only the static `scan ... --export-graph-json` path: never `test` or `--harden-prompts`, no credential variables, no network, and a working directory outside the snapshot, with `PYTHON_DOTENV_DISABLED=1`, because the upstream CLI loads `.env` at import. The isolated Python process receives a fresh fixed environment, not inherited credentials. Its native export deadline is ten minutes within the catalog’s thirty-minute outer limit.
@@ -56,6 +56,8 @@ All graph vulnerability arrays were empty. LangGraph and the isolation case reta
 
 ## Lessons from real runs
 
+- **2026-10-04, shared terminal report.** The all-engine report audit must explicitly select the native framework before planning this optional inventory engine. Its graph belongs in inventory, with no security finding or security-completion claim. Adding n8n to the full save/reopen/export path exposed missing Traditional Chinese translations for workflow and model redaction markers; the shared HTML report now names those withheld values in the selected language.
+
 - 2026-09-25: every local-project scan planned the then-unavailable engine. Settled skips counted as unfinished work, making otherwise complete scans look partial. Default plans now omit unavailable engines; explicit requests still record `engine_release_unavailable`. Keep optional inventory outside security-success accounting.
 - 2026-10-04: the upstream CLI loads dotenv at import. An external working directory alone is insufficient protection against dotenv search or inherited settings; isolated Python, a fixed environment and `PYTHON_DOTENV_DISABLED=1` are required and exercised with a controlled override/canary. CrewAI's native diagnostics remain incomplete inventory; installing or executing a target framework is not an appropriate fix.
 
@@ -68,3 +70,10 @@ Follow [section 4](../engine-maintenance.md#4-updating-an-engine), then:
 3. Regenerate both hash-required binary-wheel locks from primary package metadata for Python 3.11 and both Linux architectures. Check native import closure and upstream version constraints; keep build/test dependencies out of the runtime. Change Dockerfile, plan input hashes and validator contract together. Never float a dependency or bypass an unavailable wheel.
 4. Re-run nine patched upstream tests, Go launcher boundary tests, all five static frameworks, the empty directory and dotenv/code-execution isolation. Preserve CrewAI diagnostics. Compare raw graph IDs/types/relationships with typed observations; generic vulnerability claims, prompts, descriptions, URLs, headers and commands must not become findings or exposed inventory text. Existing six research fixtures remain pinned historical data; regenerate, rather than hand-edit, if upstream semantics change.
 5. Use a fresh immutable image tag whenever bytes change; update the dedicated workflow, catalog-validator contract, plan, notices and this page. Verify anonymous index and both platform pulls, exact publication source/workflow, SBOM and signed evidence before admitting the digest. Never rewrite historical scan provenance or old image bytes. Current support date is 2026-12-12.
+
+
+## Publication verification — 2026-10-04
+
+[Workflow 37177664415](https://github.com/teddashh/ai-security-scanner/actions/runs/37177664415) published `0.14.1-1` from product source `b11307cf182a888b5e2e1b1d9c0434be4a9778c0`. Index: `sha256:2a8d16b9ff5ac7974b0aea8e6504219e0da295b804d01f51da0b4267d7cdafae`. amd64: `sha256:a2b615c2ec3450ffe687cf87be7f83cd97c231e40bc1732d62a2d5b4710d50e3`. arm64: `sha256:df33eca07e4b00d7ffa3309dd80a587ae0f79029d93c08578a7cfe7087ae3f10`.
+
+The downloaded `agentic-radar-image-evidence-37177664415-1` passed the fixed publication verifier: 14 root inventory entries, ten nested entries, five verified attestations, four SBOMs and managed smoke receipt `sha256:c0baf0707963294e13904c0b01b0499a8b509d821da1da76fbfdc3e995690b98`. Independent anonymous registry reads hashed every index, platform manifest, configuration and 23 distinct layer blobs; source/patch labels, architecture, entrypoint and non-root user matched. All seven controlled offline cases were repeated with the published image and retained the same graph counts, completeness and diagnostics. CrewAI raw SHA-256 for that run is `f78ad926bbfc7fbaa54e810ac0afa61f6bf1c880c4c900f797ca3f7835d68a17`; native transient graph identifiers may differ between executions. No native arm64 runtime result is claimed.

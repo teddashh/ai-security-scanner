@@ -62,7 +62,7 @@ See the [release record](docs/release/v0.3.1.md) for exact installer verificatio
 
 ## Integrated tools
 
-On main, the current runnable engine set integrates 23 upstream projects. The upcoming v0.4.0 adds the optional ZAP passive website profile; the published v0.3.1 installers retain their frozen set of 22 tools. The catalog separately retains experimental, non-dispatchable AI contracts; those are not current scan capabilities. See [Development status](docs/development-status.md). The product runs only the tools that apply to each selected asset, keeps their original identifiers, severity, evidence, and remediation, then organizes every completed result in the same report.
+On main, the current runnable engine set integrates 24 upstream projects. The upcoming v0.4.0 adds the optional ZAP passive website profile and offline AI workflow inventory with Agentic Radar; the published v0.3.1 installers retain their frozen set of 22 tools. The catalog separately retains an experimental, non-dispatchable Garak model-testing contract; those are not current scan capabilities. See [Development status](docs/development-status.md). The product runs only the tools that apply to each selected asset, keeps their original identifiers, severity, evidence, and remediation, then organizes every completed result in the same report.
 
 **Selected assets and authorization → thin adapters → upstream scanners → output converters → one standardized report organized by asset**
 
@@ -112,10 +112,11 @@ The released catalog pins the Grype image to **`0.117.0-4`**, digest `sha256:56b
 | [Kubescape](https://github.com/kubescape/kubescape) | Offline configuration checks over explicitly selected local Kubernetes manifests. |
 | [kube-bench](https://github.com/aquasecurity/kube-bench) | CIS checks over an immutable node-configuration snapshot, without a privileged live-host mount. |
 
-### MCP configuration
+### AI workflows and MCP configuration
 
 | Tool | What ai-security-scanner uses it for |
 | --- | --- |
+| [Agentic Radar](https://github.com/splx-ai/agentic-radar) | Optional offline workflow inventory for LangGraph, CrewAI, n8n, OpenAI Agents, and AutoGen in one approved repository snapshot. It does not execute the workflow or contact a model. Available on main for v0.4.0. |
 | [MCP Armor](https://github.com/aira-security/mcp-armor) | Static checks over one approved MCP configuration snapshot for hardcoded credentials and excessive tool permissions, without starting or contacting an MCP server or loading a model. |
 
 Discovery, inventory, SBOM generation, and the localhost TCP utility remain clearly separated from vulnerability findings. The complete pinned versions, licenses, profiles, and execution boundaries are recorded in the [engine catalog](docs/engine-catalog.md).
