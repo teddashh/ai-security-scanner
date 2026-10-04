@@ -1276,7 +1276,7 @@ const platformFromAsset = (asset: NativeAsset): CloudPlatform | undefined => {
   if (provider.includes("aws") || provider.includes("amazon")) return "aws";
   if (provider.includes("azure")) return "azure";
   if (provider.includes("gcp") || provider.includes("google")) return "gcp";
-  if (provider.includes("m365") || provider.includes("microsoft 365")) return "m365";
+  if (provider === "microsoft365" || provider.includes("m365") || provider.includes("microsoft 365")) return "m365";
   return Object.prototype.hasOwnProperty.call(ASSET_KIND_PLATFORMS, asset.kind)
     ? ASSET_KIND_PLATFORMS[asset.kind as AssetKind]
     : undefined;

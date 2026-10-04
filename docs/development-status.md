@@ -23,6 +23,7 @@ product behavior, and the [current product review](product-audit.md) tracks the 
 - Report presentation distinguishes measured zero findings from an asset that was not measured, and
   keeps compact document identity in printed headers and footers.
 - The shared HTML exporter on main contains wide check tables within their scroll areas, stacks report cards at tablet widths, and wraps long technical identifiers. This source fix is not included in the published v0.3.1 installer; its original delivery observations remain in the release record.
+- Main also recognizes the native `microsoft365` provider value when displaying identity assets, so they retain their Microsoft 365 platform instead of appearing as public websites and IP addresses. This source fix is not included in v0.3.1.
 - The offline adapter refresh pipeline produces reviewable proposals; deterministic generation is the
   default, AI edits require explicit opt-in and digest attribution, and the person running it chooses
   whether to open a pull request while the pipeline executes no commands.
