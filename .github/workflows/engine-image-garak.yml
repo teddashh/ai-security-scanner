@@ -110,6 +110,9 @@ jobs:
           docker run --platform linux/amd64 --rm \
             --read-only --network none --cap-drop ALL \
             --security-opt no-new-privileges:true \
+            --tmpfs /tmp:rw,noexec,nosuid,size=128m \
+            -e HOME=/tmp/aiss-import -e XDG_CONFIG_HOME=/tmp/aiss-import/config \
+            -e XDG_DATA_HOME=/tmp/aiss-import/data -e XDG_CACHE_HOME=/tmp/aiss-import/cache \
             --entrypoint /usr/local/bin/python3 \
             "${IMAGE}@${DIGEST}" \
             -I -B -c 'import importlib.util,garak,garak.cli,garak.generators.rest,garak.probes.dan,garak.probes.ansiescape,garak.detectors.dan,garak.detectors.ansiescape; assert garak.__version__ == "0.17.0"; assert all(importlib.util.find_spec(name) is None for name in ("torch","transformers","openai","pytest","flit_core"))'
