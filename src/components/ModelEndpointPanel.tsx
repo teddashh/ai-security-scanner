@@ -64,7 +64,7 @@ export function ModelEndpointPanel({ nativeMode, busy, initialInput, onStart }: 
           onChange={(event) => setConfirmed(event.target.checked)} />
         <span>{confirmation}</span>
       </label>
-      <div className="form-actions"><button type="submit" className="button button-secondary" disabled={!ready}>
+      <div className="form-actions"><button type="submit" className="button button--secondary" disabled={!ready}>
         {text(submitting ? { en: "Starting model check…", zhTW: "正在開始模型檢查…" } : { en: "Start model check", zhTW: "開始模型檢查" })}
       </button></div>
     </form>

@@ -374,7 +374,7 @@ mod tests {
             )
             .unwrap();
         let credentials = sessions
-            .take("case-1", &asset, &[grant.clone()], now)
+            .take("case-1", &asset, std::slice::from_ref(&grant), now)
             .unwrap();
         assert_eq!(
             credentials.provider_secret("REST_API_KEY"),
@@ -421,7 +421,7 @@ mod tests {
             .unwrap();
         assert!(
             sessions
-                .take("case-1", &asset, &[grant.clone()], now)
+                .take("case-1", &asset, std::slice::from_ref(&grant), now)
                 .is_err()
         );
         sessions
@@ -430,7 +430,7 @@ mod tests {
         sessions.revoke_case("case-1").unwrap();
         assert!(
             sessions
-                .take("case-1", &asset, &[grant.clone()], now)
+                .take("case-1", &asset, std::slice::from_ref(&grant), now)
                 .is_err()
         );
         sessions
@@ -446,7 +446,7 @@ mod tests {
             .value = "different/model".into();
         assert!(
             sessions
-                .take("case-1", &changed, &[grant.clone()], now)
+                .take("case-1", &changed, std::slice::from_ref(&grant), now)
                 .is_err()
         );
         assert!(sessions.take("case-1", &asset, &[grant], now).is_err());
@@ -494,7 +494,7 @@ mod tests {
         );
         assert!(
             sessions
-                .take("other-case", &asset, &[grant.clone()], now)
+                .take("other-case", &asset, std::slice::from_ref(&grant), now)
                 .is_err()
         );
         assert!(sessions.take("case-1", &asset, &[grant], now).is_ok());

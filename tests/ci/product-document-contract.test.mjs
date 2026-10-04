@@ -355,7 +355,7 @@ test("public development status stays catalog-backed and excludes local handoff 
   );
   const experimental = catalog.filter((engine) => engine.status === "experimental");
   const publicBlockerTerms = {
-    "garak": [/No verified public managed image/iu, /immutable publication/iu, /independent verification/iu],
+    "garak": [/No verified public managed image.*immutable publication and independent verification/iu],
     "agentic-radar": [/No verified published digest/iu],
     "mcp-armor": [/No verified published digest/iu],
     "zap": [/No scope-grant profile/iu, /automation plan/iu, /requests-per-second/iu],

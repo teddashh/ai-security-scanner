@@ -321,6 +321,7 @@
 
 .page--coverage .coverage-form-technical code {
   font-size: 0.78rem;
+  overflow-wrap: anywhere;
 }
 
 .page--coverage .coverage-provider-slot > .provider-auth-panel {

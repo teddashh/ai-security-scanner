@@ -765,7 +765,7 @@ export const scannerService = {
   },
 
   async configureModelEndpoint(caseId: string, input: ModelEndpointInput, internetExposed: boolean): Promise<ServiceResult<ActionResponse>> {
-    return actionResult(COMMANDS.configureModelEndpoint, { caseId, input, internetExposed },
+    return actionResult(COMMANDS.configureModelEndpoint, { caseId, input: { endpoint: input.endpoint, model: input.model }, internetExposed },
       serviceText("Model coordinates saved for review.", "已保存模型座標，待確認掃描範圍。"),
       serviceText("Open the desktop app to configure a model check.", "請開啟桌面版設定模型檢查。"), true);
   },
