@@ -53,6 +53,9 @@ use std::fs;
 use std::io::Cursor;
 use std::path::{Path, PathBuf};
 
+#[path = "support/public_sample_reports.rs"]
+mod public_sample_reports;
+
 /// Which shape of finished run the harness produces.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum EngineOutcomes {

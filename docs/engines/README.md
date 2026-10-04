@@ -1,5 +1,7 @@
 # Engine reference
 
+[Read the scanner purpose, SWOT and version guide](../scanner-guide.md) · [Download standard sample reports](../samples/v0.4.0/README.md)
+
 [繁體中文](README.zh-TW.md) · [Documentation](../README.md)
 
 One page per scanner and per shared launcher. Each page records how the product runs that engine, what the adapter keeps from its output, how to update it, and what real runs taught. Read the page before changing an engine, and add a line to its **Lessons from real runs** when a real run teaches something new.

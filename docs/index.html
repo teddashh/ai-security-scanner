@@ -17,6 +17,7 @@
     <link rel="alternate" hreflang="zh-Hant" href="https://teddashh.github.io/ai-security-scanner/?lang=zh-TW">
     <link rel="icon" href="project-mark.svg" type="image/svg+xml">
     <link rel="stylesheet" href="project-site.css">
+    <link rel="stylesheet" href="showcase.css">
     <title>ai-security-scanner · Many security tools, one clear report</title>
     <script>
       (() => {
@@ -50,9 +51,9 @@
             <span class="lang-en">Tools</span>
             <span class="lang-zh" lang="zh-Hant">串接工具</span>
           </a>
-          <a href="#one-report">
-            <span class="lang-en">One report</span>
-            <span class="lang-zh" lang="zh-Hant">統一報告</span>
+          <a href="#sample-reports">
+            <span class="lang-en">Sample reports</span>
+            <span class="lang-zh" lang="zh-Hant">範例報告</span>
           </a>
           <a href="#agent-skills">
             <span class="lang-en">Agent Skills</span>
@@ -224,6 +225,14 @@
         </div>
       </div>
 
+      <section class="section showcase-home" id="sample-reports">
+        <div class="section-heading"><p class="eyebrow">v0.4.0 / 2026-10-04</p><h2><span class="lang-en">See what you receive.</span><span class="lang-zh" lang="zh-Hant">直接看你會拿到的報告。</span></h2><p><span class="lang-en">Real adapter formats, simulated data, the standard product report. All 25 scanners contribute: 62 original findings and 42 inventory observations, with sources and purposes explained.</span><span class="lang-zh" lang="zh-Hant">真實 adapter 格式、模擬資料、產品標準報告。全部 25 個掃描器都有結果：62 筆原始發現及 42 筆盤點觀察，清楚說明來源與用途。</span></p></div>
+        <div class="sample-downloads">
+          <article class="sample-card"><p class="eyebrow">01 / REDACTED</p><h3><span class="lang-en">Redacted report</span><span class="lang-zh" lang="zh-Hant">遮蔽版報告</span></h3><p><span class="lang-en">Keep findings and next actions; hide identifying asset and context fields.</span><span class="lang-zh" lang="zh-Hant">保留發現與下一步，隱藏可識別的資產及背景欄位。</span></p><div class="button-row"><a class="button button-primary" href="samples/v0.4.0/sample-report-redacted-en.html" data-href-en="samples/v0.4.0/sample-report-redacted-en.html" data-href-zh="samples/v0.4.0/sample-report-redacted-zh-TW.html"><span class="lang-en">Read report →</span><span class="lang-zh" lang="zh-Hant">閱讀報告 →</span></a><a class="button button-secondary" href="samples/v0.4.0/sample-report-redacted-en.html" data-href-en="samples/v0.4.0/sample-report-redacted-en.html" data-href-zh="samples/v0.4.0/sample-report-redacted-zh-TW.html" download><span class="lang-en">Download HTML</span><span class="lang-zh" lang="zh-Hant">下載 HTML</span></a></div></article>
+          <article class="sample-card"><p class="eyebrow">02 / FULL</p><h3><span class="lang-en">Fully disclosed report</span><span class="lang-zh" lang="zh-Hant">完整揭露版報告</span></h3><p><span class="lang-en">See fictional names, endpoints and account context. Secret values stay masked in both editions.</span><span class="lang-zh" lang="zh-Hant">查看虛構名稱、端點與帳號背景。兩版的機密值均維持隱藏。</span></p><div class="button-row"><a class="button button-primary" href="samples/v0.4.0/sample-report-full-en.html" data-href-en="samples/v0.4.0/sample-report-full-en.html" data-href-zh="samples/v0.4.0/sample-report-full-zh-TW.html"><span class="lang-en">Read report →</span><span class="lang-zh" lang="zh-Hant">閱讀報告 →</span></a><a class="button button-secondary" href="samples/v0.4.0/sample-report-full-en.html" data-href-en="samples/v0.4.0/sample-report-full-en.html" data-href-zh="samples/v0.4.0/sample-report-full-zh-TW.html" download><span class="lang-en">Download HTML</span><span class="lang-zh" lang="zh-Hant">下載 HTML</span></a></div></article>
+        </div><p class="showcase-links"><a href="sample-reports.html" data-href-en="sample-reports.html" data-href-zh="sample-reports.html?lang=zh-TW"><span class="lang-en">All results and source formats →</span><span class="lang-zh" lang="zh-Hant">完整結果與來源格式 →</span></a><a href="scanner-guide.html" data-href-en="scanner-guide.html" data-href-zh="scanner-guide.html?lang=zh-TW"><span class="lang-en">25 scanners: features, versions, use cases and SWOT →</span><span class="lang-zh" lang="zh-Hant">25 個掃描器：功能、版本、情境與 SWOT →</span></a></p>
+      </section>
+
       <div class="section-dark" id="how-it-works">
         <section class="section">
           <div class="section-heading">
@@ -357,24 +366,28 @@
               <span class="tool-kind"><span class="lang-en">Code security</span><span class="lang-zh" lang="zh-Hant">程式碼安全</span></span>
               <p><span class="lang-en">Static analysis for risky code patterns with 1,493 pinned legacy upstream rules and four product rules.</span><span class="lang-zh" lang="zh-Hant">使用固定的 1,493 條舊版上游規則與四條產品規則，靜態分析危險程式碼模式。</span></p>
               <a class="tool-link" href="https://github.com/semgrep/semgrep"><span class="lang-en">GitHub repository</span><span class="lang-zh" lang="zh-Hant">GitHub 專案</span></a>
+            <a class="tool-detail-link" href="scanner-guide.html#semgrep" data-href-en="scanner-guide.html#semgrep" data-href-zh="scanner-guide.html?lang=zh-TW#semgrep"><span class="lang-en">Features, versions &amp; SWOT →</span><span class="lang-zh" lang="zh-Hant">功能、版本與 SWOT →</span></a>
             </article>
             <article class="tool-card" data-tool="gitleaks">
               <div class="tool-card-top"><h4 class="tool-name">Gitleaks</h4><span class="stars"><data value="29646">29.6k</data></span></div>
               <span class="tool-kind"><span class="lang-en">Secret scanning</span><span class="lang-zh" lang="zh-Hant">秘密掃描</span></span>
               <p><span class="lang-en">Offline secret-pattern detection with secret values redacted from normal evidence.</span><span class="lang-zh" lang="zh-Hant">離線偵測秘密模式，一般證據會遮蔽秘密值。</span></p>
               <a class="tool-link" href="https://github.com/gitleaks/gitleaks"><span class="lang-en">GitHub repository</span><span class="lang-zh" lang="zh-Hant">GitHub 專案</span></a>
+            <a class="tool-detail-link" href="scanner-guide.html#gitleaks" data-href-en="scanner-guide.html#gitleaks" data-href-zh="scanner-guide.html?lang=zh-TW#gitleaks"><span class="lang-en">Features, versions &amp; SWOT →</span><span class="lang-zh" lang="zh-Hant">功能、版本與 SWOT →</span></a>
             </article>
             <article class="tool-card" data-tool="trufflehog">
               <div class="tool-card-top"><h4 class="tool-name">TruffleHog</h4><span class="stars"><data value="28266">28.3k</data></span></div>
               <span class="tool-kind"><span class="lang-en">Secret scanning</span><span class="lang-zh" lang="zh-Hant">秘密掃描</span></span>
               <p><span class="lang-en">Offline filesystem secret detection. Credential verification and engine networking are disabled.</span><span class="lang-zh" lang="zh-Hant">離線檔案系統秘密偵測，停用憑證驗證與引擎網路。</span></p>
               <a class="tool-link" href="https://github.com/trufflesecurity/trufflehog"><span class="lang-en">GitHub repository</span><span class="lang-zh" lang="zh-Hant">GitHub 專案</span></a>
+            <a class="tool-detail-link" href="scanner-guide.html#trufflehog" data-href-en="scanner-guide.html#trufflehog" data-href-zh="scanner-guide.html?lang=zh-TW#trufflehog"><span class="lang-en">Features, versions &amp; SWOT →</span><span class="lang-zh" lang="zh-Hant">功能、版本與 SWOT →</span></a>
             </article>
             <article class="tool-card" data-tool="trivy">
               <div class="tool-card-top"><h4 class="tool-name">Trivy</h4><span class="stars"><data value="38214">38.2k</data></span></div>
               <span class="tool-kind"><span class="lang-en">Package vulnerabilities</span><span class="lang-zh" lang="zh-Hant">套件弱點</span></span>
               <p><span class="lang-en">Recognized repository and OCI packages checked against pinned offline vulnerability data.</span><span class="lang-zh" lang="zh-Hant">以固定離線弱點資料檢查支援的專案與 OCI 套件。</span></p>
               <a class="tool-link" href="https://github.com/aquasecurity/trivy"><span class="lang-en">GitHub repository</span><span class="lang-zh" lang="zh-Hant">GitHub 專案</span></a>
+            <a class="tool-detail-link" href="scanner-guide.html#trivy" data-href-en="scanner-guide.html#trivy" data-href-zh="scanner-guide.html?lang=zh-TW#trivy"><span class="lang-en">Features, versions &amp; SWOT →</span><span class="lang-zh" lang="zh-Hant">功能、版本與 SWOT →</span></a>
             </article>
             <article class="tool-card" data-tool="grype">
               <div class="tool-card-top"><h4 class="tool-name">Grype</h4><span class="stars"><data value="12968">13.0k</data></span></div>
@@ -382,24 +395,28 @@
               <p><span class="lang-en">Package vulnerability matching for repository snapshots and single-image OCI layouts. Released pin: <code>0.117.0-4</code> (<code>56b0d675…</code>); a controlled local repository scan recorded 81 Grype findings.</span><span class="lang-zh" lang="zh-Hant">比對專案副本與單一映像 OCI layout 中的套件弱點。本版釘選 <code>0.117.0-4</code>（<code>56b0d675…</code>）；受控本機專案掃描記錄 81 筆 Grype 問題。</span></p>
               <a class="tool-link" href="https://github.com/anchore/grype"><span class="lang-en">GitHub repository</span><span class="lang-zh" lang="zh-Hant">GitHub 專案</span></a>
               <a class="tool-link" href="https://github.com/teddashh/ai-security-scanner/blob/main/docs/engine-catalog.md#grype-repository-support"><span class="lang-en">Pin and recorded result</span><span class="lang-zh" lang="zh-Hant">釘選與實測紀錄</span></a>
+            <a class="tool-detail-link" href="scanner-guide.html#grype" data-href-en="scanner-guide.html#grype" data-href-zh="scanner-guide.html?lang=zh-TW#grype"><span class="lang-en">Features, versions &amp; SWOT →</span><span class="lang-zh" lang="zh-Hant">功能、版本與 SWOT →</span></a>
             </article>
             <article class="tool-card" data-tool="checkov">
               <div class="tool-card-top"><h4 class="tool-name">Checkov</h4><span class="stars"><data value="9054">9.1k</data></span></div>
               <span class="tool-kind"><span class="lang-en">Configuration</span><span class="lang-zh" lang="zh-Hant">設定檢查</span></span>
               <p><span class="lang-en">Applicable infrastructure and configuration checks over the selected read-only snapshot.</span><span class="lang-zh" lang="zh-Hant">針對選定唯讀副本執行適用的基礎設施與設定檢查。</span></p>
               <a class="tool-link" href="https://github.com/bridgecrewio/checkov"><span class="lang-en">GitHub repository</span><span class="lang-zh" lang="zh-Hant">GitHub 專案</span></a>
+            <a class="tool-detail-link" href="scanner-guide.html#checkov" data-href-en="scanner-guide.html#checkov" data-href-zh="scanner-guide.html?lang=zh-TW#checkov"><span class="lang-en">Features, versions &amp; SWOT →</span><span class="lang-zh" lang="zh-Hant">功能、版本與 SWOT →</span></a>
             </article>
             <article class="tool-card" data-tool="kics">
               <div class="tool-card-top"><h4 class="tool-name">KICS</h4><span class="stars"><data value="2713">2.7k</data></span></div>
               <span class="tool-kind"><span class="lang-en">Configuration</span><span class="lang-zh" lang="zh-Hant">設定檢查</span></span>
               <p><span class="lang-en">Infrastructure-as-code misconfiguration checks from the upstream query pack.</span><span class="lang-zh" lang="zh-Hant">使用上游 query pack 檢查基礎設施即程式碼的錯誤設定。</span></p>
               <a class="tool-link" href="https://github.com/Checkmarx/kics"><span class="lang-en">GitHub repository</span><span class="lang-zh" lang="zh-Hant">GitHub 專案</span></a>
+            <a class="tool-detail-link" href="scanner-guide.html#kics" data-href-en="scanner-guide.html#kics" data-href-zh="scanner-guide.html?lang=zh-TW#kics"><span class="lang-en">Features, versions &amp; SWOT →</span><span class="lang-zh" lang="zh-Hant">功能、版本與 SWOT →</span></a>
             </article>
             <article class="tool-card" data-tool="syft">
               <div class="tool-card-top"><h4 class="tool-name">Syft</h4><span class="stars"><data value="9634">9.6k</data></span></div>
               <span class="tool-kind tool-kind-inventory"><span class="lang-en">SBOM inventory</span><span class="lang-zh" lang="zh-Hant">SBOM 盤點</span></span>
               <p><span class="lang-en">Software component inventory and a preserved SBOM artifact, not a vulnerability conclusion.</span><span class="lang-zh" lang="zh-Hant">建立軟體元件盤點與可保存的 SBOM；本身不是弱點結論。</span></p>
               <a class="tool-link" href="https://github.com/anchore/syft"><span class="lang-en">GitHub repository</span><span class="lang-zh" lang="zh-Hant">GitHub 專案</span></a>
+            <a class="tool-detail-link" href="scanner-guide.html#syft" data-href-en="scanner-guide.html#syft" data-href-zh="scanner-guide.html?lang=zh-TW#syft"><span class="lang-en">Features, versions &amp; SWOT →</span><span class="lang-zh" lang="zh-Hant">功能、版本與 SWOT →</span></a>
             </article>
           </div>
         </div>
@@ -418,30 +435,35 @@
               <span class="tool-kind"><span class="lang-en">HTTP security</span><span class="lang-zh" lang="zh-Hant">HTTP 安全</span></span>
               <p><span class="lang-en">Technology-aware, bounded read-only checks selected from a pinned upstream template snapshot.</span><span class="lang-zh" lang="zh-Hant">辨識技術後，從固定上游模板快照選擇範圍受限的唯讀檢查。</span></p>
               <a class="tool-link" href="https://github.com/projectdiscovery/nuclei"><span class="lang-en">GitHub repository</span><span class="lang-zh" lang="zh-Hant">GitHub 專案</span></a>
+            <a class="tool-detail-link" href="scanner-guide.html#nuclei" data-href-en="scanner-guide.html#nuclei" data-href-zh="scanner-guide.html?lang=zh-TW#nuclei"><span class="lang-en">Features, versions &amp; SWOT →</span><span class="lang-zh" lang="zh-Hant">功能、版本與 SWOT →</span></a>
             </article>
             <article class="tool-card" data-tool="zap">
               <div class="tool-card-top"><h4 class="tool-name">ZAP</h4><span class="stars"><data value="15866">15.9k</data></span></div>
               <span class="tool-kind"><span class="lang-en">Passive web checks · v0.4.0</span><span class="lang-zh" lang="zh-Hant">被動網站檢查 · v0.4.0</span></span>
               <p><span class="lang-en">Crawls pages within one approved origin and checks their responses using upstream passive rules. Explicit advanced choice; no form submission or attack payloads.</span><span class="lang-zh" lang="zh-Hant">爬取單一核准來源內的頁面，以上游被動規則檢查回應；由進階選項明確選取，不送出表單或攻擊內容。</span></p>
               <a class="tool-link" href="https://github.com/zaproxy/zaproxy"><span class="lang-en">GitHub repository</span><span class="lang-zh" lang="zh-Hant">GitHub 專案</span></a>
+            <a class="tool-detail-link" href="scanner-guide.html#zap" data-href-en="scanner-guide.html#zap" data-href-zh="scanner-guide.html?lang=zh-TW#zap"><span class="lang-en">Features, versions &amp; SWOT →</span><span class="lang-zh" lang="zh-Hant">功能、版本與 SWOT →</span></a>
             </article>
             <article class="tool-card" data-tool="greenbone">
               <div class="tool-card-top"><h4 class="tool-name">Greenbone OpenVAS</h4><span class="stars"><data value="4850">4.8k</data></span></div>
               <span class="tool-kind"><span class="lang-en">Remote security</span><span class="lang-zh" lang="zh-Hant">遠端安全</span></span>
               <p><span class="lang-en">Service-aware remote checks from a pinned Community Feed for exact approved hosts and ports.</span><span class="lang-zh" lang="zh-Hant">針對精確獲准的主機與連接埠，從固定 Community Feed 執行服務感知檢查。</span></p>
               <a class="tool-link" href="https://github.com/greenbone/openvas-scanner"><span class="lang-en">GitHub repository</span><span class="lang-zh" lang="zh-Hant">GitHub 專案</span></a>
+            <a class="tool-detail-link" href="scanner-guide.html#greenbone" data-href-en="scanner-guide.html#greenbone" data-href-zh="scanner-guide.html?lang=zh-TW#greenbone"><span class="lang-en">Features, versions &amp; SWOT →</span><span class="lang-zh" lang="zh-Hant">功能、版本與 SWOT →</span></a>
             </article>
             <article class="tool-card" data-tool="naabu">
               <div class="tool-card-top"><h4 class="tool-name">Naabu</h4><span class="stars"><data value="6276">6.3k</data></span></div>
               <span class="tool-kind tool-kind-observation"><span class="lang-en">Exposure discovery</span><span class="lang-zh" lang="zh-Hant">曝露探索</span></span>
               <p><span class="lang-en">Selected TCP-port reachability. An open port is shown as an observation, not a vulnerability.</span><span class="lang-zh" lang="zh-Hant">檢查選定 TCP 連接埠可達性；開放連接埠列為觀察，不是弱點。</span></p>
               <a class="tool-link" href="https://github.com/projectdiscovery/naabu"><span class="lang-en">GitHub repository</span><span class="lang-zh" lang="zh-Hant">GitHub 專案</span></a>
+            <a class="tool-detail-link" href="scanner-guide.html#naabu" data-href-en="scanner-guide.html#naabu" data-href-zh="scanner-guide.html?lang=zh-TW#naabu"><span class="lang-en">Features, versions &amp; SWOT →</span><span class="lang-zh" lang="zh-Hant">功能、版本與 SWOT →</span></a>
             </article>
             <article class="tool-card" data-tool="httpx">
               <div class="tool-card-top"><h4 class="tool-name">httpx</h4><span class="stars"><data value="10443">10.4k</data></span></div>
               <span class="tool-kind tool-kind-observation"><span class="lang-en">HTTP observation</span><span class="lang-zh" lang="zh-Hant">HTTP 觀察</span></span>
               <p><span class="lang-en">Bounded HTTP reachability and status metadata. It does not produce vulnerability findings.</span><span class="lang-zh" lang="zh-Hant">取得範圍受限的 HTTP 可達性與狀態資訊，不產生弱點問題。</span></p>
               <a class="tool-link" href="https://github.com/projectdiscovery/httpx"><span class="lang-en">GitHub repository</span><span class="lang-zh" lang="zh-Hant">GitHub 專案</span></a>
+            <a class="tool-detail-link" href="scanner-guide.html#httpx" data-href-en="scanner-guide.html#httpx" data-href-zh="scanner-guide.html?lang=zh-TW#httpx"><span class="lang-en">Features, versions &amp; SWOT →</span><span class="lang-zh" lang="zh-Hant">功能、版本與 SWOT →</span></a>
             </article>
           </div>
         </div>
@@ -460,42 +482,49 @@
               <span class="tool-kind"><span class="lang-en">Cloud configuration</span><span class="lang-zh" lang="zh-Hant">雲端設定</span></span>
               <p><span class="lang-en">Narrow, exact-asset IAM configuration profiles for AWS, Azure, and GCP.</span><span class="lang-zh" lang="zh-Hant">針對 AWS、Azure 與 GCP 精確資產的限縮 IAM 設定檢查。</span></p>
               <a class="tool-link" href="https://github.com/prowler-cloud/prowler"><span class="lang-en">GitHub repository</span><span class="lang-zh" lang="zh-Hant">GitHub 專案</span></a>
+            <a class="tool-detail-link" href="scanner-guide.html#prowler" data-href-en="scanner-guide.html#prowler" data-href-zh="scanner-guide.html?lang=zh-TW#prowler"><span class="lang-en">Features, versions &amp; SWOT →</span><span class="lang-zh" lang="zh-Hant">功能、版本與 SWOT →</span></a>
             </article>
             <article class="tool-card" data-tool="scoutsuite">
               <div class="tool-card-top"><h4 class="tool-name">ScoutSuite</h4><span class="stars"><data value="7832">7.8k</data></span></div>
               <span class="tool-kind"><span class="lang-en">Cloud configuration</span><span class="lang-zh" lang="zh-Hant">雲端設定</span></span>
               <p><span class="lang-en">A reduced AWS IAM assessment rather than a claim of full ScoutSuite coverage.</span><span class="lang-zh" lang="zh-Hant">限縮的 AWS IAM 評估，不宣稱涵蓋完整 ScoutSuite 能力。</span></p>
               <a class="tool-link" href="https://github.com/nccgroup/ScoutSuite"><span class="lang-en">GitHub repository</span><span class="lang-zh" lang="zh-Hant">GitHub 專案</span></a>
+            <a class="tool-detail-link" href="scanner-guide.html#scoutsuite" data-href-en="scanner-guide.html#scoutsuite" data-href-zh="scanner-guide.html?lang=zh-TW#scoutsuite"><span class="lang-en">Features, versions &amp; SWOT →</span><span class="lang-zh" lang="zh-Hant">功能、版本與 SWOT →</span></a>
             </article>
             <article class="tool-card" data-tool="cloudsplaining">
               <div class="tool-card-top"><h4 class="tool-name">Cloudsplaining</h4><span class="stars"><data value="2250">2.2k</data></span></div>
               <span class="tool-kind"><span class="lang-en">IAM analysis</span><span class="lang-zh" lang="zh-Hant">IAM 分析</span></span>
               <p><span class="lang-en">Excessive-permission analysis over bounded AWS IAM evidence.</span><span class="lang-zh" lang="zh-Hant">分析有界 AWS IAM 證據中的過度權限。</span></p>
               <a class="tool-link" href="https://github.com/salesforce/cloudsplaining"><span class="lang-en">GitHub repository</span><span class="lang-zh" lang="zh-Hant">GitHub 專案</span></a>
+            <a class="tool-detail-link" href="scanner-guide.html#cloudsplaining" data-href-en="scanner-guide.html#cloudsplaining" data-href-zh="scanner-guide.html?lang=zh-TW#cloudsplaining"><span class="lang-en">Features, versions &amp; SWOT →</span><span class="lang-zh" lang="zh-Hant">功能、版本與 SWOT →</span></a>
             </article>
             <article class="tool-card" data-tool="cloudquery">
               <div class="tool-card-top"><h4 class="tool-name">CloudQuery</h4><span class="stars"><data value="6534">6.5k</data></span></div>
               <span class="tool-kind tool-kind-inventory"><span class="lang-en">Cloud inventory</span><span class="lang-zh" lang="zh-Hant">雲端盤點</span></span>
               <p><span class="lang-en">A fixed AWS IAM inventory. Returned rows remain inventory, not security findings.</span><span class="lang-zh" lang="zh-Hant">固定 AWS IAM 盤點，回傳資料維持盤點資訊，不會轉成安全問題。</span></p>
               <a class="tool-link" href="https://github.com/cloudquery/cloudquery"><span class="lang-en">GitHub repository</span><span class="lang-zh" lang="zh-Hant">GitHub 專案</span></a>
+            <a class="tool-detail-link" href="scanner-guide.html#cloudquery" data-href-en="scanner-guide.html#cloudquery" data-href-zh="scanner-guide.html?lang=zh-TW#cloudquery"><span class="lang-en">Features, versions &amp; SWOT →</span><span class="lang-zh" lang="zh-Hant">功能、版本與 SWOT →</span></a>
             </article>
             <article class="tool-card" data-tool="steampipe">
               <div class="tool-card-top"><h4 class="tool-name">Steampipe</h4><span class="stars"><data value="7972">8.0k</data></span></div>
               <span class="tool-kind tool-kind-inventory"><span class="lang-en">Cloud inventory</span><span class="lang-zh" lang="zh-Hant">雲端盤點</span></span>
               <p><span class="lang-en">AWS IAM user inventory. Policy-shaped inventory fields do not become findings.</span><span class="lang-zh" lang="zh-Hant">AWS IAM 使用者盤點，類似政策結果的盤點欄位也不會轉成問題。</span></p>
               <a class="tool-link" href="https://github.com/turbot/steampipe"><span class="lang-en">GitHub repository</span><span class="lang-zh" lang="zh-Hant">GitHub 專案</span></a>
+            <a class="tool-detail-link" href="scanner-guide.html#steampipe" data-href-en="scanner-guide.html#steampipe" data-href-zh="scanner-guide.html?lang=zh-TW#steampipe"><span class="lang-en">Features, versions &amp; SWOT →</span><span class="lang-zh" lang="zh-Hant">功能、版本與 SWOT →</span></a>
             </article>
             <article class="tool-card" data-tool="scubagear">
               <div class="tool-card-top"><h4 class="tool-name">ScubaGear</h4><span class="stars"><data value="2692">2.7k</data></span></div>
               <span class="tool-kind"><span class="lang-en">M365 configuration</span><span class="lang-zh" lang="zh-Hant">M365 設定</span></span>
               <p><span class="lang-en">A fixed Microsoft 365 security-baseline configuration profile.</span><span class="lang-zh" lang="zh-Hant">固定的 Microsoft 365 安全基準設定檢查。</span></p>
               <a class="tool-link" href="https://github.com/cisagov/ScubaGear"><span class="lang-en">GitHub repository</span><span class="lang-zh" lang="zh-Hant">GitHub 專案</span></a>
+            <a class="tool-detail-link" href="scanner-guide.html#scubagear" data-href-en="scanner-guide.html#scubagear" data-href-zh="scanner-guide.html?lang=zh-TW#scubagear"><span class="lang-en">Features, versions &amp; SWOT →</span><span class="lang-zh" lang="zh-Hant">功能、版本與 SWOT →</span></a>
             </article>
             <article class="tool-card" data-tool="maester">
               <div class="tool-card-top"><h4 class="tool-name">Maester</h4><span class="stars"><data value="1121">1.1k</data></span></div>
               <span class="tool-kind"><span class="lang-en">M365 configuration</span><span class="lang-zh" lang="zh-Hant">M365 設定</span></span>
               <p><span class="lang-en">A fixed Microsoft 365 security-configuration test profile.</span><span class="lang-zh" lang="zh-Hant">固定的 Microsoft 365 安全設定測試。</span></p>
               <a class="tool-link" href="https://github.com/maester365/maester"><span class="lang-en">GitHub repository</span><span class="lang-zh" lang="zh-Hant">GitHub 專案</span></a>
+            <a class="tool-detail-link" href="scanner-guide.html#maester" data-href-en="scanner-guide.html#maester" data-href-zh="scanner-guide.html?lang=zh-TW#maester"><span class="lang-en">Features, versions &amp; SWOT →</span><span class="lang-zh" lang="zh-Hant">功能、版本與 SWOT →</span></a>
             </article>
           </div>
         </div>
@@ -511,12 +540,14 @@
               <span class="tool-kind"><span class="lang-en">Manifest configuration</span><span class="lang-zh" lang="zh-Hant">Manifest 設定</span></span>
               <p><span class="lang-en">Offline posture checks over explicitly selected local Kubernetes manifests.</span><span class="lang-zh" lang="zh-Hant">離線檢查使用者明確選定的本機 Kubernetes manifests。</span></p>
               <a class="tool-link" href="https://github.com/kubescape/kubescape"><span class="lang-en">GitHub repository</span><span class="lang-zh" lang="zh-Hant">GitHub 專案</span></a>
+            <a class="tool-detail-link" href="scanner-guide.html#kubescape" data-href-en="scanner-guide.html#kubescape" data-href-zh="scanner-guide.html?lang=zh-TW#kubescape"><span class="lang-en">Features, versions &amp; SWOT →</span><span class="lang-zh" lang="zh-Hant">功能、版本與 SWOT →</span></a>
             </article>
             <article class="tool-card" data-tool="kube-bench">
               <div class="tool-card-top"><h4 class="tool-name">kube-bench</h4><span class="stars"><data value="8209">8.2k</data></span></div>
               <span class="tool-kind"><span class="lang-en">Node configuration</span><span class="lang-zh" lang="zh-Hant">節點設定</span></span>
               <p><span class="lang-en">CIS checks over an immutable node-configuration snapshot, without a privileged live-host mount.</span><span class="lang-zh" lang="zh-Hant">檢查不可變的節點設定副本是否符合 CIS，不掛載具特權的即時主機。</span></p>
               <a class="tool-link" href="https://github.com/aquasecurity/kube-bench"><span class="lang-en">GitHub repository</span><span class="lang-zh" lang="zh-Hant">GitHub 專案</span></a>
+            <a class="tool-detail-link" href="scanner-guide.html#kube-bench" data-href-en="scanner-guide.html#kube-bench" data-href-zh="scanner-guide.html?lang=zh-TW#kube-bench"><span class="lang-en">Features, versions &amp; SWOT →</span><span class="lang-zh" lang="zh-Hant">功能、版本與 SWOT →</span></a>
             </article>
           </div>
         </div>
@@ -535,18 +566,21 @@
               <span class="tool-kind"><span class="lang-en">Offline inventory</span><span class="lang-zh" lang="zh-Hant">離線盤點</span></span>
               <p class="tool-desc"><span class="lang-en">Offline inventory of agents, tools, and workflow connections in a saved project.</span><span class="lang-zh" lang="zh-Hant">離線盤點保存專案中的 Agent、工具與工作流程連接。</span></p>
               <a class="tool-link" href="https://github.com/splx-ai/agentic-radar"><span class="lang-en">GitHub repository</span><span class="lang-zh" lang="zh-Hant">GitHub 專案</span></a>
+            <a class="tool-detail-link" href="scanner-guide.html#agentic-radar" data-href-en="scanner-guide.html#agentic-radar" data-href-zh="scanner-guide.html?lang=zh-TW#agentic-radar"><span class="lang-en">Features, versions &amp; SWOT →</span><span class="lang-zh" lang="zh-Hant">功能、版本與 SWOT →</span></a>
             </article>
             <article class="tool-card" data-tool="garak">
               <div class="tool-card-top"><h4 class="tool-name">Garak</h4><span class="stars"><data value="9423">9.4k</data></span></div>
               <span class="tool-kind"><span class="lang-en">Model behavior checks</span><span class="lang-zh" lang="zh-Hant">模型行為檢查</span></span>
               <p class="tool-desc"><span class="lang-en">54 native DAN/ANSI prompts for one approved HTTPS chat API and model. Explicit inference limits, provider charges and a one-shot local key; detector failure counts remain upstream-owned.</span><span class="lang-zh" lang="zh-Hant">對一個核准 HTTPS 聊天 API 與模型送出 54 個原生 DAN／ANSI 提示。明確列出推論限制與服務商費用，使用一次性本機金鑰；失敗次數保留上游判定。</span></p>
               <a class="tool-link" href="https://github.com/NVIDIA/garak"><span class="lang-en">GitHub repository</span><span class="lang-zh" lang="zh-Hant">GitHub 專案</span></a>
+            <a class="tool-detail-link" href="scanner-guide.html#garak" data-href-en="scanner-guide.html#garak" data-href-zh="scanner-guide.html?lang=zh-TW#garak"><span class="lang-en">Features, versions &amp; SWOT →</span><span class="lang-zh" lang="zh-Hant">功能、版本與 SWOT →</span></a>
             </article>
             <article class="tool-card" data-tool="mcp-armor">
               <div class="tool-card-top"><h4 class="tool-name">MCP Armor</h4><span class="stars"><data value="123">123</data></span></div>
               <span class="tool-kind"><span class="lang-en">MCP configuration</span><span class="lang-zh" lang="zh-Hant">MCP 設定</span></span>
               <p><span class="lang-en">Statically checks one approved MCP configuration snapshot for hardcoded credentials and excessive tool permissions, without starting or contacting an MCP server or loading a model.</span><span class="lang-zh" lang="zh-Hant">靜態檢查一份已核准的 MCP 設定快照中的硬編碼憑證與過度工具權限，不啟動或連線 MCP 伺服器，也不載入模型。</span></p>
               <a class="tool-link" href="https://github.com/aira-security/mcp-armor"><span class="lang-en">GitHub repository</span><span class="lang-zh" lang="zh-Hant">GitHub 專案</span></a>
+            <a class="tool-detail-link" href="scanner-guide.html#mcp-armor" data-href-en="scanner-guide.html#mcp-armor" data-href-zh="scanner-guide.html?lang=zh-TW#mcp-armor"><span class="lang-en">Features, versions &amp; SWOT →</span><span class="lang-zh" lang="zh-Hant">功能、版本與 SWOT →</span></a>
             </article>
           </div>
         </div>

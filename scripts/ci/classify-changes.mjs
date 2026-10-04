@@ -4,6 +4,11 @@ import { readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 
 const FRONTEND_PATHS = [
+  // Public report downloads and scanner profiles have executable frontend contracts.
+  /^docs\/(?:index\.html|project-site\.(?:css|js)|showcase\.css|scanner-guide(?:[.\/]|$)|sample-reports\.html|samples\/|tool-stars\.json$)/,
+  /^scripts\/build-public-showcase\.mjs$/,
+  /^src-tauri\/tests\/fixtures\/adapters\//,
+  /^docs\/research\/fixtures\/(?:mcp-armor|agentic-radar)\//,
   /^src\//,
   /^tests\/frontend\//,
   /^tests\/component\//,

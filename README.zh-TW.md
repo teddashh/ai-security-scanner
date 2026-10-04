@@ -51,6 +51,17 @@ Agent 的沙箱擋住下載或應用程式時，它會請你允許那一個指�
 
 個別檢查失敗時，其他已完成結果仍會保留。報告可重新開啟、與後續掃描比較，並匯出成好讀的 HTML 或結構化資料。
 
+## 直接閱讀標準報告
+
+**v0.4.0 · 2026-10-04**：全部 25 個 adapter 的真實支援格式，透過正式報告流程產生模擬評估，包含 62 筆原始發現與 42 筆盤點觀察。每個來源均說明掃描用途；盤點不算漏洞。
+
+- [遮蔽版 HTML](https://teddashh.github.io/ai-security-scanner/samples/v0.4.0/sample-report-redacted-zh-TW.html) · [GitHub 直接下載](https://raw.githubusercontent.com/teddashh/ai-security-scanner/main/docs/samples/v0.4.0/sample-report-redacted-zh-TW.html)
+- [完整揭露版 HTML](https://teddashh.github.io/ai-security-scanner/samples/v0.4.0/sample-report-full-zh-TW.html) · [GitHub 直接下載](https://raw.githubusercontent.com/teddashh/ai-security-scanner/main/docs/samples/v0.4.0/sample-report-full-zh-TW.html)
+- [中英文四份範例與產製方式](docs/samples/v0.4.0/README.zh-TW.md) · [網站下載頁](https://teddashh.github.io/ai-security-scanner/sample-reports.html?lang=zh-TW)
+- [25 個掃描器詳細指南](https://teddashh.github.io/ai-security-scanner/scanner-guide.html?lang=zh-TW)：SWOT、選用原因、使用情境、實際啟用功能、版本及來源日期（[GitHub 版](docs/scanner-guide.zh-TW.md)）。
+
+兩版使用相同模擬資料。完整揭露保留虛構資產及帳號背景，機密值在兩版均維持隱藏；報告本文採用產品標準匯出，另加範例標記與來源附錄。
+
 ## v0.4.0 更新
 
 - **ZAP：**對一個核准來源進行可選的被動網站檢查。

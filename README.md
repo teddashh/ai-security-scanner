@@ -51,6 +51,17 @@ The report leads with:
 
 Completed results remain available when an independent check fails. Reports can be reopened, compared with later runs, and exported as readable HTML or structured data.
 
+## Read a standard report
+
+**v0.4.0 · 2026-10-04**: simulated assessment data in the real supported formats of all 25 adapters, processed through the production report pipeline. See 62 original findings and 42 inventory observations, with scanner sources and purposes. Inventory is not counted as vulnerabilities.
+
+- [Redacted HTML](https://teddashh.github.io/ai-security-scanner/samples/v0.4.0/sample-report-redacted-en.html) · [Direct GitHub download](https://raw.githubusercontent.com/teddashh/ai-security-scanner/main/docs/samples/v0.4.0/sample-report-redacted-en.html)
+- [Fully disclosed HTML](https://teddashh.github.io/ai-security-scanner/samples/v0.4.0/sample-report-full-en.html) · [Direct GitHub download](https://raw.githubusercontent.com/teddashh/ai-security-scanner/main/docs/samples/v0.4.0/sample-report-full-en.html)
+- [All four bilingual examples and generation method](docs/samples/v0.4.0/README.md) · [Website downloads](https://teddashh.github.io/ai-security-scanner/sample-reports.html)
+- [Detailed guide to all 25 scanners](https://teddashh.github.io/ai-security-scanner/scanner-guide.html): SWOT, selection reasons, use cases, enabled features, versions and source dates ([GitHub edition](docs/scanner-guide.md)).
+
+Both disclosure levels use the same simulated facts. Full disclosure keeps fictional asset and account context; secret values stay masked in both. The standard product export is preserved, with a sample label and source appendix added.
+
 ## What is new in v0.4.0
 
 - **ZAP:** optional passive website checks for one approved origin.

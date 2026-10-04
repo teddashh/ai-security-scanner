@@ -12,6 +12,9 @@
 - [結果與匯出](results-and-exports.zh-TW.md)：閱讀優先順序、涵蓋範圍、證據與保存報告。
 - [v0.4.0 發布紀錄](release/v0.4.0.zh-TW.md)：本版更新、實際交付證據與尚未觀察的平台項目。
 
+- [標準報告範例](samples/v0.4.0/README.zh-TW.md)：遮蔽／完整揭露版，中英皆有；25 個 adapter、真實格式、模擬資料。
+- [全部掃描器指南](scanner-guide.zh-TW.md)：詳細 SWOT、選用原因、情境、啟用功能與 2026-10-04 版本快照。
+
 ## 理解產品
 
 - [產品規格](product-spec.md)：產品行為與驗收的唯一依據。

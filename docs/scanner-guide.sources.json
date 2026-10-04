@@ -1,0 +1,945 @@
+{
+  "schemaVersion": 1,
+  "productVersion": "0.4.0",
+  "releaseSourceCommit": "335d0666bdc63eb86e6c8c4cddeae110db893397",
+  "reviewedAt": "2026-10-04",
+  "scanners": [
+    {
+      "id": "cloudquery",
+      "repository": "https://github.com/cloudquery/cloudquery",
+      "sourceRevision": "e27e4ab61ad85479a5d53dae9b08440bc63e72b3",
+      "reviewedAt": "2026-10-04",
+      "upstreamRevisionDate": "2023-01-05T14:16:38Z",
+      "sourceUrl": "https://github.com/cloudquery/cloudquery/commit/e27e4ab61ad85479a5d53dae9b08440bc63e72b3",
+      "readmeUrl": "https://github.com/cloudquery/cloudquery/blob/e27e4ab61ad85479a5d53dae9b08440bc63e72b3/README.md",
+      "displayName": "CloudQuery",
+      "engineVersion": "2.0.31-aws9.2.0-file1.0.4",
+      "adapterVersion": "0.2.6",
+      "image": {
+        "repository": "ghcr.io/teddashh/ai-security-scanner-engine-cloudquery",
+        "tag": "2.0.31-aws9.2.0-6",
+        "digest": "sha256:e80bc6914b9a007b2a1e8978a222ff7b0ead657d004ca22f410270d086c3be82",
+        "signature_identity": null
+      },
+      "rules": {
+        "mode": "embedded",
+        "identifier": "CloudQuery AWS source plugin v9.2.0 and fixed seven-table IAM profile",
+        "revision": "804be3a90d6f15d3e6c662c0eb7afa88a9596180",
+        "acquisition_source": "https://github.com/cloudquery/cloudquery/commit/804be3a90d6f15d3e6c662c0eb7afa88a9596180"
+      },
+      "data": {
+        "mode": "runtime_live",
+        "identifier": "AWS IAM inventory",
+        "revision": null,
+        "acquisition_source": "AWS IAM and STS APIs authorized by the case-scoped read-only role"
+      },
+      "catalogKnowledgeDate": "2023-01-10",
+      "fixturePath": "src-tauri/tests/fixtures/adapters/cloudquery.json",
+      "fixtureSha256": "4369d30783d9ea0d0ccf2d30518857a2353e36cb0a0db8c7a74f98ecc68afe03",
+      "outputFormats": [
+        "jsonl"
+      ],
+      "readmeSha256": "41450784a65a31ee58ca5fd6981ce93ca8adaaaa6c633856bb2adf5f62264019"
+    },
+    {
+      "id": "steampipe",
+      "repository": "https://github.com/turbot/steampipe",
+      "sourceRevision": "71fa72fc9ce33897bcb0bd0c9ebf09b867b881cf",
+      "reviewedAt": "2026-10-04",
+      "upstreamRevisionDate": "2026-08-10T13:27:42Z",
+      "sourceUrl": "https://github.com/turbot/steampipe/commit/71fa72fc9ce33897bcb0bd0c9ebf09b867b881cf",
+      "readmeUrl": "https://github.com/turbot/steampipe/blob/71fa72fc9ce33897bcb0bd0c9ebf09b867b881cf/README.md",
+      "displayName": "Steampipe",
+      "engineVersion": "2.4.5",
+      "adapterVersion": "0.2.6",
+      "image": {
+        "repository": "ghcr.io/teddashh/ai-security-scanner-engine-steampipe",
+        "tag": "2.4.5-6",
+        "digest": "sha256:cd488a85ca1ebfb4c5f17212b9b29c1309a4cf9450d8645a911ffb1bdb6b4e42",
+        "signature_identity": null
+      },
+      "rules": {
+        "mode": "embedded",
+        "identifier": "Steampipe AWS plugin v1.32.0",
+        "revision": "6e79b2dece502bc198310b39bd54bc95d2842c99",
+        "acquisition_source": "https://github.com/turbot/steampipe-plugin-aws/commit/6e79b2dece502bc198310b39bd54bc95d2842c99"
+      },
+      "data": {
+        "mode": "runtime_live",
+        "identifier": "AWS IAM inventory",
+        "revision": null,
+        "acquisition_source": "AWS IAM and STS APIs authorized by the case-scoped read-only role"
+      },
+      "catalogKnowledgeDate": "2026-08-24",
+      "fixturePath": "src-tauri/tests/fixtures/adapters/steampipe.json",
+      "fixtureSha256": "f461552d69aea4d813a66d42f151db301a863110bc97da08a4f25ac7aa44dc9f",
+      "outputFormats": [
+        "json"
+      ],
+      "readmeSha256": "355db7044d128c562be756f4ee314e5df85a0201d4d7051b1c958a92c5672214"
+    },
+    {
+      "id": "prowler",
+      "repository": "https://github.com/prowler-cloud/prowler",
+      "sourceRevision": "40ecbd035e5541bf099917c5033cceb8959c4737",
+      "reviewedAt": "2026-10-04",
+      "upstreamRevisionDate": "2026-08-18T09:32:24Z",
+      "sourceUrl": "https://github.com/prowler-cloud/prowler/commit/40ecbd035e5541bf099917c5033cceb8959c4737",
+      "readmeUrl": "https://github.com/prowler-cloud/prowler/blob/40ecbd035e5541bf099917c5033cceb8959c4737/README.md",
+      "displayName": "Prowler",
+      "engineVersion": "5.39.1",
+      "adapterVersion": "0.2.6",
+      "image": {
+        "repository": "ghcr.io/teddashh/ai-security-scanner-engine-prowler",
+        "tag": "5.39.1-7",
+        "digest": "sha256:38d9593af214ce164c78b731d1ea29abd06de6babe84b230502972f67a658450",
+        "signature_identity": null
+      },
+      "rules": {
+        "mode": "embedded",
+        "identifier": "Prowler checks",
+        "revision": "40ecbd035e5541bf099917c5033cceb8959c4737",
+        "acquisition_source": "https://github.com/prowler-cloud/prowler/commit/40ecbd035e5541bf099917c5033cceb8959c4737"
+      },
+      "data": {
+        "mode": "runtime_live",
+        "identifier": "Exact-scope AWS, Azure, or GCP IAM configuration",
+        "revision": null,
+        "acquisition_source": "Provider APIs authorized by one case-scoped ephemeral AWS session, Azure ARM access token, or GCP OAuth access token"
+      },
+      "catalogKnowledgeDate": "2026-08-24",
+      "fixturePath": "src-tauri/tests/fixtures/adapters/prowler-ocsf.json",
+      "fixtureSha256": "b3b0540eeb5d2916ec60ef72a007d6d79b34e0fd23978aeef046cee7f87b48a6",
+      "outputFormats": [
+        "ocsf-json"
+      ],
+      "readmeSha256": "2813f3ff0fc53e2c2848bbc194b803be7804ea29823bdbd81a59898131f4a468"
+    },
+    {
+      "id": "scoutsuite",
+      "repository": "https://github.com/nccgroup/ScoutSuite",
+      "sourceRevision": "7909f2fc6186063e5c9e7ddef8c4d7d1072c8f3d",
+      "reviewedAt": "2026-10-04",
+      "upstreamRevisionDate": "2024-05-10T09:24:57Z",
+      "sourceUrl": "https://github.com/nccgroup/ScoutSuite/commit/7909f2fc6186063e5c9e7ddef8c4d7d1072c8f3d",
+      "readmeUrl": "https://github.com/nccgroup/ScoutSuite/blob/7909f2fc6186063e5c9e7ddef8c4d7d1072c8f3d/README.md",
+      "displayName": "ScoutSuite",
+      "engineVersion": "5.14.0",
+      "adapterVersion": "0.2.6",
+      "image": {
+        "repository": "ghcr.io/teddashh/ai-security-scanner-engine-scoutsuite",
+        "tag": "5.14.0-6",
+        "digest": "sha256:72eea2aa430852cb92511a5234c99fe6fce6d574c36594fdc15dcf85d3a26394",
+        "signature_identity": null
+      },
+      "rules": {
+        "mode": "embedded",
+        "identifier": "ScoutSuite AWS IAM rules",
+        "revision": "7909f2fc6186063e5c9e7ddef8c4d7d1072c8f3d",
+        "acquisition_source": "https://github.com/nccgroup/ScoutSuite/commit/7909f2fc6186063e5c9e7ddef8c4d7d1072c8f3d"
+      },
+      "data": {
+        "mode": "runtime_live",
+        "identifier": "AWS IAM configuration",
+        "revision": null,
+        "acquisition_source": "AWS IAM, STS, and EC2 APIs authorized by the case-scoped read-only role"
+      },
+      "catalogKnowledgeDate": "2026-08-24",
+      "fixturePath": "src-tauri/tests/fixtures/adapters/scoutsuite.json",
+      "fixtureSha256": "1e9f4df243fc4d4a0b82a24f247f300ee2e1f56fc3acf50e57ad0dce54009c0a",
+      "outputFormats": [
+        "json"
+      ],
+      "readmeSha256": "f19aabeb09c3818ac0809fa1e6d0eeef28c519d18e6af02971056ae992a8674d"
+    },
+    {
+      "id": "cloudsplaining",
+      "repository": "https://github.com/salesforce/cloudsplaining",
+      "sourceRevision": "75a67ea9cb6d0fdf35ff185d08dad0d45587e6f7",
+      "reviewedAt": "2026-10-04",
+      "upstreamRevisionDate": "2026-06-14T23:46:19Z",
+      "sourceUrl": "https://github.com/salesforce/cloudsplaining/commit/75a67ea9cb6d0fdf35ff185d08dad0d45587e6f7",
+      "readmeUrl": "https://github.com/salesforce/cloudsplaining/blob/75a67ea9cb6d0fdf35ff185d08dad0d45587e6f7/README.md",
+      "displayName": "Cloudsplaining",
+      "engineVersion": "0.9.1",
+      "adapterVersion": "0.2.6",
+      "image": {
+        "repository": "ghcr.io/teddashh/ai-security-scanner-engine-cloudsplaining",
+        "tag": "0.9.1-6",
+        "digest": "sha256:26f629d8bf65dd43aec6e217a4492e7c974ec81d0daf6b07d52efff475968997",
+        "signature_identity": null
+      },
+      "rules": {
+        "mode": "embedded",
+        "identifier": "Cloudsplaining IAM analysis definitions",
+        "revision": "75a67ea9cb6d0fdf35ff185d08dad0d45587e6f7",
+        "acquisition_source": "https://github.com/salesforce/cloudsplaining/commit/75a67ea9cb6d0fdf35ff185d08dad0d45587e6f7"
+      },
+      "data": {
+        "mode": "runtime_live",
+        "identifier": "AWS IAM authorization details",
+        "revision": null,
+        "acquisition_source": "AWS IAM and STS APIs authorized by the case-scoped read-only role"
+      },
+      "catalogKnowledgeDate": "2026-08-24",
+      "fixturePath": "src-tauri/tests/fixtures/adapters/cloudsplaining.json",
+      "fixtureSha256": "c31ddf513de65f47dde5002ac7ad3f5e514b481b528dd013586ee7d72ca5cebc",
+      "outputFormats": [
+        "json"
+      ],
+      "readmeSha256": "48400bc99e61c1e95282d3f515dc53fbdb78e78411a7d8dd20b4b8cd5ec4f33b"
+    },
+    {
+      "id": "scubagear",
+      "repository": "https://github.com/cisagov/ScubaGear",
+      "sourceRevision": "4d34e9a48e38ce5c2e14c0fdfbaee53e57594ae2",
+      "reviewedAt": "2026-10-04",
+      "upstreamRevisionDate": "2026-08-20T18:59:38Z",
+      "sourceUrl": "https://github.com/cisagov/ScubaGear/commit/4d34e9a48e38ce5c2e14c0fdfbaee53e57594ae2",
+      "readmeUrl": "https://github.com/cisagov/ScubaGear/blob/4d34e9a48e38ce5c2e14c0fdfbaee53e57594ae2/README.md",
+      "displayName": "ScubaGear",
+      "engineVersion": "1.8.0",
+      "adapterVersion": "0.2.6",
+      "image": {
+        "repository": "ghcr.io/teddashh/ai-security-scanner-engine-scubagear",
+        "tag": "1.8.0-8",
+        "digest": "sha256:9933c263fee77b187f2b763ffc0b490a0e220effb8b011c8a204abb23d340cc7",
+        "signature_identity": null
+      },
+      "rules": {
+        "mode": "embedded",
+        "identifier": "CISA ScubaGear baselines",
+        "revision": "4d34e9a48e38ce5c2e14c0fdfbaee53e57594ae2",
+        "acquisition_source": "https://github.com/cisagov/ScubaGear/commit/4d34e9a48e38ce5c2e14c0fdfbaee53e57594ae2"
+      },
+      "data": {
+        "mode": "runtime_live",
+        "identifier": "Microsoft Entra ID configuration",
+        "revision": null,
+        "acquisition_source": "Microsoft Graph authorized by the case-scoped read-only tenant grant"
+      },
+      "catalogKnowledgeDate": "2026-08-24",
+      "fixturePath": "src-tauri/tests/fixtures/adapters/scubagear.json",
+      "fixtureSha256": "2b277fb3cc6418407e78dda009812a77529fe7b260f3e3bc130273a89af8d6a9",
+      "outputFormats": [
+        "json"
+      ],
+      "readmeSha256": "c696ec6500f3a1336de397b978234eb5eefcc1ad0bd12843c34b8c4a996db6b6"
+    },
+    {
+      "id": "maester",
+      "repository": "https://github.com/maester365/maester",
+      "sourceRevision": "6bf1d98f094fc7a68e449d2f40f73ef820b72ee3",
+      "reviewedAt": "2026-10-04",
+      "upstreamRevisionDate": "2026-08-18T05:20:09Z",
+      "sourceUrl": "https://github.com/maester365/maester/commit/6bf1d98f094fc7a68e449d2f40f73ef820b72ee3",
+      "readmeUrl": "https://github.com/maester365/maester/blob/6bf1d98f094fc7a68e449d2f40f73ef820b72ee3/README.md",
+      "displayName": "Maester",
+      "engineVersion": "2.0.0",
+      "adapterVersion": "0.2.6",
+      "image": {
+        "repository": "ghcr.io/teddashh/ai-security-scanner-engine-maester",
+        "tag": "2.0.0-9",
+        "digest": "sha256:a41df2693dcb5923a85fb4e75f10d80dca130c6269c5621d82cd4809f176cf81",
+        "signature_identity": null
+      },
+      "rules": {
+        "mode": "embedded",
+        "identifier": "Maester Graph-only Entra test profile",
+        "revision": "6bf1d98f094fc7a68e449d2f40f73ef820b72ee3",
+        "acquisition_source": "https://github.com/maester365/maester/commit/6bf1d98f094fc7a68e449d2f40f73ef820b72ee3"
+      },
+      "data": {
+        "mode": "runtime_live",
+        "identifier": "Microsoft Entra ID configuration",
+        "revision": null,
+        "acquisition_source": "Microsoft Graph authorized by the case-scoped read-only tenant grant"
+      },
+      "catalogKnowledgeDate": "2026-08-24",
+      "fixturePath": "src-tauri/tests/fixtures/adapters/maester.json",
+      "fixtureSha256": "5521629706fd87a91fe2e89d2d3e66f4fdeb7cb906b3e0f9ab93c2895fdb62e2",
+      "outputFormats": [
+        "json"
+      ],
+      "readmeSha256": "c2831d8fda3987fdcb3f6194ed52cc79302e469a000bbe607bd307232d7a9fd9"
+    },
+    {
+      "id": "naabu",
+      "repository": "https://github.com/projectdiscovery/naabu",
+      "sourceRevision": "5a0ca8bde91b5bb16213e9e8b5c6871eac954bd8",
+      "reviewedAt": "2026-10-04",
+      "upstreamRevisionDate": "2026-05-05T15:29:23Z",
+      "sourceUrl": "https://github.com/projectdiscovery/naabu/commit/5a0ca8bde91b5bb16213e9e8b5c6871eac954bd8",
+      "readmeUrl": "https://github.com/projectdiscovery/naabu/blob/5a0ca8bde91b5bb16213e9e8b5c6871eac954bd8/README.md",
+      "displayName": "Naabu",
+      "engineVersion": "2.6.1",
+      "adapterVersion": "0.2.6",
+      "image": {
+        "repository": "ghcr.io/teddashh/ai-security-scanner-engine-naabu",
+        "tag": "2.6.1-7",
+        "digest": "sha256:e94240f4f067f39b7db9501a48c60411e6b29a215a11dda63406b9e62c061ab6",
+        "signature_identity": null
+      },
+      "rules": {
+        "mode": "not_applicable",
+        "identifier": "TCP port discovery has no external rule pack",
+        "revision": null,
+        "acquisition_source": null
+      },
+      "data": {
+        "mode": "runtime_live",
+        "identifier": "authorized target reachability",
+        "revision": null,
+        "acquisition_source": "only addresses in the case scope grant"
+      },
+      "catalogKnowledgeDate": "2026-08-24",
+      "fixturePath": "src-tauri/tests/fixtures/adapters/naabu.jsonl",
+      "fixtureSha256": "37e690f94dfcb1b805bf77192a764927dd27061e787f133fa8ffa504c113efb5",
+      "outputFormats": [
+        "jsonl"
+      ],
+      "readmeSha256": "81a9617bf294e1c75da03a08f22254ddf2e3340220e9202ce69aaff5b13eed12"
+    },
+    {
+      "id": "httpx",
+      "repository": "https://github.com/projectdiscovery/httpx",
+      "sourceRevision": "13037dd08b9715cfbd960a70ae1edfef6686a857",
+      "reviewedAt": "2026-10-04",
+      "upstreamRevisionDate": "2026-07-09T16:11:51Z",
+      "sourceUrl": "https://github.com/projectdiscovery/httpx/commit/13037dd08b9715cfbd960a70ae1edfef6686a857",
+      "readmeUrl": "https://github.com/projectdiscovery/httpx/blob/13037dd08b9715cfbd960a70ae1edfef6686a857/README.md",
+      "displayName": "httpx",
+      "engineVersion": "1.10.0",
+      "adapterVersion": "0.2.6",
+      "image": {
+        "repository": "ghcr.io/teddashh/ai-security-scanner-engine-httpx",
+        "tag": "1.10.0-7",
+        "digest": "sha256:6911039efb20370ebd84ed6e57d7d793d5ae7bdff5813c007ac9b2774aaaed1e",
+        "signature_identity": null
+      },
+      "rules": {
+        "mode": "not_applicable",
+        "identifier": "HTTP metadata collection has no external rule pack",
+        "revision": null,
+        "acquisition_source": null
+      },
+      "data": {
+        "mode": "runtime_live",
+        "identifier": "authorized HTTP service observations",
+        "revision": null,
+        "acquisition_source": "only services in the case scope grant"
+      },
+      "catalogKnowledgeDate": "2026-08-24",
+      "fixturePath": "src-tauri/tests/fixtures/adapters/httpx.jsonl",
+      "fixtureSha256": "d68039b76a1d3a20082fe1e1c2f9c10c6e9c0d980bcd34c0748ff1e655680279",
+      "outputFormats": [
+        "jsonl"
+      ],
+      "readmeSha256": "4f024511773d05007eb314a44e39b9e313ebc10821bd1a5164684ed7373e8166"
+    },
+    {
+      "id": "nuclei",
+      "repository": "https://github.com/projectdiscovery/nuclei",
+      "sourceRevision": "a8c88feb4a1c8e961b7902534ce3af97e9d524a4",
+      "reviewedAt": "2026-10-04",
+      "upstreamRevisionDate": "2026-08-08T12:20:01Z",
+      "sourceUrl": "https://github.com/projectdiscovery/nuclei/commit/a8c88feb4a1c8e961b7902534ce3af97e9d524a4",
+      "readmeUrl": "https://github.com/projectdiscovery/nuclei/blob/a8c88feb4a1c8e961b7902534ce3af97e9d524a4/README.md",
+      "displayName": "Nuclei",
+      "engineVersion": "3.11.1",
+      "adapterVersion": "0.2.6",
+      "image": {
+        "repository": "ghcr.io/teddashh/ai-security-scanner-engine-nuclei",
+        "tag": "3.11.1-7",
+        "digest": "sha256:c0d9709528f9d900ccf7e676de3e19456865aaa9788828adb29e19bd55204520",
+        "signature_identity": null
+      },
+      "rules": {
+        "mode": "embedded",
+        "identifier": "projectdiscovery/nuclei-templates",
+        "revision": "24858b4bfabfa86f0bcfd36aea24fb535152b012",
+        "acquisition_source": "https://github.com/projectdiscovery/nuclei-templates/commit/24858b4bfabfa86f0bcfd36aea24fb535152b012"
+      },
+      "data": {
+        "mode": "runtime_live",
+        "identifier": "authorized service responses",
+        "revision": null,
+        "acquisition_source": "only services with active-testing scope grants"
+      },
+      "catalogKnowledgeDate": "2026-08-24",
+      "fixturePath": "src-tauri/tests/fixtures/adapters/nuclei.jsonl",
+      "fixtureSha256": "d5fb93be0e9b9f15c851d2eb70fd1d4be5a2b0f401c484a3628be191797d0cb2",
+      "outputFormats": [
+        "jsonl",
+        "sarif"
+      ],
+      "readmeSha256": "432bfcc42c738b01336348a3b7ead3fd7ee30b3b1d070557c00ff27e80284485"
+    },
+    {
+      "id": "greenbone",
+      "repository": "https://github.com/greenbone/openvas-scanner",
+      "sourceRevision": "26465a11ff0e6a98d60a253265fab5974fc757b6",
+      "reviewedAt": "2026-10-04",
+      "upstreamRevisionDate": "2026-08-31T11:14:24Z",
+      "sourceUrl": "https://github.com/greenbone/openvas-scanner/commit/26465a11ff0e6a98d60a253265fab5974fc757b6",
+      "readmeUrl": "https://github.com/greenbone/openvas-scanner/blob/26465a11ff0e6a98d60a253265fab5974fc757b6/README.md",
+      "displayName": "Greenbone Community Edition",
+      "engineVersion": "23.50.24",
+      "adapterVersion": "0.2.6",
+      "image": {
+        "repository": "ghcr.io/teddashh/ai-security-scanner-engine-greenbone",
+        "tag": "23.50.24-feed202610010558-1",
+        "digest": "sha256:d2e95d252272488891d04766e66362aacb234e1e2975dca27e834f0050a695c4",
+        "signature_identity": null
+      },
+      "rules": {
+        "mode": "embedded",
+        "identifier": "Greenbone Community Feed vulnerability tests",
+        "revision": "816c24126e0375d32c667b78d20342ce7c58ec58",
+        "acquisition_source": "registry.community.greenbone.net/community/vulnerability-tests@sha256:86a44fb7a9f9b982d521f98914aba98846f573b4f9ec9e8c1007c4866ec943af"
+      },
+      "data": {
+        "mode": "embedded",
+        "identifier": "Greenbone Community Feed and Notus snapshot",
+        "revision": "816c24126e0375d32c667b78d20342ce7c58ec58",
+        "acquisition_source": "registry.community.greenbone.net/community/vulnerability-tests@sha256:86a44fb7a9f9b982d521f98914aba98846f573b4f9ec9e8c1007c4866ec943af"
+      },
+      "catalogKnowledgeDate": "2026-08-24",
+      "fixturePath": "src-tauri/tests/fixtures/adapters/greenbone.xml",
+      "fixtureSha256": "84a677f206382ef229032dbb57baf61b7f801e03ff223efd988761884eeab5e5",
+      "outputFormats": [
+        "xml"
+      ],
+      "readmeSha256": "ed524d00937699416e104d8b38065875bce4a84aaf7dcaba7994588319c05aed"
+    },
+    {
+      "id": "zap",
+      "repository": "https://github.com/zaproxy/zaproxy",
+      "sourceRevision": "2665d972f6d587ba4773a95053ac39af3fdf8df9",
+      "reviewedAt": "2026-10-04",
+      "upstreamRevisionDate": "2026-08-06T08:30:53Z",
+      "sourceUrl": "https://github.com/zaproxy/zaproxy/commit/2665d972f6d587ba4773a95053ac39af3fdf8df9",
+      "readmeUrl": "https://github.com/zaproxy/zaproxy/blob/2665d972f6d587ba4773a95053ac39af3fdf8df9/README.md",
+      "displayName": "ZAP",
+      "engineVersion": "2.17.0",
+      "adapterVersion": "0.2.6",
+      "image": {
+        "repository": "ghcr.io/zaproxy/zaproxy",
+        "tag": "2.17.0",
+        "digest": "sha256:781a2bdaea47324e7bab583e2263f21d257b0aee61ed51521a5be45f5f5081ef",
+        "signature_identity": null
+      },
+      "rules": {
+        "mode": "embedded",
+        "identifier": "zaproxy/zap-extensions pscanrules",
+        "revision": "pscanrules-75.0.0",
+        "acquisition_source": "bundled in the pinned upstream image at /zap/plugin/pscanrules-release-75.zap"
+      },
+      "data": {
+        "mode": "runtime_live",
+        "identifier": "authorized service responses",
+        "revision": null,
+        "acquisition_source": "only services with active-testing scope grants"
+      },
+      "catalogKnowledgeDate": "2026-08-07",
+      "fixturePath": "src-tauri/tests/fixtures/adapters/zap.json",
+      "fixtureSha256": "b48a77d5682f7858b77454e22b2395da24fdceda43c2b90e679ea480c17a70ee",
+      "outputFormats": [
+        "json"
+      ],
+      "readmeSha256": "f87d291f30f22568f85b69f6bb4e4d28de77cf8053d7cd7813f2d27318e00891"
+    },
+    {
+      "id": "semgrep",
+      "repository": "https://github.com/semgrep/semgrep",
+      "sourceRevision": "a0c13f304151e531c7e7c00838076211a07a790c",
+      "reviewedAt": "2026-10-04",
+      "upstreamRevisionDate": "2026-08-20T18:29:37Z",
+      "sourceUrl": "https://github.com/semgrep/semgrep/commit/a0c13f304151e531c7e7c00838076211a07a790c",
+      "readmeUrl": "https://github.com/semgrep/semgrep/blob/a0c13f304151e531c7e7c00838076211a07a790c/README.md",
+      "displayName": "Semgrep",
+      "engineVersion": "source@a0c13f304151e531c7e7c00838076211a07a790c",
+      "adapterVersion": "0.2.6",
+      "image": {
+        "repository": "ghcr.io/teddashh/ai-security-scanner-engine-semgrep",
+        "tag": "1.174.0-4",
+        "digest": "sha256:3f1a10c7bce32eae912479c5744dbb653bdfa9a4cbd3d53afd2e0a435b10fb59",
+        "signature_identity": "https://github.com/teddashh/ai-security-scanner/.github/workflows/engine-images-local-k8s.yml@refs/heads/main"
+      },
+      "rules": {
+        "mode": "embedded",
+        "identifier": "semgrep/semgrep-rules legacy security selection plus four product rules",
+        "revision": "0f5a85ceab1b82b193d0eaa418784c932d237d68",
+        "acquisition_source": "https://github.com/semgrep/semgrep-rules/commit/0f5a85ceab1b82b193d0eaa418784c932d237d68"
+      },
+      "data": {
+        "mode": "runtime_bound",
+        "identifier": "repository or filesystem snapshot",
+        "revision": "case_artifact_sha256",
+        "acquisition_source": "assessment_case"
+      },
+      "catalogKnowledgeDate": "2026-08-24",
+      "fixturePath": "src-tauri/tests/fixtures/adapters/semgrep.json",
+      "fixtureSha256": "a855d797fb1e0b1f2ba8d7d1c180289e81e2fde604cb7df39239bf60906b0190",
+      "outputFormats": [
+        "json",
+        "sarif"
+      ],
+      "readmeSha256": "cb039cfdcd7f53d69a1e3ac960113a02b9803885f069e6bb299f91b88d78b064"
+    },
+    {
+      "id": "gitleaks",
+      "repository": "https://github.com/gitleaks/gitleaks",
+      "sourceRevision": "83d9cd684c87d95d656c1458ef04895a7f1cbd8e",
+      "reviewedAt": "2026-10-04",
+      "upstreamRevisionDate": "2026-03-12T15:40:37Z",
+      "sourceUrl": "https://github.com/gitleaks/gitleaks/commit/83d9cd684c87d95d656c1458ef04895a7f1cbd8e",
+      "readmeUrl": "https://github.com/gitleaks/gitleaks/blob/83d9cd684c87d95d656c1458ef04895a7f1cbd8e/README.md",
+      "displayName": "Gitleaks",
+      "engineVersion": "8.30.1",
+      "adapterVersion": "0.2.6",
+      "image": {
+        "repository": "ghcr.io/teddashh/ai-security-scanner-engine-gitleaks",
+        "tag": "8.30.1-2",
+        "digest": "sha256:95313654f9c37115a906629a82113ba6e1c729950be70909da8362e9482b477e",
+        "signature_identity": "https://github.com/teddashh/ai-security-scanner/.github/workflows/engine-image-gitleaks.yml@refs/heads/main"
+      },
+      "rules": {
+        "mode": "embedded",
+        "identifier": "scanner-owned Gitleaks default configuration",
+        "revision": "sha256:e163e53b9e7e8a8511e77271e2b323ed057759542a6d988258afe3a1fa329caf",
+        "acquisition_source": "https://github.com/gitleaks/gitleaks/blob/83d9cd684c87d95d656c1458ef04895a7f1cbd8e/config/gitleaks.toml"
+      },
+      "data": {
+        "mode": "runtime_bound",
+        "identifier": "repository or filesystem snapshot",
+        "revision": "case_artifact_sha256",
+        "acquisition_source": "assessment_case"
+      },
+      "catalogKnowledgeDate": "2026-08-24",
+      "fixturePath": "src-tauri/tests/fixtures/adapters/gitleaks.json",
+      "fixtureSha256": "8d1698f1b14c0feb57721ed37a5291c7c795724e6eb269ad1e16d773c522b7f5",
+      "outputFormats": [
+        "json"
+      ],
+      "readmeSha256": "022fd4d9fb53a8e7eb6b6e49875052e571f784bafab387deb484e28f8a1ea38b"
+    },
+    {
+      "id": "trufflehog",
+      "repository": "https://github.com/trufflesecurity/trufflehog",
+      "sourceRevision": "3ab759fef4bb5935d4fe9ac68b503d05346b8364",
+      "reviewedAt": "2026-10-04",
+      "upstreamRevisionDate": "2026-08-21T14:53:01Z",
+      "sourceUrl": "https://github.com/trufflesecurity/trufflehog/commit/3ab759fef4bb5935d4fe9ac68b503d05346b8364",
+      "readmeUrl": "https://github.com/trufflesecurity/trufflehog/blob/3ab759fef4bb5935d4fe9ac68b503d05346b8364/README.md",
+      "displayName": "TruffleHog",
+      "engineVersion": "source@3ab759fef4bb5935d4fe9ac68b503d05346b8364",
+      "adapterVersion": "0.2.6",
+      "image": {
+        "repository": "ghcr.io/teddashh/ai-security-scanner-engine-trufflehog",
+        "tag": "3.97.0-3",
+        "digest": "sha256:dd0e0879bc4d3ac79194d6c734d2a2636cc83fdacb01f611b6b3284fe86dd55a",
+        "signature_identity": null
+      },
+      "rules": {
+        "mode": "embedded",
+        "identifier": "TruffleHog detectors",
+        "revision": "3ab759fef4bb5935d4fe9ac68b503d05346b8364",
+        "acquisition_source": "https://github.com/trufflesecurity/trufflehog/commit/3ab759fef4bb5935d4fe9ac68b503d05346b8364"
+      },
+      "data": {
+        "mode": "runtime_bound",
+        "identifier": "repository or filesystem snapshot",
+        "revision": "case_artifact_sha256",
+        "acquisition_source": "assessment_case"
+      },
+      "catalogKnowledgeDate": "2026-08-24",
+      "fixturePath": "src-tauri/tests/fixtures/adapters/trufflehog.jsonl",
+      "fixtureSha256": "0b651da79e4171f2ff77351105b948ac3088d7411310899f640a7da4169ce7fa",
+      "outputFormats": [
+        "jsonl"
+      ],
+      "readmeSha256": "89e6a597caeacbc46f43c0324e09bf6aebdf2547b2e2559a2560087e3c39cd8e"
+    },
+    {
+      "id": "checkov",
+      "repository": "https://github.com/bridgecrewio/checkov",
+      "sourceRevision": "0604e97b0f77c89a8c6c1fe2219c3d251cbb9789",
+      "reviewedAt": "2026-10-04",
+      "upstreamRevisionDate": "2026-08-20T09:39:24Z",
+      "sourceUrl": "https://github.com/bridgecrewio/checkov/commit/0604e97b0f77c89a8c6c1fe2219c3d251cbb9789",
+      "readmeUrl": "https://github.com/bridgecrewio/checkov/blob/0604e97b0f77c89a8c6c1fe2219c3d251cbb9789/README.md",
+      "displayName": "Checkov",
+      "engineVersion": "3.3.13",
+      "adapterVersion": "0.2.6",
+      "image": {
+        "repository": "ghcr.io/teddashh/ai-security-scanner-engine-checkov",
+        "tag": "3.3.13-1",
+        "digest": "sha256:0ecc187b17faa9c538c9b1ecc08a4195283290222694d0f87d50016f2bb79b35",
+        "signature_identity": null
+      },
+      "rules": {
+        "mode": "embedded",
+        "identifier": "Checkov checks",
+        "revision": "0604e97b0f77c89a8c6c1fe2219c3d251cbb9789",
+        "acquisition_source": "https://github.com/bridgecrewio/checkov/commit/0604e97b0f77c89a8c6c1fe2219c3d251cbb9789"
+      },
+      "data": {
+        "mode": "runtime_bound",
+        "identifier": "repository working-tree snapshot",
+        "revision": "case_artifact_sha256",
+        "acquisition_source": "assessment_case"
+      },
+      "catalogKnowledgeDate": "2026-08-24",
+      "fixturePath": "src-tauri/tests/fixtures/adapters/checkov.json",
+      "fixtureSha256": "c6523d3b12abd2087157214954400ee50065b40a9bf0d101c87c67bc938946ed",
+      "outputFormats": [
+        "json",
+        "sarif",
+        "cyclonedx"
+      ],
+      "readmeSha256": "3c6aeee9721851b6e94b41331d49f9b11bf7aae0987bd337ce3fdb0b495e67d6"
+    },
+    {
+      "id": "kics",
+      "repository": "https://github.com/Checkmarx/kics",
+      "sourceRevision": "e1f23cad9640f55b963f22a116b04906b8c16ac6",
+      "reviewedAt": "2026-10-04",
+      "upstreamRevisionDate": "2026-03-03T17:56:16Z",
+      "sourceUrl": "https://github.com/Checkmarx/kics/commit/e1f23cad9640f55b963f22a116b04906b8c16ac6",
+      "readmeUrl": "https://github.com/Checkmarx/kics/blob/e1f23cad9640f55b963f22a116b04906b8c16ac6/README.md",
+      "displayName": "KICS",
+      "engineVersion": "2.1.20",
+      "adapterVersion": "0.2.6",
+      "image": {
+        "repository": "checkmarx/kics",
+        "tag": "v2.1.20",
+        "digest": "sha256:3e5a268eb8adda2e5a483c9359ddfc4cd520ab856a7076dc0b1d8784a37e2602",
+        "signature_identity": null
+      },
+      "rules": {
+        "mode": "embedded",
+        "identifier": "KICS queries",
+        "revision": "e1f23cad9640f55b963f22a116b04906b8c16ac6",
+        "acquisition_source": "https://github.com/Checkmarx/kics/commit/e1f23cad9640f55b963f22a116b04906b8c16ac6"
+      },
+      "data": {
+        "mode": "runtime_bound",
+        "identifier": "IaC project snapshot",
+        "revision": "case_artifact_sha256",
+        "acquisition_source": "assessment_case"
+      },
+      "catalogKnowledgeDate": "2026-08-24",
+      "fixturePath": "src-tauri/tests/fixtures/adapters/kics.json",
+      "fixtureSha256": "953ef8bfee31dde0423aea0a2e88263547f867b2a4aa0d74cb61c1164e30ac51",
+      "outputFormats": [
+        "json",
+        "sarif"
+      ],
+      "readmeSha256": "3837109c424977e0459318945e539466ac932090c3ad89d98405419e056acaf2"
+    },
+    {
+      "id": "trivy",
+      "repository": "https://github.com/aquasecurity/trivy",
+      "sourceRevision": "e1fd17a0ea4a8cf24bc4b4dd7e2cfbf4bb31b994",
+      "reviewedAt": "2026-10-04",
+      "upstreamRevisionDate": "2026-08-14T10:24:58Z",
+      "sourceUrl": "https://github.com/aquasecurity/trivy/commit/e1fd17a0ea4a8cf24bc4b4dd7e2cfbf4bb31b994",
+      "readmeUrl": "https://github.com/aquasecurity/trivy/blob/e1fd17a0ea4a8cf24bc4b4dd7e2cfbf4bb31b994/README.md",
+      "displayName": "Trivy",
+      "engineVersion": "0.74.0",
+      "adapterVersion": "0.2.6",
+      "image": {
+        "repository": "ghcr.io/teddashh/ai-security-scanner-engine-trivy",
+        "tag": "0.74.0-4",
+        "digest": "sha256:9bfcef9a6a9d9a69eefcece06b0670eaed72541656b65155469b41acb3855dc2",
+        "signature_identity": null
+      },
+      "rules": {
+        "mode": "embedded",
+        "identifier": "Trivy OS and library package analyzers",
+        "revision": "e1fd17a0ea4a8cf24bc4b4dd7e2cfbf4bb31b994",
+        "acquisition_source": "https://github.com/aquasecurity/trivy/commit/e1fd17a0ea4a8cf24bc4b4dd7e2cfbf4bb31b994"
+      },
+      "data": {
+        "mode": "embedded",
+        "identifier": "Trivy vulnerability database snapshot",
+        "revision": "sha256:a61aa42edc534843230ca24ef72ef322a2da18d717c3de4b6277f4aac43926a1",
+        "acquisition_source": "oci://ghcr.io/aquasecurity/trivy-db"
+      },
+      "catalogKnowledgeDate": "2026-08-24",
+      "fixturePath": "src-tauri/tests/fixtures/adapters/trivy.json",
+      "fixtureSha256": "0834fcda3b11f58c16b8ae54fea5f3c44134b53828ae3f23dd3ff12205ba73aa",
+      "outputFormats": [
+        "json",
+        "sarif",
+        "cyclonedx",
+        "spdx-json"
+      ],
+      "readmeSha256": "217d4d9db626c98b80f0fa214b510705d922f16b9c9452a6ce10d86788be67ba"
+    },
+    {
+      "id": "grype",
+      "repository": "https://github.com/anchore/grype",
+      "sourceRevision": "b5fa92bbcbef655497e3be840a2f718380e2cdd3",
+      "reviewedAt": "2026-10-04",
+      "upstreamRevisionDate": "2026-08-10T16:05:15Z",
+      "sourceUrl": "https://github.com/anchore/grype/commit/b5fa92bbcbef655497e3be840a2f718380e2cdd3",
+      "readmeUrl": "https://github.com/anchore/grype/blob/b5fa92bbcbef655497e3be840a2f718380e2cdd3/README.md",
+      "displayName": "Grype",
+      "engineVersion": "0.117.0",
+      "adapterVersion": "0.2.6",
+      "image": {
+        "repository": "ghcr.io/teddashh/ai-security-scanner-engine-grype",
+        "tag": "0.117.0-4",
+        "digest": "sha256:56b0d675e3b8d539890e853699c114493a72a54cca0bbe254eceee7ec2b4c517",
+        "signature_identity": null
+      },
+      "rules": {
+        "mode": "embedded",
+        "identifier": "Grype matchers",
+        "revision": "b5fa92bbcbef655497e3be840a2f718380e2cdd3",
+        "acquisition_source": "https://github.com/anchore/grype/commit/b5fa92bbcbef655497e3be840a2f718380e2cdd3"
+      },
+      "data": {
+        "mode": "embedded",
+        "identifier": "Grype vulnerability database snapshot",
+        "revision": "sha256:db6f590412955f6b58cec12bfa4b712b2626eef9a030bffd8f32b9ebce074ff8",
+        "acquisition_source": "https://toolbox-data.anchore.io/grype/databases/listing.json"
+      },
+      "catalogKnowledgeDate": "2026-08-24",
+      "fixturePath": "src-tauri/tests/fixtures/adapters/grype.json",
+      "fixtureSha256": "ed77e0d99f6c00b7a540dedd7580927504c32ff9b9b3695d60f084fbba53fc09",
+      "outputFormats": [
+        "json",
+        "cyclonedx",
+        "sarif"
+      ],
+      "readmeSha256": "c02a690ef6775b8a88e1d3036d69264ebebde2f1cf76bd3793f270183f3f4748"
+    },
+    {
+      "id": "syft",
+      "repository": "https://github.com/anchore/syft",
+      "sourceRevision": "2293641e3bd628a01bb37639318d62c0ebe89b39",
+      "reviewedAt": "2026-10-04",
+      "upstreamRevisionDate": "2026-08-10T14:26:29Z",
+      "sourceUrl": "https://github.com/anchore/syft/commit/2293641e3bd628a01bb37639318d62c0ebe89b39",
+      "readmeUrl": "https://github.com/anchore/syft/blob/2293641e3bd628a01bb37639318d62c0ebe89b39/README.md",
+      "displayName": "Syft",
+      "engineVersion": "1.51.0",
+      "adapterVersion": "0.2.6",
+      "image": {
+        "repository": "ghcr.io/teddashh/ai-security-scanner-engine-syft",
+        "tag": "1.51.0-1",
+        "digest": "sha256:805c9fe522113319f994f99cd68fcb5c18e322dd933e7d89f82cd91f5a5c8501",
+        "signature_identity": null
+      },
+      "rules": {
+        "mode": "embedded",
+        "identifier": "Syft catalogers",
+        "revision": "2293641e3bd628a01bb37639318d62c0ebe89b39",
+        "acquisition_source": "https://github.com/anchore/syft/commit/2293641e3bd628a01bb37639318d62c0ebe89b39"
+      },
+      "data": {
+        "mode": "runtime_bound",
+        "identifier": "repository working-tree snapshot",
+        "revision": "case_artifact_sha256",
+        "acquisition_source": "assessment_case"
+      },
+      "catalogKnowledgeDate": "2026-08-24",
+      "fixturePath": "src-tauri/tests/fixtures/adapters/syft.json",
+      "fixtureSha256": "4381a81b75aff57183d78750f48e8bacb6779ed26eab1fd436e1daf8de004ddb",
+      "outputFormats": [
+        "syft-json",
+        "cyclonedx-json",
+        "spdx-json"
+      ],
+      "readmeSha256": "525cd863114cfad6353ec672c8026404654d564c5c0a0761c3611fea6a17fba3"
+    },
+    {
+      "id": "kubescape",
+      "repository": "https://github.com/kubescape/kubescape",
+      "sourceRevision": "469969f6bebf46bef5e808b91a4bb46fb2bbf4ed",
+      "reviewedAt": "2026-10-04",
+      "upstreamRevisionDate": "2026-08-12T08:18:39Z",
+      "sourceUrl": "https://github.com/kubescape/kubescape/commit/469969f6bebf46bef5e808b91a4bb46fb2bbf4ed",
+      "readmeUrl": "https://github.com/kubescape/kubescape/blob/469969f6bebf46bef5e808b91a4bb46fb2bbf4ed/README.md",
+      "displayName": "Kubescape",
+      "engineVersion": "4.0.12",
+      "adapterVersion": "0.2.6",
+      "image": {
+        "repository": "ghcr.io/teddashh/ai-security-scanner-engine-kubescape",
+        "tag": "4.0.12-3",
+        "digest": "sha256:87c8e5c29c938aa39e304355b1c037b09bda9f89e130b3ccde6df3eaf7ee537c",
+        "signature_identity": null
+      },
+      "rules": {
+        "mode": "embedded",
+        "identifier": "Kubescape NSA framework and control artifacts",
+        "revision": "a12188c49147bb6ec379b42a4159d3d5852634b8",
+        "acquisition_source": "https://github.com/kubescape/regolibrary/tree/a12188c49147bb6ec379b42a4159d3d5852634b8"
+      },
+      "data": {
+        "mode": "runtime_bound",
+        "identifier": "Kubernetes manifest snapshot",
+        "revision": "case_artifact_sha256",
+        "acquisition_source": "assessment_case"
+      },
+      "catalogKnowledgeDate": "2026-08-24",
+      "fixturePath": "src-tauri/tests/fixtures/adapters/kubescape.json",
+      "fixtureSha256": "b6b511e8696206d1917537bc0f0fbd12398c7a0f53297e3e611ede5cfc96c1bf",
+      "outputFormats": [
+        "json"
+      ],
+      "readmeSha256": "4058320f09153ae05040d2a6a6270d3d301b17ab84d960ecac68c54b687b73f3"
+    },
+    {
+      "id": "kube-bench",
+      "repository": "https://github.com/aquasecurity/kube-bench",
+      "sourceRevision": "9f133cb7509ce1dbedfc860e94474588000e25ac",
+      "reviewedAt": "2026-10-04",
+      "upstreamRevisionDate": "2026-08-18T08:46:22Z",
+      "sourceUrl": "https://github.com/aquasecurity/kube-bench/commit/9f133cb7509ce1dbedfc860e94474588000e25ac",
+      "readmeUrl": "https://github.com/aquasecurity/kube-bench/blob/9f133cb7509ce1dbedfc860e94474588000e25ac/README.md",
+      "displayName": "kube-bench",
+      "engineVersion": "source@9f133cb7509ce1dbedfc860e94474588000e25ac",
+      "adapterVersion": "0.2.6",
+      "image": {
+        "repository": "ghcr.io/teddashh/ai-security-scanner-engine-kube-bench",
+        "tag": "0.16.0-4",
+        "digest": "sha256:77a136e48c6491528a70acabc8380e161d362a63c5bcc9d66312393c3436538c",
+        "signature_identity": null
+      },
+      "rules": {
+        "mode": "embedded",
+        "identifier": "CIS benchmark configuration",
+        "revision": "9f133cb7509ce1dbedfc860e94474588000e25ac",
+        "acquisition_source": "https://github.com/aquasecurity/kube-bench/commit/9f133cb7509ce1dbedfc860e94474588000e25ac"
+      },
+      "data": {
+        "mode": "runtime_bound",
+        "identifier": "Kubernetes node configuration snapshot",
+        "revision": "case_artifact_sha256",
+        "acquisition_source": "assessment_case"
+      },
+      "catalogKnowledgeDate": "2026-08-24",
+      "fixturePath": "src-tauri/tests/fixtures/adapters/kube-bench.json",
+      "fixtureSha256": "b49e2e99c54b03e3078d1154292a6cbb2c40706bd503f8f5689687616601f99c",
+      "outputFormats": [
+        "json"
+      ],
+      "readmeSha256": "36c3849aeca75d8cfab4e2f0789f651282983093dbf2bd0f5408c198aa69fcac"
+    },
+    {
+      "id": "garak",
+      "repository": "https://github.com/NVIDIA/garak",
+      "sourceRevision": "93aa9cdec309ec4170559676f1826ea2a679920c",
+      "reviewedAt": "2026-10-04",
+      "upstreamRevisionDate": "2026-09-09T18:19:05Z",
+      "sourceUrl": "https://github.com/NVIDIA/garak/commit/93aa9cdec309ec4170559676f1826ea2a679920c",
+      "readmeUrl": "https://github.com/NVIDIA/garak/blob/93aa9cdec309ec4170559676f1826ea2a679920c/README.md",
+      "displayName": "garak",
+      "engineVersion": "0.17.0",
+      "adapterVersion": "0.2.6",
+      "image": {
+        "repository": "ghcr.io/teddashh/ai-security-scanner-engine-garak",
+        "tag": "0.17.0-1",
+        "digest": "sha256:8a39b5812a4fd5aa2caecfef089ff85c39709f1bc00afa3328714346baab222f",
+        "signature_identity": null
+      },
+      "rules": {
+        "mode": "embedded",
+        "identifier": "garak packaged probes and detectors",
+        "revision": null,
+        "acquisition_source": "https://github.com/NVIDIA/garak/tree/93aa9cdec309ec4170559676f1826ea2a679920c/garak/probes"
+      },
+      "data": {
+        "mode": "runtime_bound",
+        "identifier": "the AI model endpoint named by the case scope grant",
+        "revision": null,
+        "acquisition_source": "assessment_case"
+      },
+      "catalogKnowledgeDate": "2026-09-12",
+      "fixturePath": "src-tauri/tests/fixtures/adapters/garak-0.17.0-native.jsonl",
+      "fixtureSha256": "a61353de6e0fe1c767491fc808312166f83eb57ce48d3f3959caf02b86435d4e",
+      "outputFormats": [
+        "jsonl"
+      ],
+      "readmeSha256": "54a61bb985390ba90eff8aaf347a355df5560d9dbe9f4868cdd1624a0703c330"
+    },
+    {
+      "id": "agentic-radar",
+      "repository": "https://github.com/splx-ai/agentic-radar",
+      "sourceRevision": "65a7e4bd01e2034c7cb52e9620eeed287688cc53",
+      "reviewedAt": "2026-10-04",
+      "upstreamRevisionDate": "2025-11-27T15:28:30Z",
+      "sourceUrl": "https://github.com/splx-ai/agentic-radar/commit/65a7e4bd01e2034c7cb52e9620eeed287688cc53",
+      "readmeUrl": "https://github.com/splx-ai/agentic-radar/blob/65a7e4bd01e2034c7cb52e9620eeed287688cc53/README.md",
+      "displayName": "Agentic Radar",
+      "engineVersion": "0.14.1",
+      "adapterVersion": "0.2.6",
+      "image": {
+        "repository": "ghcr.io/teddashh/ai-security-scanner-engine-agentic-radar",
+        "tag": "0.14.1-1",
+        "digest": "sha256:2a8d16b9ff5ac7974b0aea8e6504219e0da295b804d01f51da0b4267d7cdafae",
+        "signature_identity": null
+      },
+      "rules": {
+        "mode": "not_applicable",
+        "identifier": "No vulnerability rules are consumed; only the static workflow graph is normalized",
+        "revision": null,
+        "acquisition_source": null
+      },
+      "data": {
+        "mode": "runtime_bound",
+        "identifier": "repository working-tree snapshot",
+        "revision": "case_artifact_sha256",
+        "acquisition_source": "assessment_case"
+      },
+      "catalogKnowledgeDate": "2026-09-13",
+      "fixturePath": "docs/research/fixtures/agentic-radar/n8n.json",
+      "fixtureSha256": "303b48d29c05c8b5020e77964c3c43080f201abac2d5cb7697f6c29800e2c275",
+      "outputFormats": [
+        "json"
+      ],
+      "readmeSha256": "de61399377d09ba6deeff0098e04282d991c28a03dca9ceba86d97a7228aa0eb"
+    },
+    {
+      "id": "mcp-armor",
+      "repository": "https://github.com/aira-security/mcp-armor",
+      "sourceRevision": "6af4cee4665ab6242f02a88952f9127b6a04922a",
+      "reviewedAt": "2026-10-04",
+      "upstreamRevisionDate": "2026-03-27T09:05:47Z",
+      "sourceUrl": "https://github.com/aira-security/mcp-armor/commit/6af4cee4665ab6242f02a88952f9127b6a04922a",
+      "readmeUrl": "https://github.com/aira-security/mcp-armor/blob/6af4cee4665ab6242f02a88952f9127b6a04922a/README.md",
+      "displayName": "MCP Armor",
+      "engineVersion": "1.0.2",
+      "adapterVersion": "0.2.6",
+      "image": {
+        "repository": "ghcr.io/teddashh/ai-security-scanner-engine-mcp-armor",
+        "tag": "1.0.2-config-only.1",
+        "digest": "sha256:f8dcf9b774e0f90cfbe32d81b1dc04c6b1d61538fa9829ca28c674d78440dfdc",
+        "signature_identity": null
+      },
+      "rules": {
+        "mode": "embedded",
+        "identifier": "MCP Armor hardcoded_secrets and excessive_tool_permissions configuration checks",
+        "revision": "6af4cee4665ab6242f02a88952f9127b6a04922a",
+        "acquisition_source": "https://github.com/aira-security/mcp-armor/tree/6af4cee4665ab6242f02a88952f9127b6a04922a/src/mcp_armor/scan_checks"
+      },
+      "data": {
+        "mode": "runtime_bound",
+        "identifier": "one MCP configuration file selected from the repository snapshot",
+        "revision": "case_artifact_sha256",
+        "acquisition_source": "assessment_case"
+      },
+      "catalogKnowledgeDate": "2026-09-13",
+      "fixturePath": "docs/research/fixtures/mcp-armor/config-findings.json",
+      "fixtureSha256": "8a94b0b7aa717b106896bf3e86c5da063ab5f8023fcff2b97cac85990a72cffa",
+      "outputFormats": [
+        "json"
+      ],
+      "readmeSha256": "81ada5243a5fd63269ea256312f444df47f7cc83dc8f9c579f2913a4a9641f40"
+    }
+  ]
+}

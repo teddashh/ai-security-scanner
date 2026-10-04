@@ -1,0 +1,4 @@
+f80bb1e5ba335a3b4533b4cd288f2d315b39fc844b7e661c5e687ffe8d62fdef  sample-report-redacted-en.html
+b87bcbc1305bed70cb20c78bc1a8bd947ea77411ae5166f8de28687edce54426  sample-report-redacted-zh-TW.html
+bad7e5df1087e8145306a8f4527421c2a0c771ab8a4f5f4a07670608542428a1  sample-report-full-en.html
+bca94c6fb365048ae511cdc339e970e01efe7ef94c34f0289e025bf4d2bf36ac  sample-report-full-zh-TW.html

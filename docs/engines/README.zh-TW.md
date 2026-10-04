@@ -1,5 +1,7 @@
 # 引擎參考
 
+[先看所有掃描器的用途、SWOT 與版本](../scanner-guide.zh-TW.md) · [下載標準範例報告](../samples/v0.4.0/README.zh-TW.md)
+
 [English](README.md) · [文件](../README.zh-TW.md)
 
 每個掃描器與共用 launcher 都有自己的維護頁，記錄產品如何執行、adapter 保留哪些上游結果、更新步驟，以及實際掃描學到的注意事項。修改前先閱讀該頁；有新的實測經驗時，在 **Lessons from real runs** 補上日期、症狀、原因與修正 commit。

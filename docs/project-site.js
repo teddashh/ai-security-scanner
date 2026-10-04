@@ -16,10 +16,13 @@ const applyLanguage = (language, updateUrl = true) => {
   const selected = language === "zh-TW" ? "zh-TW" : "en";
   document.documentElement.dataset.lang = selected;
   document.documentElement.lang = selected === "zh-TW" ? "zh-Hant" : "en";
-  document.title = pageCopy[selected].title;
-  description?.setAttribute("content", pageCopy[selected].description);
-  document.querySelector('meta[property="og:title"]')?.setAttribute("content", pageCopy[selected].title);
-  document.querySelector('meta[property="og:description"]')?.setAttribute("content", pageCopy[selected].description);
+  const titleElement = document.querySelector("title");
+  const title = (selected === "zh-TW" ? titleElement?.dataset.zh : titleElement?.dataset.en) || pageCopy[selected].title;
+  const summary = (selected === "zh-TW" ? description?.dataset.zh : description?.dataset.en) || pageCopy[selected].description;
+  document.title = title;
+  description?.setAttribute("content", summary);
+  document.querySelector('meta[property="og:title"]')?.setAttribute("content", title);
+  document.querySelector('meta[property="og:description"]')?.setAttribute("content", summary);
   document.querySelector('meta[property="og:locale"]')?.setAttribute("content", selected === "zh-TW" ? "zh_TW" : "en_US");
   for (const link of document.querySelectorAll("a[data-href-en][data-href-zh]")) {
     link.href = selected === "zh-TW" ? link.dataset.hrefZh : link.dataset.hrefEn;
@@ -28,6 +31,8 @@ const applyLanguage = (language, updateUrl = true) => {
   for (const button of languageButtons) {
     button.setAttribute("aria-pressed", String(button.dataset.language === selected));
   }
+
+  document.dispatchEvent(new Event("site-language-change"));
 
   if (updateUrl) {
     const url = new URL(window.location.href);
