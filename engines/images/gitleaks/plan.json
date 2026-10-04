@@ -6,7 +6,7 @@
   "support_until": "2026-11-22",
   "maintenance_owner": "teddashh/ai-security-scanner maintainers",
   "update_procedure": "docs/engine-maintenance.md",
-  "publish_state": "publication_in_progress",
+  "publish_state": "published_managed_artifact",
   "source": {
     "repository": "https://github.com/gitleaks/gitleaks",
     "revision": "83d9cd684c87d95d656c1458ef04895a7f1cbd8e",
@@ -17,7 +17,7 @@
   "final_artifact": {
     "repository": "ghcr.io/teddashh/ai-security-scanner-engine-gitleaks",
     "tag": "8.30.1-2",
-    "digest": null
+    "digest": "sha256:95313654f9c37115a906629a82113ba6e1c729950be70909da8362e9482b477e"
   },
   "build_recipe": {
     "source_revision": "83d9cd684c87d95d656c1458ef04895a7f1cbd8e",
@@ -158,25 +158,19 @@
     "updates": false,
     "telemetry": false
   },
-  "publication": null,
-  "previous_artifact": {
-    "repository": "ghcr.io/teddashh/ai-security-scanner-engine-gitleaks",
-    "tag": "8.30.1-1",
-    "digest": "sha256:5b4538ca17201dba53fed7d5ea49f94cfd7815a4ce2a5b36cac408757ff349aa"
-  },
-  "previous_publication": {
-    "workflow_run": "https://github.com/teddashh/ai-security-scanner/actions/runs/33001735978",
-    "source_revision": "77233a2d08684294c7620f8da601e1e1efed6023",
+  "publication": {
+    "workflow_run": "https://github.com/teddashh/ai-security-scanner/actions/runs/37171537552",
+    "source_revision": "a27f2bc8d48c15b4b73e91f7a16e33b905ec430c",
     "platforms": [
       "linux/amd64",
       "linux/arm64"
     ],
     "platform_digests": {
-      "linux/amd64": "sha256:8c5994ad3639b9873ff1db3c0cc3d08bfe6914adf4497fbcb43ef4877b778d1d",
-      "linux/arm64": "sha256:e0ae20229c0810a31133142450ba04656d3d17ae807fd9603d916f423cce6317"
+      "linux/amd64": "sha256:c8a196735e1173610de69d55922f6363033597b82f6bf9bd86085b52fa384d5c",
+      "linux/arm64": "sha256:54189d883dfbd1cdc1380c2cdccc39015b747eaa6644afe249218fae444b5521"
     },
     "anonymous_pull_verified": true,
-    "evidence_artifact": "gitleaks-image-evidence-33001735978-1",
-    "managed_smoke_evidence_sha256": "sha256:1c4e1edb5b573f6d7a92a598aaa367f505583d98e40c0e323e4ce29737cf34c0"
+    "evidence_artifact": "gitleaks-image-evidence-37171537552-1",
+    "managed_smoke_evidence_sha256": "sha256:0bd143d1b9535a15bbd4b97e9399918e1bcaa1b5334ba1c7963423f2cd6765f9"
   }
 }
