@@ -6,6 +6,7 @@ import { basename, resolve, sep } from "node:path";
 import { parse as parseYaml } from "yaml";
 
 import { validateProwlerCatalogContract } from "./prowler-catalog-contract.mjs";
+import { isPendingImageReplacement } from "./engine-image-replacement.mjs";
 
 const root = resolve(import.meta.dirname, "..");
 const catalogPath = resolve(root, "engines/catalog.json");
@@ -115,7 +116,13 @@ const managedLocalK8sContracts = new Map([
     ],
   }],
   ["gitleaks", {
-    tag: "8.30.1-1",
+    tag: "8.30.1-2",
+    previousArtifact: {
+      repository: "ghcr.io/teddashh/ai-security-scanner-engine-gitleaks",
+      tag: "8.30.1-1",
+      digest: "sha256:5b4538ca17201dba53fed7d5ea49f94cfd7815a4ce2a5b36cac408757ff349aa",
+    },
+    previousPublicationSource: "77233a2d08684294c7620f8da601e1e1efed6023",
     planKind: "managed_build",
     license: { disposition: "allow", sourceOfferPath: null },
     entrypoint: "/usr/local/bin/ai-security-scanner-gitleaks-entrypoint",
@@ -152,6 +159,7 @@ const managedLocalK8sContracts = new Map([
       "validateRedactedEvidence(reportPath)",
     ],
     immutableDockerfileInputs: [
+      "COPY engines/images/gitleaks/testdata/ /src/testdata/",
       "ADD --checksum=sha256:6b2638a733b85619dc80bdf28e84e4fed7e526a761ab5c148fbf67695aea2115",
       "https://github.com/gitleaks/gitleaks/archive/83d9cd684c87d95d656c1458ef04895a7f1cbd8e.tar.gz",
       "3fd66952713338b561c71c7ed608c5cce41355a7594c4eb8ffb4303abae29ccd  go.sum",
@@ -945,6 +953,37 @@ function sha256File(path) {
   return `sha256:${createHash("sha256").update(readFileSync(path)).digest("hex")}`;
 }
 
+function validatePatchAudit(plan, planRelative, engine) {
+  const audited = new Set(["gitleaks", "greenbone", "prowler", "scoutsuite", "mcp-armor", "httpx"]);
+  if (!audited.has(engine.id)) return;
+  const audit = plan.build_recipe?.patch_audit;
+  const required = ["capability", "contribution_reason", "removal_condition"];
+  if (!audit || audit.applicable_source_revision !== plan.source?.revision ||
+      audit.applicable_upstream_version !== engine.engine_version ||
+      !/^\d{4}-\d{2}-\d{2}$/.test(audit.reviewed_on ?? "") ||
+      !/^\d{4}-\d{2}-\d{2}$/.test(audit.review_due ?? "") ||
+      audit.review_due <= audit.reviewed_on || audit.contribution_status !== "not_submitted" ||
+      required.some((field) => typeof audit[field] !== "string" || audit[field].trim().length === 0) ||
+      ["security_owner", "license_owner", "maintenance_owner"].some((field) => audit[field] !== plan.maintenance_owner) ||
+      !Array.isArray(audit.dedicated_fixtures) || audit.dedicated_fixtures.length === 0 ||
+      !Array.isArray(audit.patches) || audit.patches.length === 0) {
+    errors.push(`${planRelative}: downstream patch audit must bind capability, pinned applicability, contribution reason, owners, fixtures and removal/review dates`);
+    return;
+  }
+  for (const patch of audit.patches) {
+    const safePath = typeof patch.path === "string" && !patch.path.startsWith("/") && !patch.path.split("/").includes("..");
+    if (!safePath || !existsSync(resolve(root, patch.path)) ||
+        patch.sha256 !== sha256File(resolve(root, patch.path)) ||
+        !Array.isArray(patch.files) || patch.files.length === 0 ||
+        patch.files.some((file) =>
+          typeof file.path !== "string" || file.path.startsWith("/") || file.path.split("/").includes("..") ||
+          ![file.before_sha256, file.after_sha256].every((hash) => hash === null || digestPattern.test(hash ?? "")) ||
+          file.before_sha256 === null && file.after_sha256 === null)) {
+      errors.push(`${planRelative}: patch audit must bind an actual patch file and its reviewed source pre/post hashes`);
+    }
+  }
+}
+
 function isManagedPublicationClaimed(engine, plan, expectedRepository) {
   return engine.compatibility?.runnable === true ||
     engine.status === "integrated" ||
@@ -1154,7 +1193,7 @@ function validatePublishedManagedBasics(plan, planRelative, engine, contract, co
   }
 
   validatePublishedManagedEvidence(plan, planRelative, engine, { requireManagedSmoke: true });
-  return validatePublishedManagedDockerfile(plan, planRelative, engine, contract.tag, entrypoint);
+  return validatePublishedManagedDockerfile(plan, planRelative, engine, contract.buildTag ?? contract.tag, entrypoint);
 }
 
 function validatePublishedLocalK8sImage(plan, planRelative, engine, contract) {
@@ -1196,6 +1235,16 @@ function validatePublishedLocalK8sImage(plan, planRelative, engine, contract) {
     if (!deepEqual(recipe?.source_patch, contract.sourcePatch) || !existsSync(patchPath) ||
         sha256File(patchPath) !== contract.sourcePatch.sha256) {
       errors.push(`${planRelative}: source patch path and digest do not match the reviewed ${engine.id} patch`);
+    }
+  }
+  if (engine.id === "gitleaks") {
+    for (const [field, path] of [
+      ["module", "engines/images/gitleaks/launcher/go.mod"],
+      ["patch_notice", "engines/images/gitleaks/PATCHES.md"],
+    ]) {
+      if (!deepEqual(plan.wrapper?.[field], { path, sha256: sha256File(resolve(root, path)) })) {
+        errors.push(`${planRelative}: wrapper.${field} must bind the actual build input ${path}`);
+      }
     }
   }
   const frontend = recipe?.dockerfile_frontend;
@@ -2643,6 +2692,8 @@ for (const engine of Array.isArray(catalog) ? catalog : []) {
   const plan = parseJson(planPath);
   if (!plan) continue;
   const pendingGreenbonePublication = isPendingGreenbonePublication(plan, engine);
+  const replacementContract = managedLocalK8sContracts.get(engine.id);
+  const pendingImageReplacement = isPendingImageReplacement(plan, engine, replacementContract);
   const expectedManagedRepository = `${managedImageRepositoryPrefix}${engine.id}`;
   if (engine.distribution_mode === "pull_pinned_image" || engine.distribution_mode === "bundled_image") {
     if (engine.image !== null) {
@@ -2671,6 +2722,7 @@ for (const engine of Array.isArray(catalog) ? catalog : []) {
     errors.push(`${planRelative}: source revision does not match catalog`);
   }
   if (!revisionPattern.test(plan.source?.revision ?? "")) errors.push(`${planRelative}: source must be pinned to a commit`);
+  validatePatchAudit(plan, planRelative, engine);
   if (!deepEqual(plan.command, engine.command)) errors.push(`${planRelative}: command does not match catalog`);
   if (!deepEqual(plan.output, engine.execution?.output)) errors.push(`${planRelative}: output contract does not match catalog`);
   if (!deepEqual(plan.license, engine.license)) errors.push(`${planRelative}: license disposition does not match catalog`);
@@ -2707,6 +2759,10 @@ for (const engine of Array.isArray(catalog) ? catalog : []) {
         plan.publish_state !== "publication_in_progress") {
       errors.push(`${planRelative}: Greenbone publication in progress must retain its exact replacement repository/tag and null digest`);
     }
+  } else if (pendingImageReplacement) {
+    // The runnable catalog still names the exact previous release. The build
+    // plan separately binds a fresh tag whose digest is not known yet.
+    validateImage(plan.previous_artifact, `${planRelative}.previous_artifact`);
   } else if (engine.image) {
     validateImage(plan.final_artifact, `${planRelative}.final_artifact`);
     if (!deepEqual(plan.final_artifact, { repository: engine.image.repository, tag: engine.image.tag, digest: engine.image.digest })) errors.push(`${planRelative}: final artifact does not match catalog image`);
@@ -2725,6 +2781,17 @@ for (const engine of Array.isArray(catalog) ? catalog : []) {
   const localK8sContract = managedLocalK8sContracts.get(engine.id);
   if (engine.id === "mcp-armor") {
     validateMcpArmorImage(plan, planRelative, engine);
+  } else if (pendingImageReplacement) {
+    validatePublishedLocalK8sImage({
+      ...plan,
+      publish_state: "published_managed_artifact",
+      final_artifact: plan.previous_artifact,
+      publication: plan.previous_publication,
+    }, planRelative, engine, {
+      ...localK8sContract,
+      tag: plan.previous_artifact.tag,
+      buildTag: localK8sContract.tag,
+    });
   } else if (localK8sContract && isPendingLocalK8sPublication(plan, engine)) {
     validatePendingManagedCandidate(plan, planRelative, engine, localK8sContract);
   } else if (localK8sContract && isManagedPublicationClaimed(engine, plan, expectedManagedRepository)) {

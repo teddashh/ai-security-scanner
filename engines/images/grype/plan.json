@@ -52,6 +52,13 @@
         "-mod=readonly",
         "-trimpath"
       ]
+    ],
+    "local_inputs": [
+      {
+        "path": "engines/images/grype/import.json",
+        "reason": "Controls import of the pinned offline Grype database into the image but has no digest in the plan.",
+        "sha256": "sha256:b1382ad7455d20f5af33ac4a9dacb2376d35321c353f078bdafe69a533661afc"
+      }
     ]
   },
   "dockerfile": {

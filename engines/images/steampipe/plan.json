@@ -70,6 +70,38 @@
         "tag": "bookworm-slim",
         "digest": "sha256:abd67ffcfa541b485a3dff59865ab629aa048a6c613e639d36e7456b0b229241"
       }
+    ],
+    "local_inputs": [
+      {
+        "path": "engines/images/steampipe/Dockerfile.dockerignore",
+        "reason": "Controls the Steampipe Docker build context allowlist but has no digest in the plan.",
+        "sha256": "sha256:068e306ecac718da565994ef5013c21f3d430f9c00510cf5a65aa586163c32ba"
+      },
+      {
+        "path": "engines/images/steampipe/POSTGRESQL-COPYRIGHT",
+        "reason": "Copied into the Steampipe image's license payload but has no digest in the plan.",
+        "sha256": "sha256:5ed3ce5c9373dff7f98b1fae7a6c7ccd98df7d734d46d24c1bcebf1240be8307"
+      },
+      {
+        "path": "engines/images/steampipe/group",
+        "reason": "Installed as the Steampipe image group database but has no digest in the plan.",
+        "sha256": "sha256:916b543918fc13e6dbcc1782273aec25f267ec1604a97048ee521401e8e5bef9"
+      },
+      {
+        "path": "engines/images/steampipe/installprep/go.mod",
+        "reason": "Defines the Steampipe install-preparation helper module but has no digest in the plan.",
+        "sha256": "sha256:d5b60d0fbcda6637dd2527b7b7e81deddd07249e059cd5524842e9717ce75c0e"
+      },
+      {
+        "path": "engines/images/steampipe/installprep/main.go",
+        "reason": "Compiled into the Steampipe install-preparation helper but has no digest in the plan.",
+        "sha256": "sha256:a71a1d033227ecce057947e58963addf7b21605c65f7b126abba2e9ba8231438"
+      },
+      {
+        "path": "engines/images/steampipe/passwd",
+        "reason": "Installed as the Steampipe image passwd database but has no digest in the plan.",
+        "sha256": "sha256:e6c9808c170efe5d4dc5e14a20611a48bab2b9afe58a8708e5f2a5dd631fccd7"
+      }
     ]
   },
   "dockerfile": {

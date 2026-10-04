@@ -24,7 +24,7 @@ concurrency:
 env:
   ENGINE: gitleaks
   IMAGE: ghcr.io/teddashh/ai-security-scanner-engine-gitleaks
-  IMAGE_TAG: 8.30.1-1
+  IMAGE_TAG: 8.30.1-2
 
 jobs:
   publish:

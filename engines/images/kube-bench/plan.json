@@ -63,6 +63,13 @@
         "/out/kube-bench",
         "."
       ]
+    ],
+    "local_inputs": [
+      {
+        "path": "engines/images/kube-bench/cfg/config.yaml",
+        "reason": "Installed as the product-owned kube-bench runtime configuration but has no digest in the plan.",
+        "sha256": "sha256:ed615832cd3673489dbbdcbad4c3bba2146af5026ead659d4e16ff9ce3a233e3"
+      }
     ]
   },
   "dockerfile": {

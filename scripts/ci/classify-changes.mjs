@@ -108,6 +108,7 @@ const DESKTOP_PATHS = [
 ];
 
 const ENGINE_PATHS = [
+  /^scripts\/engine-image-replacement\.mjs$/,
   /^scripts\/select-local-engine-publication\.mjs$/,
   /^engines\//,
   /^tests\/engines\//,

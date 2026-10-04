@@ -90,7 +90,14 @@
       "skip_dns_over_https": true,
       "version_check": false,
       "telemetry": false
-    }
+    },
+    "local_inputs": [
+      {
+        "path": "engines/images/scubagear/Dockerfile.dockerignore",
+        "reason": "Controls the ScubaGear Docker build context allowlist but has no digest in the plan.",
+        "sha256": "sha256:8bd2b3d4d1e20ab02fccbbe3d5732ea7ecc9972a6b4dc7237b233ef0a9c3ce43"
+      }
+    ]
   },
   "dockerfile": {
     "emitted": true,

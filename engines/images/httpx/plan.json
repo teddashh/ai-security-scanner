@@ -58,7 +58,46 @@
     "target_platforms": [
       "linux/amd64",
       "linux/arm64"
-    ]
+    ],
+    "local_inputs": [
+      {
+        "path": "engines/images/httpx/patch_live_dns.go",
+        "reason": "Compiled into the patched httpx source tree during the image build but absent from the plan.",
+        "sha256": "sha256:ae8362e4b399543371b4fa7ed1cd637b09c6865c4d812b9ea42220b0b581a32d"
+      }
+    ],
+    "patch_audit": {
+      "reviewed_on": "2026-10-03",
+      "review_due": "2026-11-01",
+      "applicable_upstream_version": "1.10.0",
+      "applicable_source_revision": "13037dd08b9715cfbd960a70ae1edfef6686a857",
+      "capability": "Preserve approved Host/TLS SNI through the gateway while preventing a second post-request DNS lookup outside frozen-address authorization.",
+      "contribution_status": "not_submitted",
+      "contribution_reason": "No contribution has been submitted. The product gateway owns frozen-address resolution; removing DNS enrichment globally would remove upstream output that standalone users expect. An upstream opt-out must separate enrichment from request resolution and needs its own public option and compatibility review.",
+      "security_owner": "teddashh/ai-security-scanner maintainers",
+      "license_owner": "teddashh/ai-security-scanner maintainers",
+      "maintenance_owner": "teddashh/ai-security-scanner maintainers",
+      "removal_condition": "A documented upstream setting must skip post-request DNS enrichment while keeping proxy Host/SNI and the bounded native response output; pass the no-live-DNS fixture using unmodified source.",
+      "dedicated_fixtures": [
+        "engines/images/httpx/patch_live_dns_test.go: TestPinnedSourceTransformsToTheReviewedHashWhenProvided",
+        "engines/images/httpx/patch_live_dns_test.go: absent/duplicate/already-patched rejection",
+        "engines/images/external-launcher/main_test.go: frozen HTTP origin and gateway scope"
+      ],
+      "patches": [
+        {
+          "path": "engines/images/httpx/patch_live_dns.go",
+          "sha256": "sha256:ae8362e4b399543371b4fa7ed1cd637b09c6865c4d812b9ea42220b0b581a32d",
+          "files": [
+            {
+              "path": "runner/runner.go",
+              "before_sha256": "sha256:748502c7633140c7395d73d3b7d91eaa2efa324a5567cfc7b7a57485a1f9a641",
+              "after_sha256": "sha256:6e8c7c8e59f6f7e574af0ff3b87cf3cd74e8e9d814618108dedeb9620fdbab95",
+              "upstream_source": "https://github.com/projectdiscovery/httpx/blob/13037dd08b9715cfbd960a70ae1edfef6686a857/runner/runner.go"
+            }
+          ]
+        }
+      ]
+    }
   },
   "dockerfile": {
     "emitted": true,

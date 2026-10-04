@@ -6,7 +6,7 @@
   "support_until": "2026-11-22",
   "maintenance_owner": "teddashh/ai-security-scanner maintainers",
   "update_procedure": "docs/engine-maintenance.md",
-  "publish_state": "published_managed_artifact",
+  "publish_state": "publication_in_progress",
   "source": {
     "repository": "https://github.com/gitleaks/gitleaks",
     "revision": "83d9cd684c87d95d656c1458ef04895a7f1cbd8e",
@@ -16,8 +16,8 @@
   "verified_upstream_artifact": null,
   "final_artifact": {
     "repository": "ghcr.io/teddashh/ai-security-scanner-engine-gitleaks",
-    "tag": "8.30.1-1",
-    "digest": "sha256:5b4538ca17201dba53fed7d5ea49f94cfd7815a4ce2a5b36cac408757ff349aa"
+    "tag": "8.30.1-2",
+    "digest": null
   },
   "build_recipe": {
     "source_revision": "83d9cd684c87d95d656c1458ef04895a7f1cbd8e",
@@ -74,19 +74,59 @@
         "/out/gitleaks",
         "."
       ]
-    ]
+    ],
+    "patch_audit": {
+      "reviewed_on": "2026-10-03",
+      "review_due": "2026-11-01",
+      "applicable_upstream_version": "8.30.1",
+      "applicable_source_revision": "83d9cd684c87d95d656c1458ef04895a7f1cbd8e",
+      "capability": "Prevent source-controlled ignore files from silently narrowing scanner-owned secret coverage.",
+      "contribution_status": "not_submitted",
+      "contribution_reason": "No contribution has been submitted. This integration must enforce fixed external scan policy; changing ignore defaults for general upstream CLI use would break its project-controlled workflow. A native optional opt-out needs a separately reviewed upstream contract. The present opt-in guard preserves default upstream behavior.",
+      "security_owner": "teddashh/ai-security-scanner maintainers",
+      "license_owner": "teddashh/ai-security-scanner maintainers",
+      "maintenance_owner": "teddashh/ai-security-scanner maintainers",
+      "removal_condition": "A native switch or documented invocation must disable all three ignore-file paths and pass the managed synthetic secret fixture without this patch.",
+      "dedicated_fixtures": [
+        "engines/images/gitleaks/testdata/fixture.txt and .gitleaksignore",
+        "engines/images/gitleaks/launcher/main_test.go",
+        ".github/workflows/engine-image-gitleaks.yml: meaningful offline fully-redacted scan"
+      ],
+      "patches": [
+        {
+          "path": "engines/images/gitleaks/patches/0001-add-scanner-owned-ignore-policy.patch",
+          "sha256": "sha256:9e7e7443fe5b5ee52dfb5ebb458d73fa868c441729e98d98a0453e7dd8cc24a7",
+          "files": [
+            {
+              "path": "cmd/root.go",
+              "before_sha256": "sha256:275516f78724a075530898e6354e096f2b33ef78de8856f9a5f1b68b9552d994",
+              "after_sha256": "sha256:855dd4115726bae1e7921fbf557a993daee419fcc039e4992473a2e4184316d2",
+              "upstream_source": "https://github.com/gitleaks/gitleaks/blob/83d9cd684c87d95d656c1458ef04895a7f1cbd8e/cmd/root.go"
+            }
+          ]
+        }
+      ]
+    }
   },
   "dockerfile": {
     "emitted": true,
     "path": "engines/images/gitleaks/Dockerfile",
-    "sha256": "sha256:3a5a92640f4cf815d3c62ed63dd4f6a309b67c28e6b5dc5f596a6f02e2034455",
+    "sha256": "sha256:fecb4b67d394af51c15331e87accebd4e4879dd7e4a249993a881495916e5c36",
     "reason": null
   },
   "wrapper": {
     "required": true,
     "strategy": "Accept only the fixed read-only workspace/output mounts, enforce scanner-owned policy, and reject evidence unless every secret value is fully redacted.",
     "entrypoint": "/usr/local/bin/ai-security-scanner-gitleaks-entrypoint",
-    "launcher_sha256": "sha256:848f720ae31af96dbd78cc4139eeeafc1b3b89d1993fed8e85191dc14b844082"
+    "launcher_sha256": "sha256:848f720ae31af96dbd78cc4139eeeafc1b3b89d1993fed8e85191dc14b844082",
+    "module": {
+      "path": "engines/images/gitleaks/launcher/go.mod",
+      "sha256": "sha256:6c61e9382f0aef611a666765793f6aa36ee0cd451a65fb908429f53360a5d16e"
+    },
+    "patch_notice": {
+      "path": "engines/images/gitleaks/PATCHES.md",
+      "sha256": "sha256:ed6642991d7ba4bb9dd6a7202e5c39fd88d97a01b1db8fb308e07fe066639049"
+    }
   },
   "command": [
     "--workspace",
@@ -118,7 +158,13 @@
     "updates": false,
     "telemetry": false
   },
-  "publication": {
+  "publication": null,
+  "previous_artifact": {
+    "repository": "ghcr.io/teddashh/ai-security-scanner-engine-gitleaks",
+    "tag": "8.30.1-1",
+    "digest": "sha256:5b4538ca17201dba53fed7d5ea49f94cfd7815a4ce2a5b36cac408757ff349aa"
+  },
+  "previous_publication": {
     "workflow_run": "https://github.com/teddashh/ai-security-scanner/actions/runs/33001735978",
     "source_revision": "77233a2d08684294c7620f8da601e1e1efed6023",
     "platforms": [

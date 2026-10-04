@@ -9,6 +9,7 @@ ENV CGO_ENABLED=0 GOTOOLCHAIN=local SOURCE_DATE_EPOCH=1773330037
 
 WORKDIR /src/launcher
 COPY engines/images/gitleaks/launcher/go.mod engines/images/gitleaks/launcher/main.go engines/images/gitleaks/launcher/main_test.go ./
+COPY engines/images/gitleaks/testdata/ /src/testdata/
 RUN test -z "$(gofmt -d main.go main_test.go)" \
     && go test ./... \
     && GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build \
@@ -58,7 +59,7 @@ LABEL org.opencontainers.image.title="ai-security-scanner Gitleaks engine" \
       org.opencontainers.image.description="Pinned-source current-project secret scanning with scanner-owned rules and write-time redaction" \
       org.opencontainers.image.source="https://github.com/gitleaks/gitleaks" \
       org.opencontainers.image.revision="83d9cd684c87d95d656c1458ef04895a7f1cbd8e" \
-      org.opencontainers.image.version="8.30.1-1" \
+      org.opencontainers.image.version="8.30.1-2" \
       org.opencontainers.image.licenses="MIT AND Apache-2.0" \
       io.ai-security-scanner.gitleaks-config-sha256="e163e53b9e7e8a8511e77271e2b323ed057759542a6d988258afe3a1fa329caf" \
       io.ai-security-scanner.patch-sha256="9e7e7443fe5b5ee52dfb5ebb458d73fa868c441729e98d98a0453e7dd8cc24a7"

@@ -112,3 +112,5 @@ through chat or command arguments.
 - [Agentic Radar research decision](research/agentic-radar-evaluation.md)
 - [Augustus research decision](research/augustus-evaluation.md)
 - [Product doctrine](PRODUCT-DOCTRINE.md)
+
+CI document and contract tests: 91 tests now include exact old-image/new-candidate separation and rejection of executable inputs hidden in publication history. Engine maintenance records actual hashes for the former uncovered baseline, reviews six downstream exception families and has verified the fresh Gitleaks native amd64 recipe and redacted synthetic scan. Its new image is not selected until publication verification completes.

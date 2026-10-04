@@ -95,6 +95,23 @@ Project launchers that only enforce section 2 boundaries are adapters, not detec
 
 ## 7. Dates, replacement, and history
 
+Current recipe closure and historical publication are separate records. Each
+engine plan's `build_recipe.local_inputs` records the actual SHA-256 and path of
+previously uncovered context allowlists, preparers, patches, launchers, runtime
+configuration and dependency definitions. The executable-input gate has no
+remaining uncovered baseline. Shared support directories and documentation/test
+exclusions remain explicit in `engines/image-input-hash-policy.json`; this gate
+does not claim a complete transitive package closure.
+
+These hashes describe the current source recipe. They do not establish that an
+older published image contains those bytes. When a previously published tag's
+historical plan differs, use a new immutable artifact revision instead of
+changing the old tag or weakening the reuse guard. A reviewed replacement may
+keep the old exact image runnable while its plan names the new unpublished
+tag. `previous_artifact` and `previous_publication` hold only closed historical
+coordinates/evidence; executable inputs cannot be stored there. Switch the
+catalog only after verifying the new image and its publication evidence.
+
 `knowledge_date` describes the newest knowledge in the exact engine/rule/template/feed/database closure. `support_until` is the last date maintainers claim support for that closure and is normally no more than 90 days later. Historical cases retain their original engine identity and dates.
 
 An expired but still inspectable artifact remains attributable. New execution must show a stale-knowledge warning or mark the engine unavailable according to product policy. A replacement receives a new revision and immutable digest; it never rewrites an existing case.

@@ -63,6 +63,13 @@
         "tag": "3.11.13-slim-bookworm",
         "digest": "sha256:86adf8dbadc3d6e82ee5dd2c74bec2e1c2467cdad47886280501df722372d2e1"
       }
+    ],
+    "local_inputs": [
+      {
+        "path": "engines/images/cloudsplaining/Dockerfile.dockerignore",
+        "reason": "Controls the Cloudsplaining Docker build context allowlist but has no digest in the plan.",
+        "sha256": "sha256:a984c36356dc5238c5734e546d19b6be222b6e1a8a9a0712defe32eaf7419bb2"
+      }
     ]
   },
   "dockerfile": {

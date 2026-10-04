@@ -17,7 +17,7 @@ Build from the repository root with [this Dockerfile](../../engines/images/gitle
 
 No host `.engine-cache` preparation is required by this Dockerfile. Acquisition and any source preparation happen in the build; this does not imply the build is offline.
 
-Current source has a known launcher-test fixture copy omission; see **Fix the build first** below before treating this as a working clean-build recipe.
+The 2026-10-03 recipe restores the launcher fixture copy and builds cleanly. Native amd64 execution against the read-only synthetic repository, with networking disabled, produced one `generic-api-key` finding with every secret redacted. Replacement `8.30.1-2` is awaiting publication verification; the catalog continues to select the exact published `8.30.1-1` image until then.
 
 See the [image build index](image-build-index.md) for the repeatable local build command, shared launcher impact and update record. The sections below retain this engine’s specific patches, output fields, tests and incident history.
 
@@ -50,7 +50,7 @@ See the [image build index](image-build-index.md) for the repeatable local build
   - What: adds `--no-source-ignore`. When it is set, `Detector` loads no `.gitleaksignore` from `--gitleaks-ignore-path` (default `.`, the launcher's working directory `/workspace`), from a folder at that path, or from the scan source.
   - Why: a scanned project must not narrow the product's coverage with its own ignore file.
   - Where the digest is pinned: the Dockerfile, plan `build_recipe.source_patch`, the image label `io.ai-security-scanner.patch-sha256` and the validator. The patch ships in the image under `/usr/share/source/`.
-  - Removal: once upstream offers an equivalent switch. `PATCHES.md` does not yet record the upstream link, version range, removal condition or review date that [section 6](../engine-maintenance.md#6-downstream-patch-exception) requires.
+  - Removal: once upstream offers an equivalent switch. [PATCHES.md](../../engines/images/gitleaks/PATCHES.md) and plan `build_recipe.patch_audit` record the pinned source reference, contribution rationale, source pre/post hashes, behavior fixtures, owners, removal condition and 2026-11-01 review deadline. No upstream submission is claimed.
 - **Launcher policy** (not a patch): fixed config, inline allow comments ignored, `--exit-code 0`, and full redaction.
 
 ## Lessons from real runs
@@ -64,7 +64,7 @@ See the [image build index](image-build-index.md) for the repeatable local build
 
 Follow [section 4](../engine-maintenance.md#4-updating-an-engine), then:
 
-- **Fix the build first.** The launcher stage copies only `go.mod`, `main.go` and `main_test.go` into `/src/launcher`. `TestFixtureContainsDetectableSyntheticSecret` reads `../testdata/fixture.txt`, so `go test ./...` fails inside the image build. The workflow's validate step passes because it mounts the whole directory. Copy `testdata/` to `/src/testdata` as b48ec90 did.
+- **Keep the fixture in the build.** The launcher test reads `../testdata/fixture.txt`. Copy `testdata/` to `/src/testdata` before `go test ./...`; workflow-mounted tests alone cannot prove this Dockerfile stage. This omission was fixed and the clean native build verified on 2026-10-03.
 - **Build.** Update in step:
   - the archive URL and checksum, and `SOURCE_DATE_EPOCH`;
   - the `go.sum` digest;
@@ -82,11 +82,11 @@ Follow [section 4](../engine-maintenance.md#4-updating-an-engine), then:
   - The four launcher tests in `launcher/main_test.go`.
   - `gitleaks_keeps_same_rule_findings_at_distinct_source_coordinates_without_secrets` in `src-tauri/tests/adapter_fixtures.rs`, with the fixture `gitleaks.json`.
   - The workflow smoke checks the `version` output, then that the report is an array with at least one finding, every `Secret` is `REDACTED`, a `generic-api-key` finding is present, and the synthetic raw value is absent. Keep fixture values synthetic and non-AWS.
-- **Hard-coded values.** `8.30.1-1` appears in:
+- **Hard-coded values.** The replacement tag `8.30.1-2` appears in:
   - the workflow `IMAGE_TAG`;
   - catalog `image.tag`, plan `final_artifact.tag` and the Dockerfile label;
   - `scripts/validate-engine-catalog.mjs`.
 
   `8.30.1` also appears in the workflow version check, the Dockerfile ldflag, the catalog `engine_version` and `provenance.engine`, `PATCHES.md` and `THIRD_PARTY.md`. Find them with `grep -rn "8.30.1" --exclude-dir=node_modules --exclude-dir=target --exclude-dir=.git --exclude-dir=.upstreams --exclude-dir=.engine-cache`. `support_until` is 2026-11-22.
 - **Compare with raw output.** Run `jq -r '.[] | [.RuleID, .File, .StartLine, .StartColumn] | @tsv' gitleaks.json | sort | uniq -c`. Each distinct row should be one finding: rows that share a rule and coordinates merge. Also check `jq 'all(.[]; .Secret == "REDACTED")' gitleaks.json`, and never paste `Match`.
-- **Publishing.** The plan at the publishing commit 77233a2 is `upstream_image` for `ghcr.io/gitleaks/gitleaks:v8.30.1`; the managed plan arrived in 3257057. The guard therefore can never reuse `8.30.1-1`, whatever the Dockerfile bytes, and the next push that triggers the workflow needs a new tag. `launcher/go.mod` has no plan digest (`uncovered_baseline` in `engines/image-input-hash-policy.json`).
+- **Publishing.** The plan at the publishing commit 77233a2 is `upstream_image` for `ghcr.io/gitleaks/gitleaks:v8.30.1`; the managed plan arrived in 3257057. The guard therefore can never reuse `8.30.1-1`, whatever the Dockerfile bytes, and the next push that triggers the workflow needs a new tag. The 2026-10-03 replacement plan hashes the actual `launcher/go.mod` and embedded patch notice. Its historical `previous_artifact`/`previous_publication` retain the old exact tag and publication independently of the new build inputs.

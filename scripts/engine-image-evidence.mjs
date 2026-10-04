@@ -12,6 +12,7 @@ import {
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { validateReplacementHistory } from "./engine-image-replacement.mjs";
 
 import {
   PROJECT_ROOT,
@@ -338,10 +339,11 @@ function validateEnginePlanBinding(plan, { engine, image, tag, label }) {
 
 export function recordedEngineInputIdentity(plan, { engine, image, tag, label = "current" }) {
   validateEnginePlanBinding(plan, { engine, image, tag, label });
+  validateReplacementHistory(plan);
   const records = [];
 
   function visit(value, components) {
-    if (components.length === 1 && ["final_artifact", "publication"].includes(components[0])) return;
+    if (components.length === 1 && ["final_artifact", "publication", "previous_artifact", "previous_publication"].includes(components[0])) return;
     if (typeof value === "string") {
       if (value.startsWith("sha256:")) {
         assert(DIGEST_PATTERN.test(value), `${label} engine input plan has an invalid digest at ${components.join(".")}`);

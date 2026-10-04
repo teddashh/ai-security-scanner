@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { promotePublication, publicationPreflight } from "../../scripts/engine-image-evidence.mjs";
+import { promotePublication, publicationPreflight, recordedEngineInputIdentity } from "../../scripts/engine-image-evidence.mjs";
+import { isPendingImageReplacement } from "../../scripts/engine-image-replacement.mjs";
 
 const IMAGE = "ghcr.io/teddashh/ai-security-scanner-engine-scubagear";
 const TAG = "1.8.0-6";
@@ -80,6 +81,61 @@ function provenanceOutput() {
     },
   }]);
 }
+
+function replacementFixture() {
+  const plan = recordedPlan();
+  const previousArtifact = { ...plan.final_artifact };
+  const previousPublication = {
+    workflow_run: "https://github.com/teddashh/ai-security-scanner/actions/runs/12345",
+    source_revision: PUBLISHED_REVISION,
+    platforms: ["linux/amd64", "linux/arm64"],
+    platform_digests: { "linux/amd64": INDEX_DIGEST, "linux/arm64": INDEX_DIGEST },
+    anonymous_pull_verified: true,
+    evidence_artifact: "scubagear-image-evidence-12345-1",
+    managed_smoke_evidence_sha256: `sha256:${"66".repeat(32)}`,
+  };
+  plan.publish_state = "publication_in_progress";
+  plan.previous_artifact = previousArtifact;
+  plan.previous_publication = previousPublication;
+  plan.final_artifact = { repository: IMAGE, tag: "1.8.0-7", digest: null };
+  plan.publication = null;
+  return {
+    plan,
+    engine: { image: previousArtifact },
+    contract: { tag: "1.8.0-7", previousArtifact, previousPublicationSource: PUBLISHED_REVISION },
+  };
+}
+
+test("a pending replacement keeps the old exact image separate from the unbuilt candidate", () => {
+  const { plan, engine, contract } = replacementFixture();
+  assert.equal(isPendingImageReplacement(plan, engine, contract), true);
+  for (const mutate of [
+    (p, e) => { e.image = { ...e.image, tag: contract.tag }; },
+    (p) => { p.final_artifact.digest = INDEX_DIGEST; },
+    (p) => { p.previous_publication.source_revision = CURRENT_REVISION; },
+    (p) => { p.publication = p.previous_publication; },
+    (p) => { p.previous_artifact.digest = `sha256:${"99".repeat(32)}`; },
+  ]) {
+    const candidate = structuredClone({ plan, engine });
+    mutate(candidate.plan, candidate.engine);
+    assert.equal(isPendingImageReplacement(candidate.plan, candidate.engine, contract), false);
+  }
+});
+
+test("replacement history cannot hide executable inputs or alter the new build identity", () => {
+  const { plan } = replacementFixture();
+  const binding = { engine: "scubagear", image: IMAGE, tag: "1.8.0-7" };
+  const withoutHistory = structuredClone(plan);
+  delete withoutHistory.previous_artifact;
+  delete withoutHistory.previous_publication;
+  const identity = recordedEngineInputIdentity(plan, binding);
+  assert.deepEqual(identity, recordedEngineInputIdentity(withoutHistory, binding));
+  const changed = structuredClone(plan);
+  changed.wrapper.launcher_sha256 = `sha256:${"99".repeat(32)}`;
+  assert.notDeepEqual(identity, recordedEngineInputIdentity(changed, binding));
+  plan.previous_publication.launcher_sha256 = `sha256:${"99".repeat(32)}`;
+  assert.throws(() => recordedEngineInputIdentity(plan, binding), /only immutable artifact coordinates/u);
+});
 
 async function withPublicationEnvironment(callback) {
   const previous = new Map([

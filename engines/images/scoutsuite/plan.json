@@ -69,7 +69,74 @@
         "tag": "3.11.13-slim-bookworm",
         "digest": "sha256:86adf8dbadc3d6e82ee5dd2c74bec2e1c2467cdad47886280501df722372d2e1"
       }
-    ]
+    ],
+    "local_inputs": [
+      {
+        "path": "engines/images/scoutsuite/Dockerfile.dockerignore",
+        "reason": "Controls the ScoutSuite Docker build context allowlist but has no digest in the plan.",
+        "sha256": "sha256:e6d29b2e08ac33f781ea0d6d6a6198099f756bad783f0372e1a41081819345f5"
+      },
+      {
+        "path": "engines/images/scoutsuite/prepare_source.py",
+        "reason": "Rewrites and normalizes the pinned ScoutSuite source during the image build but is absent from the plan.",
+        "sha256": "sha256:5ebccaab17572f54ab003b64ecc0e507bfeaaceca57504761b231f0119e3f1c4"
+      },
+      {
+        "path": "engines/images/scoutsuite/requirements.in",
+        "reason": "Declares the direct ScoutSuite dependency surface used alongside the recorded lock, but its own bytes are not recorded.",
+        "sha256": "sha256:b33e875bf73edb103894053ea704836a2187794955b74a0b083e56a4b5d8beb6"
+      },
+      {
+        "path": "engines/images/scoutsuite/scout_entry.py",
+        "reason": "Installed as the ScoutSuite runtime entry point but has no digest in the plan.",
+        "sha256": "sha256:0a2ff9d9733939540b91eb72d0775b13741df47c7c5a07acaed746eab5db44c6"
+      }
+    ],
+    "patch_audit": {
+      "reviewed_on": "2026-10-03",
+      "review_due": "2026-11-01",
+      "applicable_upstream_version": "5.14.0",
+      "applicable_source_revision": "7909f2fc6186063e5c9e7ddef8c4d7d1072c8f3d",
+      "capability": "Run the native IAM JSON report without importing a local SQLite web server or shipping unused server dependencies.",
+      "contribution_status": "not_submitted",
+      "contribution_reason": "No contribution has been submitted. Lazy imports are candidates for upstream, but deleting server dependencies from the general upstream requirements would break its supported server mode. That dependency split requires an upstream packaging decision; this product fixes its invocation to JSON only.",
+      "security_owner": "teddashh/ai-security-scanner maintainers",
+      "license_owner": "teddashh/ai-security-scanner maintainers",
+      "maintenance_owner": "teddashh/ai-security-scanner maintainers",
+      "removal_condition": "Use unmodified upstream when JSON-only execution imports neither server nor SQLite packages and a supported minimal dependency group provides the same native report.",
+      "dedicated_fixtures": [
+        "engines/images/scoutsuite/prepare_source.py EXPECTED and REPLACEMENTS",
+        "src-tauri/tests/fixtures/adapters/scoutsuite.json",
+        "src-tauri/tests/adapter_fixtures.rs: scoutsuite_rule_identity_survives_being_stored_only_as_a_parent_key"
+      ],
+      "source_hash_semantics": "Sequential pre/post images in declared application order; a null before or after hash means an added or deleted file. Original-source links name the pinned upstream baseline.",
+      "patches": [
+        {
+          "path": "engines/images/scoutsuite/scoutsuite-json-only.patch",
+          "sha256": "sha256:4f13f6754931203b4564ab6f7e7480428c713315bc05a99eddea4733aff8413b",
+          "files": [
+            {
+              "path": "ScoutSuite/__main__.py",
+              "upstream_source": "https://github.com/nccgroup/ScoutSuite/blob/7909f2fc6186063e5c9e7ddef8c4d7d1072c8f3d/ScoutSuite/__main__.py",
+              "before_sha256": "sha256:234d77dd44e629e04dc142e0d2ad36ad85447e9e415bace081fcbc3b3ec41f44",
+              "after_sha256": "sha256:13c7268d27ddc457ca9a1b089993b9a32253a05c8f1ec4b6d2c9f6d37efb6e60"
+            },
+            {
+              "path": "ScoutSuite/output/result_encoder.py",
+              "upstream_source": "https://github.com/nccgroup/ScoutSuite/blob/7909f2fc6186063e5c9e7ddef8c4d7d1072c8f3d/ScoutSuite/output/result_encoder.py",
+              "before_sha256": "sha256:b97c3dca0910fda2ebf88ccd26c7ad6dc934434398868bc18b56406cbb323fec",
+              "after_sha256": "sha256:cb40ec2b77b0fffc4a23bb7d00d26f01e582e434d8bae82ede67e91f2088bc5b"
+            },
+            {
+              "path": "requirements.txt",
+              "upstream_source": "https://github.com/nccgroup/ScoutSuite/blob/7909f2fc6186063e5c9e7ddef8c4d7d1072c8f3d/requirements.txt",
+              "before_sha256": "sha256:2bc03e2880795dc9e63ca061e1fcc516eb235b0208b0871ebb413e6739f5e6ff",
+              "after_sha256": "sha256:279656d38ea1b8a28f8f1591b6f2e8154b91cdb12e011dd39dec5d740accac9e"
+            }
+          ]
+        }
+      ]
+    }
   },
   "dockerfile": {
     "emitted": true,

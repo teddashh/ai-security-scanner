@@ -99,7 +99,125 @@
         "scan",
         "--config-only"
       ]
-    ]
+    ],
+    "local_inputs": [
+      {
+        "path": "engines/images/mcp-armor/launcher/go.mod",
+        "reason": "Defines the MCP Armor launcher module and Go language version; only the launcher source digest is recorded.",
+        "sha256": "sha256:8c4bebd928f52f75e1fd623e67fb98c9943ccf73d2fa3579e072f3329cc0a09f"
+      }
+    ],
+    "patch_audit": {
+      "reviewed_on": "2026-10-03",
+      "review_due": "2026-11-01",
+      "applicable_upstream_version": "1.0.2",
+      "applicable_source_revision": "6af4cee4665ab6242f02a88952f9127b6a04922a",
+      "capability": "Run only the two native configuration checks, with a structured completeness ledger, without starting target commands, connecting to MCP servers or importing model runtimes.",
+      "contribution_status": "not_submitted",
+      "contribution_reason": "No contribution has been submitted. The full upstream runner assumes live server and prompt-classifier availability; a safe static mode needs a separate public contract, optional dependencies and completeness semantics agreed by upstream. Shipping that public API upstream is not practical within this fixed integration; retain the reviewed mode and re-evaluate the public interface on every update.",
+      "security_owner": "teddashh/ai-security-scanner maintainers",
+      "license_owner": "teddashh/ai-security-scanner maintainers",
+      "maintenance_owner": "teddashh/ai-security-scanner maintainers",
+      "removal_condition": "A documented and tested native configuration-only mode must retain exact two-check identifiers/results and fail or report incomplete when input/checks are unevaluated, without live connectors or model imports.",
+      "dedicated_fixtures": [
+        "tests/config_only_test.py in patched upstream (11 tests)",
+        "docs/research/fixtures/mcp-armor/",
+        "engines/images/mcp-armor/launcher/main_test.go"
+      ],
+      "source_hash_semantics": "Sequential pre/post images in declared application order; a null before or after hash means an added or deleted file. Original-source links name the pinned upstream baseline.",
+      "patches": [
+        {
+          "path": "docs/research/patches/mcp-armor-1.0.2-config-only.patch",
+          "sha256": "sha256:ae7732b5f9c922fbf2bee54e0246cccde6e1e5af829db112eb0f948cbd424122",
+          "files": [
+            {
+              "path": "README.md",
+              "upstream_source": "https://github.com/aira-security/mcp-armor/blob/6af4cee4665ab6242f02a88952f9127b6a04922a/README.md",
+              "before_sha256": "sha256:81ada5243a5fd63269ea256312f444df47f7cc83dc8f9c579f2913a4a9641f40",
+              "after_sha256": "sha256:1c59dd658fd3c1ba6895e6b5c0997c4a572169eb3bd5594de48d247b3a5d833a"
+            },
+            {
+              "path": "README_PYPI.md",
+              "upstream_source": "https://github.com/aira-security/mcp-armor/blob/6af4cee4665ab6242f02a88952f9127b6a04922a/README_PYPI.md",
+              "before_sha256": "sha256:bef71e585d9bd993ebad713f3dc6382c2841ebf841007f2b42c8aa9efc439788",
+              "after_sha256": "sha256:7b7a0b9e17e25dbf8f07d928faca2d2dcc14d2c0e9910db5f389a87c947d411e"
+            },
+            {
+              "path": "pyproject.toml",
+              "upstream_source": "https://github.com/aira-security/mcp-armor/blob/6af4cee4665ab6242f02a88952f9127b6a04922a/pyproject.toml",
+              "before_sha256": "sha256:caadac80ef4e7a494a53d68917ea8b6c08ba2e25e44541359116929cc200f350",
+              "after_sha256": "sha256:91f95969aec05772a9c5d3f930f0fe53e2d4e949e523ff73858158bca28ff293"
+            },
+            {
+              "path": "src/mcp_armor/__init__.py",
+              "upstream_source": "https://github.com/aira-security/mcp-armor/blob/6af4cee4665ab6242f02a88952f9127b6a04922a/src/mcp_armor/__init__.py",
+              "before_sha256": "sha256:4f9d25deeac900c757cc5f52ec9c9ef4e680c5071c58da1a5f48d0424f159d63",
+              "after_sha256": "sha256:50f7be974d772f36b4c3d3a234134408d4c5c6f166ede492cd8e2a3951af1136"
+            },
+            {
+              "path": "src/mcp_armor/cli.py",
+              "upstream_source": "https://github.com/aira-security/mcp-armor/blob/6af4cee4665ab6242f02a88952f9127b6a04922a/src/mcp_armor/cli.py",
+              "before_sha256": "sha256:8d008bb5d8dbf3516540e0eac5f0bee16a7160226451947a3f6889a43735a1c6",
+              "after_sha256": "sha256:dd290e11ef361e2d25240b88ce6e4709f1412d9ffb23b68c7463fbd652aef5e4"
+            },
+            {
+              "path": "src/mcp_armor/config_scan.py",
+              "upstream_source": null,
+              "before_sha256": null,
+              "after_sha256": "sha256:56d5b3e21f4bf67c64d4f529089c80bcb0a5a3ceca9365e7322cee10cf7619cc"
+            },
+            {
+              "path": "src/mcp_armor/scan_checks/excessive_tool_permissions.py",
+              "upstream_source": "https://github.com/aira-security/mcp-armor/blob/6af4cee4665ab6242f02a88952f9127b6a04922a/src/mcp_armor/scan_checks/excessive_tool_permissions.py",
+              "before_sha256": "sha256:4c75d8df4e70a3cc307ba9c7804905fdcd4a336e986dca9648a2586e90fc89da",
+              "after_sha256": "sha256:ea8b03c4625220a3cbc7d380beab500acf5919a886a6fe13bf96d7c076c1bae5"
+            },
+            {
+              "path": "src/mcp_armor/scan_checks/hardcoded_secrets.py",
+              "upstream_source": "https://github.com/aira-security/mcp-armor/blob/6af4cee4665ab6242f02a88952f9127b6a04922a/src/mcp_armor/scan_checks/hardcoded_secrets.py",
+              "before_sha256": "sha256:f229f545b1b9ebf1c9125dac4d4fc5a36dc88235c31d68423e79b8d76f1b8121",
+              "after_sha256": "sha256:c95ea05f0e216aa844c3759beff8a75f997cb18b428cb487063a315adf063074"
+            },
+            {
+              "path": "src/mcp_armor/scanner.py",
+              "upstream_source": "https://github.com/aira-security/mcp-armor/blob/6af4cee4665ab6242f02a88952f9127b6a04922a/src/mcp_armor/scanner.py",
+              "before_sha256": "sha256:9c16266dcb9d71b59b62ab790551ea31ec504ec8ec048d38e3723a218ada45ff",
+              "after_sha256": "sha256:cdb1ae3523b3ffcb6149630b3f6ad65fcebdc4e126f1a35ff83cad84b3b4a2b5"
+            },
+            {
+              "path": "tests/config_only_test.py",
+              "upstream_source": null,
+              "before_sha256": null,
+              "after_sha256": "sha256:3520f4708400331ef0f3720ac91f57595d5ad2cb7bfe9e0ce7d8d83e2b9088e4"
+            },
+            {
+              "path": "tests/fixtures/README.md",
+              "upstream_source": null,
+              "before_sha256": null,
+              "after_sha256": "sha256:237377daa60bf11d43352c629823a3a817db13bf5946771644dd184261d6f5b2"
+            },
+            {
+              "path": "tests/fixtures/config-clean.json",
+              "upstream_source": null,
+              "before_sha256": null,
+              "after_sha256": "sha256:b2d3f9d4a18b8464bd25f13af25cb91ab5ad118682b6d286b578c3d9dea5896e"
+            },
+            {
+              "path": "tests/fixtures/config-findings.json",
+              "upstream_source": null,
+              "before_sha256": null,
+              "after_sha256": "sha256:0e9146dc3a0b2d2ca61bec7c758cf873db2ea6ca2ae2e7aaecd2c232e4cb0a60"
+            },
+            {
+              "path": "tests/fixtures/config-partial.json",
+              "upstream_source": null,
+              "before_sha256": null,
+              "after_sha256": "sha256:a57cdc5d2be96723ae9fc7acc7e7356fbdebac11c129512fecf415ba02c2fb00"
+            }
+          ]
+        }
+      ]
+    }
   },
   "dockerfile": {
     "emitted": true,

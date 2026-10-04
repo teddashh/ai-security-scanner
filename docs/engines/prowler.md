@@ -48,7 +48,7 @@ The pinned upstream image has neither git nor patch, so `apply-runtime-patches.p
 | 0005 | `finding.py`, `azure_provider.py` | Tenant taken from the exact subscription instead of tenant enumeration |
 | 0006 | `azure_provider.py` | Rejects a subscription unless ARM reports `Enabled` (00eec6f) |
 
-- No upstream link, removal condition or review date is recorded for any patch, although [section 6](../engine-maintenance.md#6-downstream-patch-exception) requires them. Record them at the next rebase, and try to drop each patch first.
+- Plan `build_recipe.patch_audit` records all six patches, 15 verified sequential source-file transitions, upstream source references, the contribution rationale, owners, fixtures and per-capability removal conditions. Reviewed 2026-10-03; review again on the next source update or by 2026-11-01. No upstream issue or submission is invented. The GCP four-check restriction and Azure non-refreshing token mode need separate upstream API decisions; they remain explicit product exceptions.
 - The Dockerfile also sets `chmod 0755 /home/prowler` (4d2bca9) and points `HOME` and `XDG_CACHE_HOME` into `/tmp`.
 
 ## Lessons from real runs

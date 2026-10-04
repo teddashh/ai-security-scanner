@@ -32,7 +32,7 @@ See the [image build index](image-build-index.md) for the repeatable local build
 
 - **Post-request DNS removed** (206ed74). `patch_live_dns.go` replaces the `getDNSData(hp, onlyHost)` block in `runner/runner.go` with empty `ips4`, `ips6`, `cnames` and `resolvers`, so httpx performs no second, live DNS lookup outside the gateway. The Dockerfile checks the file's SHA-256 before (`748502c7633140c7395d73d3b7d91eaa2efa324a5567cfc7b7a57485a1f9a641`) and after (`6e8c7c8e59f6f7e574af0ff3b87cf3cd74e8e9d814618108dedeb9620fdbab95`), runs the patch tests against the pinned file, and greps that the call is gone. The patch binary accepts only `--source /src/httpx/runner/runner.go`.
 - **DNS fields stripped** from evidence by the launcher, as above.
-- The [section 6](../engine-maintenance.md#6-downstream-patch-exception) record is incomplete: no upstream issue link, applicable version range, removal condition or review date is written down beside the plan. Record them at the next update, and try to drop the patch first.
+- Plan `build_recipe.patch_audit` binds the exact 1.10.0 source pin, verified pre/post hashes, source reference, no-contribution rationale, owners and dedicated patch fixtures. Upstream standalone users rely on DNS enrichment, so a general removal would be inappropriate; seek a native opt-out that preserves proxy Host/SNI before removing this guard. Reviewed 2026-10-03; recheck on the next source update or by 2026-11-01.
 
 ## Lessons from real runs
 

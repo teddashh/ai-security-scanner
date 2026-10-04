@@ -260,5 +260,167 @@
     "rationale": "Apache-2.0 permits redistribution with required notices.",
     "source_offer_path": null
   },
-  "blockers": []
+  "blockers": [],
+  "build_recipe": {
+    "local_inputs": [
+      {
+        "path": "engines/images/prowler/Dockerfile.dockerignore",
+        "reason": "Controls the Prowler Docker build context allowlist but has no digest in the plan.",
+        "sha256": "sha256:30d5050761949aa15f747f886acd117f1edfb08bc53e7285325dc8bcea023078"
+      },
+      {
+        "path": "engines/images/prowler/patches/verify-patches.sh",
+        "reason": "Verifies the recorded Prowler patch series against upstream source but is not itself recorded in the plan.",
+        "sha256": "sha256:3d728086058c9fc4030c28dcedda6beab2464de8426db5d1d460304c98fa3f38"
+      }
+    ],
+    "patch_audit": {
+      "reviewed_on": "2026-10-03",
+      "review_due": "2026-11-01",
+      "applicable_upstream_version": "5.39.1",
+      "applicable_source_revision": "40ecbd035e5541bf099917c5033cceb8959c4737",
+      "capability": "Use one non-refreshing Azure ARM access token for one exact enabled subscription, or read one exact GCP project without ambient project/organization/tenant enumeration.",
+      "contribution_status": "not_submitted",
+      "contribution_reason": "No contribution has been submitted. The four-check GCP profile deliberately removes organization discovery needed by broader upstream profiles, and the Azure mode depends on the product-owned one-hour token lifecycle. These restrictions cannot be contributed as general provider behavior without upstream API design and broader-provider fixtures; contribution work must separate optional scope controls from this fixed narrow profile.",
+      "security_owner": "teddashh/ai-security-scanner maintainers",
+      "license_owner": "teddashh/ai-security-scanner maintainers",
+      "maintenance_owner": "teddashh/ai-security-scanner maintainers",
+      "removal_condition": "Remove each exact-target restriction when documented native switches pass the no-enumeration fixtures; remove static-token support when native authentication accepts a non-refreshing, expiry-bound token and preserves exact subscription/tenant checks.",
+      "dedicated_fixtures": [
+        "engines/images/prowler/patches/verify-patches.sh --pytest",
+        "tests/providers/azure/azure_access_token_auth_test.py in patched upstream",
+        "tests/providers/gcp/gcp_exact_projects_test.py in patched upstream",
+        "tests/providers/gcp/services/cloudresourcemanager/cloudresourcemanager_service_test.py in patched upstream"
+      ],
+      "source_hash_semantics": "Sequential pre/post images in declared application order; a null before or after hash means an added or deleted file. Original-source links name the pinned upstream baseline.",
+      "patches": [
+        {
+          "path": "engines/images/prowler/patches/0001-azure-static-access-token-iam-only.patch",
+          "sha256": "sha256:bf6059a33443e9f1fa459c6360346829170ee56e0775260f8a42f56dcb53c73c",
+          "files": [
+            {
+              "path": "prowler/providers/azure/azure_provider.py",
+              "upstream_source": "https://github.com/prowler-cloud/prowler/blob/40ecbd035e5541bf099917c5033cceb8959c4737/prowler/providers/azure/azure_provider.py",
+              "before_sha256": "sha256:8e54390485d31feeb5e114db2c24933f3c73a4f22f2532b5c18583f9520c9cbb",
+              "after_sha256": "sha256:b86ac5e1b350f07012058d2d53b15a9aa79126cb31577b871984e3d877b924cd"
+            },
+            {
+              "path": "prowler/providers/azure/lib/arguments/arguments.py",
+              "upstream_source": "https://github.com/prowler-cloud/prowler/blob/40ecbd035e5541bf099917c5033cceb8959c4737/prowler/providers/azure/lib/arguments/arguments.py",
+              "before_sha256": "sha256:fc48fdd229d5760f5675f06032e05df8e54ee8777dd04a60aecc093615474068",
+              "after_sha256": "sha256:afb7c9b47f1b9b2354774579121db4f1c26d6b03112a3d0407fb4f14ad8625af"
+            },
+            {
+              "path": "prowler/providers/common/provider.py",
+              "upstream_source": "https://github.com/prowler-cloud/prowler/blob/40ecbd035e5541bf099917c5033cceb8959c4737/prowler/providers/common/provider.py",
+              "before_sha256": "sha256:cf043f096173ba685f5cb57aff653ded25ec54d58300e7afbaf1fd77841a6a4c",
+              "after_sha256": "sha256:4fe43b204884910bfbceac5ebb3e0b2898c9c044b18d241b566cc9a53ae6cf04"
+            },
+            {
+              "path": "tests/providers/azure/azure_access_token_auth_test.py",
+              "upstream_source": null,
+              "before_sha256": null,
+              "after_sha256": "sha256:b01610958c027237b081641719021256be1155fa70ce0cd7c51cc26738a6de52"
+            }
+          ]
+        },
+        {
+          "path": "engines/images/prowler/patches/0002-gcp-exact-project-lookups.patch",
+          "sha256": "sha256:7a22e58b3c700813e3b7e814dd04254dd90ddbdbdfbccd917c3b477e487c2fcb",
+          "files": [
+            {
+              "path": "prowler/providers/gcp/gcp_provider.py",
+              "upstream_source": "https://github.com/prowler-cloud/prowler/blob/40ecbd035e5541bf099917c5033cceb8959c4737/prowler/providers/gcp/gcp_provider.py",
+              "before_sha256": "sha256:9ae2691559660ca902ab3b282fb1a5611bb47ca11f3118d34500dac847770c77",
+              "after_sha256": "sha256:36287ddfe2a79b9a61ca71b926b69cde43202f658c55e6a144794b1aa3bba3ae"
+            },
+            {
+              "path": "tests/providers/gcp/gcp_exact_projects_test.py",
+              "upstream_source": null,
+              "before_sha256": null,
+              "after_sha256": "sha256:691c5d1a179bf5976a65aaa81b7c61fdcfc5ed5e2aef573299373acd5861f93f"
+            }
+          ]
+        },
+        {
+          "path": "engines/images/prowler/patches/0003-gcp-disable-ambient-organization-search.patch",
+          "sha256": "sha256:136335c3b7defd5a167aa6d07633bcb8f5c99c6f98b398eff01fc15d11a417d1",
+          "files": [
+            {
+              "path": "prowler/providers/gcp/services/cloudresourcemanager/cloudresourcemanager_service.py",
+              "upstream_source": "https://github.com/prowler-cloud/prowler/blob/40ecbd035e5541bf099917c5033cceb8959c4737/prowler/providers/gcp/services/cloudresourcemanager/cloudresourcemanager_service.py",
+              "before_sha256": "sha256:029725c008bf0ed0d6c8cdb8ba1a378d40e584dc49ee40e021c4955e4e5688f3",
+              "after_sha256": "sha256:379876877311fe2f4aa17bb9d5b132c85baaf2081210aebf6da59472cc11c9fe"
+            },
+            {
+              "path": "tests/providers/gcp/services/cloudresourcemanager/cloudresourcemanager_service_test.py",
+              "upstream_source": "https://github.com/prowler-cloud/prowler/blob/40ecbd035e5541bf099917c5033cceb8959c4737/tests/providers/gcp/services/cloudresourcemanager/cloudresourcemanager_service_test.py",
+              "before_sha256": "sha256:0f039a16fcd24733dfef122c950ea093c985f457f84adc8eca5176acd92a669a",
+              "after_sha256": "sha256:2e6dff5665b8563aeff39d16176443576c4373c4cf51574170e36435548c61bc"
+            }
+          ]
+        },
+        {
+          "path": "engines/images/prowler/patches/0004-gcp-disable-provider-organization-lookup.patch",
+          "sha256": "sha256:ffef7b02808bbb85f1f7d28ab3c453237b33cde45729daa51feb37633e1fd79a",
+          "files": [
+            {
+              "path": "prowler/providers/gcp/gcp_provider.py",
+              "upstream_source": "https://github.com/prowler-cloud/prowler/blob/40ecbd035e5541bf099917c5033cceb8959c4737/prowler/providers/gcp/gcp_provider.py",
+              "before_sha256": "sha256:36287ddfe2a79b9a61ca71b926b69cde43202f658c55e6a144794b1aa3bba3ae",
+              "after_sha256": "sha256:c30756aaaa1ce3739c6bf2a023b4ab633656c767f1e6fa1e84ba4ff9fff1c34f"
+            },
+            {
+              "path": "tests/providers/gcp/gcp_exact_projects_test.py",
+              "upstream_source": null,
+              "before_sha256": "sha256:691c5d1a179bf5976a65aaa81b7c61fdcfc5ed5e2aef573299373acd5861f93f",
+              "after_sha256": "sha256:a01a2cec98765e1f72bd0de6c4f53051b643b74b3925635d4b2cdb22c878a620"
+            }
+          ]
+        },
+        {
+          "path": "engines/images/prowler/patches/0005-azure-disable-tenant-enumeration.patch",
+          "sha256": "sha256:00f40971d80137612b5327a8b7e31de6b05b08dd8239f1bd635339ae6325f80b",
+          "files": [
+            {
+              "path": "prowler/lib/outputs/finding.py",
+              "upstream_source": "https://github.com/prowler-cloud/prowler/blob/40ecbd035e5541bf099917c5033cceb8959c4737/prowler/lib/outputs/finding.py",
+              "before_sha256": "sha256:00ed79bee5e32239d3cce4943c70df33dbfe3f85056deb750ad11f2073613cce",
+              "after_sha256": "sha256:71d5665f11c27a3dc69660ac61b747264066c6791ba65014c50ba80105902749"
+            },
+            {
+              "path": "prowler/providers/azure/azure_provider.py",
+              "upstream_source": "https://github.com/prowler-cloud/prowler/blob/40ecbd035e5541bf099917c5033cceb8959c4737/prowler/providers/azure/azure_provider.py",
+              "before_sha256": "sha256:b86ac5e1b350f07012058d2d53b15a9aa79126cb31577b871984e3d877b924cd",
+              "after_sha256": "sha256:421c9c913ee62076a3305ef1feca6130f87d5ab508a0cb20cd704f1cf1241460"
+            },
+            {
+              "path": "tests/providers/azure/azure_access_token_auth_test.py",
+              "upstream_source": null,
+              "before_sha256": "sha256:b01610958c027237b081641719021256be1155fa70ce0cd7c51cc26738a6de52",
+              "after_sha256": "sha256:267e447e6e91df78b1b26b4ae404ba3e7b3161e1a1f8ad76d9ed0c875f866f9a"
+            }
+          ]
+        },
+        {
+          "path": "engines/images/prowler/patches/0006-azure-require-enabled-subscription.patch",
+          "sha256": "sha256:47b4202cdfe545b699fbe0b0dfc3e5d249d94e9d00cf7d61388405071e5aaeba",
+          "files": [
+            {
+              "path": "prowler/providers/azure/azure_provider.py",
+              "upstream_source": "https://github.com/prowler-cloud/prowler/blob/40ecbd035e5541bf099917c5033cceb8959c4737/prowler/providers/azure/azure_provider.py",
+              "before_sha256": "sha256:421c9c913ee62076a3305ef1feca6130f87d5ab508a0cb20cd704f1cf1241460",
+              "after_sha256": "sha256:51cef0e3e7ed819144959f62389d3eb169b97aa37baf37aab66d4c290d21bf14"
+            },
+            {
+              "path": "tests/providers/azure/azure_access_token_auth_test.py",
+              "upstream_source": null,
+              "before_sha256": "sha256:267e447e6e91df78b1b26b4ae404ba3e7b3161e1a1f8ad76d9ed0c875f866f9a",
+              "after_sha256": "sha256:9267ba5993471a3df8227d3a59c2f84086c4b90933ad6ad7c2743438265efca2"
+            }
+          ]
+        }
+      ]
+    }
+  }
 }

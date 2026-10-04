@@ -96,7 +96,14 @@
       "include_preview": false,
       "version_check": false,
       "telemetry": false
-    }
+    },
+    "local_inputs": [
+      {
+        "path": "engines/images/maester/Dockerfile.dockerignore",
+        "reason": "Controls the Maester Docker build context allowlist but has no digest in the plan.",
+        "sha256": "sha256:2a3c47d5191ef199a00bf8882a7a1ee4ae55dff514abc7454af01342cde04758"
+      }
+    ]
   },
   "dockerfile": {
     "emitted": true,
