@@ -85,8 +85,8 @@
         "id": "ai-security-scanner:cloudquery",
         "version": "0.2.6",
         "acquisition_source": "workspace://src-tauri/src/adapters/mod.rs",
-        "source_revision": null,
-        "release_state": "workspace_unreleased"
+        "source_revision": "81c2eb30d2d0604e05f20377bff7fdb79989416a",
+        "release_state": "released"
       }
     },
     "compatibility": {
@@ -219,8 +219,8 @@
         "id": "ai-security-scanner:steampipe",
         "version": "0.2.6",
         "acquisition_source": "workspace://src-tauri/src/adapters/mod.rs",
-        "source_revision": null,
-        "release_state": "workspace_unreleased"
+        "source_revision": "81c2eb30d2d0604e05f20377bff7fdb79989416a",
+        "release_state": "released"
       }
     },
     "compatibility": {
@@ -392,8 +392,8 @@
         "id": "ai-security-scanner:prowler",
         "version": "0.2.6",
         "acquisition_source": "workspace://src-tauri/src/adapters/mod.rs",
-        "source_revision": null,
-        "release_state": "workspace_unreleased"
+        "source_revision": "81c2eb30d2d0604e05f20377bff7fdb79989416a",
+        "release_state": "released"
       }
     },
     "compatibility": {
@@ -531,8 +531,8 @@
         "id": "ai-security-scanner:scoutsuite",
         "version": "0.2.6",
         "acquisition_source": "workspace://src-tauri/src/adapters/mod.rs",
-        "source_revision": null,
-        "release_state": "workspace_unreleased"
+        "source_revision": "81c2eb30d2d0604e05f20377bff7fdb79989416a",
+        "release_state": "released"
       }
     },
     "compatibility": {
@@ -666,8 +666,8 @@
         "id": "ai-security-scanner:cloudsplaining",
         "version": "0.2.6",
         "acquisition_source": "workspace://src-tauri/src/adapters/mod.rs",
-        "source_revision": null,
-        "release_state": "workspace_unreleased"
+        "source_revision": "81c2eb30d2d0604e05f20377bff7fdb79989416a",
+        "release_state": "released"
       }
     },
     "compatibility": {
@@ -801,8 +801,8 @@
         "id": "ai-security-scanner:scubagear",
         "version": "0.2.6",
         "acquisition_source": "workspace://src-tauri/src/adapters/mod.rs",
-        "source_revision": null,
-        "release_state": "workspace_unreleased"
+        "source_revision": "81c2eb30d2d0604e05f20377bff7fdb79989416a",
+        "release_state": "released"
       }
     },
     "compatibility": {
@@ -936,8 +936,8 @@
         "id": "ai-security-scanner:maester",
         "version": "0.2.6",
         "acquisition_source": "workspace://src-tauri/src/adapters/mod.rs",
-        "source_revision": null,
-        "release_state": "workspace_unreleased"
+        "source_revision": "81c2eb30d2d0604e05f20377bff7fdb79989416a",
+        "release_state": "released"
       }
     },
     "compatibility": {
@@ -1086,8 +1086,8 @@
         "id": "ai-security-scanner:naabu",
         "version": "0.2.6",
         "acquisition_source": "workspace://src-tauri/src/adapters/mod.rs",
-        "source_revision": null,
-        "release_state": "workspace_unreleased"
+        "source_revision": "81c2eb30d2d0604e05f20377bff7fdb79989416a",
+        "release_state": "released"
       }
     },
     "compatibility": {
@@ -1230,8 +1230,8 @@
         "id": "ai-security-scanner:httpx",
         "version": "0.2.6",
         "acquisition_source": "workspace://src-tauri/src/adapters/mod.rs",
-        "source_revision": null,
-        "release_state": "workspace_unreleased"
+        "source_revision": "81c2eb30d2d0604e05f20377bff7fdb79989416a",
+        "release_state": "released"
       }
     },
     "compatibility": {
@@ -1374,8 +1374,8 @@
         "id": "ai-security-scanner:nuclei",
         "version": "0.2.6",
         "acquisition_source": "workspace://src-tauri/src/adapters/mod.rs",
-        "source_revision": null,
-        "release_state": "workspace_unreleased"
+        "source_revision": "81c2eb30d2d0604e05f20377bff7fdb79989416a",
+        "release_state": "released"
       }
     },
     "compatibility": {
@@ -1519,8 +1519,8 @@
         "id": "ai-security-scanner:greenbone",
         "version": "0.2.6",
         "acquisition_source": "workspace://src-tauri/src/adapters/mod.rs",
-        "source_revision": null,
-        "release_state": "workspace_unreleased"
+        "source_revision": "81c2eb30d2d0604e05f20377bff7fdb79989416a",
+        "release_state": "released"
       }
     },
     "compatibility": {
@@ -1666,8 +1666,8 @@
         "id": "ai-security-scanner:zap",
         "version": "0.2.6",
         "acquisition_source": "workspace://src-tauri/src/adapters/mod.rs",
-        "source_revision": null,
-        "release_state": "workspace_unreleased"
+        "source_revision": "81c2eb30d2d0604e05f20377bff7fdb79989416a",
+        "release_state": "released"
       }
     },
     "compatibility": {
@@ -1803,8 +1803,8 @@
         "id": "ai-security-scanner:semgrep",
         "version": "0.2.6",
         "acquisition_source": "workspace://src-tauri/src/adapters/mod.rs",
-        "source_revision": null,
-        "release_state": "workspace_unreleased"
+        "source_revision": "81c2eb30d2d0604e05f20377bff7fdb79989416a",
+        "release_state": "released"
       }
     },
     "compatibility": {
@@ -1934,8 +1934,8 @@
         "id": "ai-security-scanner:gitleaks",
         "version": "0.2.6",
         "acquisition_source": "workspace://src-tauri/src/adapters/mod.rs",
-        "source_revision": null,
-        "release_state": "workspace_unreleased"
+        "source_revision": "81c2eb30d2d0604e05f20377bff7fdb79989416a",
+        "release_state": "released"
       }
     },
     "compatibility": {
@@ -2066,8 +2066,8 @@
         "id": "ai-security-scanner:trufflehog",
         "version": "0.2.6",
         "acquisition_source": "workspace://src-tauri/src/adapters/mod.rs",
-        "source_revision": null,
-        "release_state": "workspace_unreleased"
+        "source_revision": "81c2eb30d2d0604e05f20377bff7fdb79989416a",
+        "release_state": "released"
       }
     },
     "compatibility": {
@@ -2212,8 +2212,8 @@
         "id": "ai-security-scanner:checkov",
         "version": "0.2.6",
         "acquisition_source": "workspace://src-tauri/src/adapters/mod.rs",
-        "source_revision": null,
-        "release_state": "workspace_unreleased"
+        "source_revision": "81c2eb30d2d0604e05f20377bff7fdb79989416a",
+        "release_state": "released"
       }
     },
     "compatibility": {
@@ -2358,8 +2358,8 @@
         "id": "ai-security-scanner:kics",
         "version": "0.2.6",
         "acquisition_source": "workspace://src-tauri/src/adapters/mod.rs",
-        "source_revision": null,
-        "release_state": "workspace_unreleased"
+        "source_revision": "81c2eb30d2d0604e05f20377bff7fdb79989416a",
+        "release_state": "released"
       }
     },
     "compatibility": {
@@ -2507,8 +2507,8 @@
         "id": "ai-security-scanner:trivy",
         "version": "0.2.6",
         "acquisition_source": "workspace://src-tauri/src/adapters/mod.rs",
-        "source_revision": null,
-        "release_state": "workspace_unreleased"
+        "source_revision": "81c2eb30d2d0604e05f20377bff7fdb79989416a",
+        "release_state": "released"
       }
     },
     "compatibility": {
@@ -2648,8 +2648,8 @@
         "id": "ai-security-scanner:grype",
         "version": "0.2.6",
         "acquisition_source": "workspace://src-tauri/src/adapters/mod.rs",
-        "source_revision": null,
-        "release_state": "workspace_unreleased"
+        "source_revision": "81c2eb30d2d0604e05f20377bff7fdb79989416a",
+        "release_state": "released"
       }
     },
     "compatibility": {
@@ -2792,8 +2792,8 @@
         "id": "ai-security-scanner:syft",
         "version": "0.2.6",
         "acquisition_source": "workspace://src-tauri/src/adapters/mod.rs",
-        "source_revision": null,
-        "release_state": "workspace_unreleased"
+        "source_revision": "81c2eb30d2d0604e05f20377bff7fdb79989416a",
+        "release_state": "released"
       }
     },
     "compatibility": {
@@ -2924,8 +2924,8 @@
         "id": "ai-security-scanner:kubescape",
         "version": "0.2.6",
         "acquisition_source": "workspace://src-tauri/src/adapters/mod.rs",
-        "source_revision": null,
-        "release_state": "workspace_unreleased"
+        "source_revision": "81c2eb30d2d0604e05f20377bff7fdb79989416a",
+        "release_state": "released"
       }
     },
     "compatibility": {
@@ -3056,8 +3056,8 @@
         "id": "ai-security-scanner:kube-bench",
         "version": "0.2.6",
         "acquisition_source": "workspace://src-tauri/src/adapters/mod.rs",
-        "source_revision": null,
-        "release_state": "workspace_unreleased"
+        "source_revision": "81c2eb30d2d0604e05f20377bff7fdb79989416a",
+        "release_state": "released"
       }
     },
     "compatibility": {
@@ -3189,8 +3189,8 @@
         "id": "ai-security-scanner:garak",
         "version": "0.2.6",
         "acquisition_source": "workspace://src-tauri/src/adapters/mod.rs",
-        "source_revision": null,
-        "release_state": "workspace_unreleased"
+        "source_revision": "81c2eb30d2d0604e05f20377bff7fdb79989416a",
+        "release_state": "released"
       }
     },
     "compatibility": {
@@ -3326,8 +3326,8 @@
         "id": "ai-security-scanner:agentic-radar",
         "version": "0.2.6",
         "acquisition_source": "workspace://src-tauri/src/adapters/mod.rs",
-        "source_revision": null,
-        "release_state": "workspace_unreleased"
+        "source_revision": "81c2eb30d2d0604e05f20377bff7fdb79989416a",
+        "release_state": "released"
       }
     },
     "compatibility": {
@@ -3459,8 +3459,8 @@
         "id": "ai-security-scanner:mcp-armor",
         "version": "0.2.6",
         "acquisition_source": "workspace://src-tauri/src/adapters/mod.rs",
-        "source_revision": null,
-        "release_state": "workspace_unreleased"
+        "source_revision": "81c2eb30d2d0604e05f20377bff7fdb79989416a",
+        "release_state": "released"
       }
     },
     "compatibility": {
