@@ -30,7 +30,7 @@ test("the bilingual project site lists every integrated upstream engine exactly 
   const catalog = JSON.parse(catalogSource) as CatalogEngine[];
   const integrated = catalog.filter((engine) => engine.status === "integrated");
 
-  assert.equal(integrated.length, 22);
+  assert.equal(integrated.length, 23);
   assert.equal(occurrences(site, 'class="tool-card" data-tool='), integrated.length);
   for (const engine of integrated) {
     assert.equal(occurrences(site, `data-tool="${engine.id}"`), 1, `${engine.id} site card`);
@@ -62,8 +62,8 @@ test("the displayed GitHub stars match the dated API snapshot", async () => {
   assert.equal(snapshot.schemaVersion, 1);
   assert.equal(snapshot.source, "GitHub REST API");
   assert.ok(Number.isFinite(Date.parse(snapshot.checkedAt)));
-  assert.equal(snapshot.tools.length, 22);
-  assert.equal(new Set(snapshot.tools.map((entry) => entry.id)).size, 22);
+  assert.equal(snapshot.tools.length, 23);
+  assert.equal(new Set(snapshot.tools.map((entry) => entry.id)).size, 23);
 
   for (const entry of [...snapshot.tools, ...snapshot.ruleSources]) {
     assert.ok(Number.isSafeInteger(entry.stars) && entry.stars >= 0, entry.repository);

@@ -121,7 +121,7 @@ convention.
 |---|---|---|---|
 | Model endpoint probes | [garak](https://github.com/NVIDIA/garak/tree/93aa9cdec309ec4170559676f1826ea2a679920c) | Apache-2.0 | Reads probe/detector failure counts without inventing severity; real endpoint testing and packaging remain blocked. |
 | Agent workflow inventory | [Agentic Radar](https://github.com/splx-ai/agentic-radar/tree/65a7e4bd01e2034c7cb52e9620eeed287688cc53) | Apache-2.0 | Normalizes a patched machine-readable workflow graph as observations, never its generic category warnings as findings. |
-| Website passive findings | [OWASP ZAP](https://github.com/zaproxy/zaproxy/tree/2665d972f6d587ba4773a95053ac39af3fdf8df9) | Apache-2.0 | Crawls an authorized origin and applies upstream passive rules to the observed responses, sending no attack payloads. Preserves pinned JSON alert identity, severity, remediation, and per-instance evidence; automation-plan generation and dispatch remain blocked. |
+| Website passive findings | [OWASP ZAP](https://github.com/zaproxy/zaproxy/tree/2665d972f6d587ba4773a95053ac39af3fdf8df9) | Apache-2.0 | Explicit advanced passive website choice on main, absent from frozen v0.3.1 installers. Crawls one exact authorized origin at 5 requests/s, preserving upstream alert identity, severity, remediation and per-instance evidence. Native per-request pacing, bounded automation-plan dispatch and recovery ownership are implemented. |
 
 ### Provider scope and credentials
 

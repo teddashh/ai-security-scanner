@@ -19,6 +19,35 @@ use url::Url;
 
 pub const ZAP_PASSIVE_PROFILE_ID: &str = "zap_passive_v1";
 pub const ZAP_ENGINE_ID: &str = "zap";
+pub const ZAP_PASSIVE_TEMPLATE_REVISION: &str = "zaproxy@2665d972f6d587ba4773a95053ac39af3fdf8df9";
+
+/// The reviewed origin-wide profile owns its request and job bounds. Neither
+/// a generic active grant nor a different engine's profile can authorize it.
+pub fn matches_zap_passive_profile(
+    activity: crate::external_scope::ExternalActivity,
+    protocol: crate::external_scope::TransportProtocol,
+    ports: &std::collections::BTreeSet<u16>,
+    rate: &crate::external_scope::RatePolicy,
+    templates: &crate::external_scope::TemplatePolicy,
+) -> bool {
+    use crate::external_scope::{ExternalActivity, TransportProtocol};
+    activity == ExternalActivity::ActiveExternal
+        && matches!(protocol, TransportProtocol::Http | TransportProtocol::Https)
+        && ports.len() == 1
+        && !ports.contains(&0)
+        && rate.requests_per_second == 5
+        && rate.concurrency == 5
+        && rate.timeout_seconds == 10
+        && templates.profile_id.as_deref() == Some(ZAP_PASSIVE_PROFILE_ID)
+        && templates.revision == ZAP_PASSIVE_TEMPLATE_REVISION
+        && templates.allowed_template_ids.is_empty()
+        && !templates.allow_headless
+        && !templates.allow_out_of_band
+        && !templates.allow_fuzzing
+        && !templates.allow_file_upload
+        && !templates.allow_denial_of_service
+        && !templates.allow_credential_attacks
+}
 /// The generated plan is a single context with four bounded jobs. The ceiling
 /// exists so a control file that grew for any other reason is rejected before
 /// it is hashed and mounted, not so the plan can approach it.
@@ -35,6 +64,8 @@ pub const MAX_ZAP_PASSIVE_WAIT_DURATION_MINUTES: u16 = 60;
 /// ceiling here means a plan that outruns its own grant cannot be built.
 pub const MAX_ZAP_SPIDER_THREADS: u16 = 5;
 pub const MAX_ZAP_ALERTS_PER_RULE: u16 = 100;
+pub const MAX_ZAP_REQUESTS_PER_SECOND: u16 = 10;
+pub const MAX_ZAP_REQUEST_TIMEOUT_SECONDS: u16 = 60;
 
 const APPROVED_CONTEXT_NAME: &str = "approved";
 
@@ -64,6 +95,8 @@ pub struct ZapGatewayEndpoint {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ZapPassiveBounds {
+    pub requests_per_second: u16,
+    pub request_timeout_seconds: u16,
     pub max_depth: u16,
     pub max_children: u16,
     pub spider_max_duration_minutes: u16,
@@ -188,8 +221,42 @@ pub fn build_zap_passive_plan(
     let origin = approved_origin.as_str().to_owned();
     let configs = BTreeMap::from([
         (
-            "network.connection.socksProxy.dns".to_owned(),
+            "network.connection.timeoutInSecs".to_owned(),
+            bounds.request_timeout_seconds.to_string(),
+        ),
+        // Network add-on 0.29.0 uses these exact configuration keys. Its
+        // limiter applies before each HTTP/HTTPS request, including requests
+        // on an existing keep-alive connection. A single RULE group also
+        // bounds any attempted off-origin request before the gateway refuses it.
+        (
+            "network.ratelimit.rules.rule(0).description".to_owned(),
+            "approved passive scan".to_owned(),
+        ),
+        (
+            "network.ratelimit.rules.rule(0).enabled".to_owned(),
             "true".to_owned(),
+        ),
+        (
+            "network.ratelimit.rules.rule(0).matchStr".to_owned(),
+            ".*".to_owned(),
+        ),
+        (
+            "network.ratelimit.rules.rule(0).regex".to_owned(),
+            "true".to_owned(),
+        ),
+        (
+            "network.ratelimit.rules.rule(0).reqsPerSec".to_owned(),
+            bounds.requests_per_second.to_string(),
+        ),
+        (
+            "network.ratelimit.rules.rule(0).groupBy".to_owned(),
+            "RULE".to_owned(),
+        ),
+        (
+            "network.connection.socksProxy.dns".to_owned(),
+            // Java must send literal IP targets as SOCKS address requests.
+            // DNS names remain unresolved until the gateway uses frozen IPs.
+            matches!(approved_origin.host(), Some(url::Host::Domain(_))).to_string(),
         ),
         (
             "network.connection.socksProxy.enabled".to_owned(),
@@ -219,7 +286,7 @@ pub fn build_zap_passive_plan(
             configs,
             parameters: ZapEnvironmentParameters {
                 fail_on_error: true,
-                fail_on_warning: false,
+                fail_on_warning: true,
                 continue_on_failure: false,
                 progress_to_stdout: true,
             },
@@ -346,6 +413,16 @@ fn validate_gateway(gateway: &ZapGatewayEndpoint) -> Result<(), ZapWorkPlanError
 }
 
 fn validate_bounds(bounds: &ZapPassiveBounds) -> Result<(), ZapWorkPlanError> {
+    validate_bound(
+        "request_timeout_seconds",
+        bounds.request_timeout_seconds,
+        MAX_ZAP_REQUEST_TIMEOUT_SECONDS,
+    )?;
+    validate_bound(
+        "requests_per_second",
+        bounds.requests_per_second,
+        MAX_ZAP_REQUESTS_PER_SECOND,
+    )?;
     validate_bound("max_depth", bounds.max_depth, MAX_ZAP_SPIDER_DEPTH)?;
     validate_bound("max_children", bounds.max_children, MAX_ZAP_SPIDER_CHILDREN)?;
     validate_bound(
@@ -402,6 +479,8 @@ mod tests {
 
     fn representative_bounds() -> ZapPassiveBounds {
         ZapPassiveBounds {
+            requests_per_second: 5,
+            request_timeout_seconds: 10,
             max_depth: 5,
             max_children: 40,
             spider_max_duration_minutes: 3,
@@ -439,6 +518,13 @@ mod tests {
                     "includePaths": ["\\Qhttps://example.test/\\E.*"]
                 }],
                 "configs": {
+                    "network.connection.timeoutInSecs": "10",
+                    "network.ratelimit.rules.rule(0).description": "approved passive scan",
+                    "network.ratelimit.rules.rule(0).enabled": "true",
+                    "network.ratelimit.rules.rule(0).matchStr": ".*",
+                    "network.ratelimit.rules.rule(0).regex": "true",
+                    "network.ratelimit.rules.rule(0).reqsPerSec": "5",
+                    "network.ratelimit.rules.rule(0).groupBy": "RULE",
                     "network.connection.socksProxy.enabled": "true",
                     "network.connection.socksProxy.host": "gateway.internal",
                     "network.connection.socksProxy.port": "1080",
@@ -447,7 +533,7 @@ mod tests {
                 },
                 "parameters": {
                     "failOnError": true,
-                    "failOnWarning": false,
+                    "failOnWarning": true,
                     "continueOnFailure": false,
                     "progressToStdout": true
                 }
@@ -486,11 +572,27 @@ mod tests {
     }
 
     #[test]
+    fn only_hostnames_are_resolved_by_the_frozen_gateway() {
+        for origin in ["http://192.0.2.4:8080/", "https://[2001:db8::4]/"] {
+            let value = serde_json::to_value(build(origin).unwrap()).unwrap();
+            assert_eq!(
+                value["env"]["configs"]["network.connection.socksProxy.dns"],
+                "false"
+            );
+        }
+        let value = serde_json::to_value(build("https://example.test/").unwrap()).unwrap();
+        assert_eq!(
+            value["env"]["configs"]["network.connection.socksProxy.dns"],
+            "true"
+        );
+    }
+
+    #[test]
     fn supplied_gateway_always_populates_all_five_socks_configs() {
         let value = serde_json::to_value(build("https://example.test/").unwrap()).unwrap();
         let configs = value["env"]["configs"].as_object().unwrap();
 
-        assert_eq!(configs.len(), 5);
+        assert_eq!(configs.len(), 12);
         assert_eq!(configs["network.connection.socksProxy.enabled"], "true");
         assert_eq!(
             configs["network.connection.socksProxy.host"],
@@ -659,6 +761,22 @@ mod tests {
     fn rejects_zero_and_over_maximum_for_every_bound() {
         let origin = Url::parse("https://example.test/").unwrap();
         let cases = [
+            ("requests_per_second", 0, MAX_ZAP_REQUESTS_PER_SECOND),
+            (
+                "requests_per_second",
+                MAX_ZAP_REQUESTS_PER_SECOND + 1,
+                MAX_ZAP_REQUESTS_PER_SECOND,
+            ),
+            (
+                "request_timeout_seconds",
+                0,
+                MAX_ZAP_REQUEST_TIMEOUT_SECONDS,
+            ),
+            (
+                "request_timeout_seconds",
+                MAX_ZAP_REQUEST_TIMEOUT_SECONDS + 1,
+                MAX_ZAP_REQUEST_TIMEOUT_SECONDS,
+            ),
             ("max_depth", 0, MAX_ZAP_SPIDER_DEPTH),
             ("max_depth", MAX_ZAP_SPIDER_DEPTH + 1, MAX_ZAP_SPIDER_DEPTH),
             ("max_children", 0, MAX_ZAP_SPIDER_CHILDREN),
@@ -704,6 +822,8 @@ mod tests {
         for (name, value, maximum) in cases {
             let mut bounds = representative_bounds();
             match name {
+                "requests_per_second" => bounds.requests_per_second = value,
+                "request_timeout_seconds" => bounds.request_timeout_seconds = value,
                 "max_depth" => bounds.max_depth = value,
                 "max_children" => bounds.max_children = value,
                 "spider_max_duration_minutes" => bounds.spider_max_duration_minutes = value,

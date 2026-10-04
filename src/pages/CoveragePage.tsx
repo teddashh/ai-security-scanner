@@ -40,7 +40,7 @@ import {
 } from "../coverageGuidance";
 import { durationParts, estimateNetworkScanMinimum } from "../networkScanEstimate";
 import { localizedCoverageRecordDetail } from "../findingNarrative.ts";
-import { websiteQuickOrigin, websiteQuickProfile } from "../websiteQuickProfile";
+import { websitePassiveProfile, websiteQuickOrigin, websiteQuickProfile } from "../websiteQuickProfile";
 import {
   internalDeviceProfileFromScanProfile,
   internalDeviceTlsVulnerabilityOids,
@@ -543,6 +543,17 @@ const pageCopy = {
     "{target} · {protocol} {ports} · max {rate}/s · {concurrency} concurrent · {timeout}s timeout. No exploitation, credentials, destructive actions, or added targets. Start confirms authorization.",
     "{target} · {protocol} {ports} · 每秒最多 {rate} 次 · 同時 {concurrency} 個 · {timeout} 秒逾時。不會利用弱點、使用憑證、執行破壞性操作或加入其他目標；開始即確認已獲授權。",
   ),
+  websiteProfileLabel: bilingual("Website checks", "網站檢查方式"),
+  websiteProfileQuick: bilingual("Quick security checks (recommended)", "快速安全檢查（建議）"),
+  websiteProfilePassive: bilingual("Page response checks (ZAP)", "頁面回應檢查（ZAP）"),
+  websitePassiveBounds: bilingual("Crawl: up to 2 minutes, depth 5, 100 children per page; response processing: up to 2 minutes.", "爬取最多 2 分鐘、深度 5 層、每頁最多 100 個子連結；回應處理最多 2 分鐘。"),
+  websitePassiveReadyBody: bilingual("Review the exact website address below. ZAP will crawl pages and check their responses.", "在下方確認精確的網站來源範圍；ZAP 會爬取頁面並檢查回應。"),
+  websitePassiveDescription: bilingual("ZAP follows links on this website and checks the responses for security issues. Confirm the origin and limits, then start.", "ZAP 會跟隨網站內的連結，檢查回應中的安全問題。確認來源範圍與限制後開始。"),
+  websitePassiveBoundary: bilingual(
+    "Scope: {origin}, including linked pages beyond {path}. ZAP checks responses at max {rate}/s, {concurrency} concurrent, and {timeout}s timeout. No sign-in, form submission, attack payloads, or other origins. Start only with permission for the full origin.",
+    "範圍：{origin}，包含 {path} 以外的網站內連結。ZAP 檢查回應；每秒最多 {rate} 次、同時 {concurrency} 個、逾時 {timeout} 秒。不登入、不送出表單、不發送攻擊內容，也不接觸其他來源。獲准檢查完整來源範圍後再開始。",
+  ),
+  environmentWebsitePassiveBody: bilingual("ZAP crawls links within each selected origin and checks responses at 5 requests/s, five concurrent and a 10s timeout. It does not sign in, submit forms, send attack payloads, or contact other origins.", "ZAP 會爬取每個已選來源內的連結並檢查回應；每秒最多 5 次、同時 5 個、逾時 10 秒。不登入、不送出表單、不發送攻擊內容，也不接觸其他來源。"),
   websiteQuickBoundary: bilingual(
     "Scope: {origin}, not only {path}. Nuclei applies matching pinned read-only checks at max {rate}/s, {concurrency} concurrent, and {timeout}s timeout. No sign-in, forms, redirects, or exploitation. Start only with permission for the full origin.",
     "範圍：{origin}，不只 {path}。Nuclei 會執行適用的固定唯讀檢查；每秒最多 {rate} 次、同時 {concurrency} 個、逾時 {timeout} 秒。不登入、不送出表單、不跟隨重新導向，也不利用弱點。獲准檢查完整來源範圍後再開始。",
@@ -882,7 +893,11 @@ export function CoveragePage({
   const [requestsPerSecond, setRequestsPerSecond] = useState(1);
   const [externalConcurrency, setExternalConcurrency] = useState(1);
   const [externalTimeout, setExternalTimeout] = useState(60);
-  const [templateRevision, setTemplateRevision] = useState(websiteQuickProfile.templateRevision);
+  const [templateRevision, setTemplateRevision] = useState<string>(websiteQuickProfile.templateRevision);
+  const [websiteScanProfile, setWebsiteScanProfile] = useState<"quick" | "passive">("quick");
+  const zapRunnable = engineManifests.some((manifest) => manifest.id === "zap" && manifest.runnable === true);
+  const passiveWebsiteSelected = zapRunnable && websiteScanProfile === "passive";
+  const selectedWebsiteProfile = passiveWebsiteSelected ? websitePassiveProfile : websiteQuickProfile;
   const [allowedTemplateIds, setAllowedTemplateIds] = useState("");
   const [allowSensitiveNetworks, setAllowSensitiveNetworks] = useState(false);
   const [showAdvancedExternalSettings, setShowAdvancedExternalSettings] = useState(false);
@@ -1141,7 +1156,7 @@ export function CoveragePage({
   const templateIdsValid = parsedTemplateIds.every((id) => id !== "*" && !/[\n\r\0]/.test(id));
   const templateRevisionPinned = /(?:^|@)(?:sha256:)?(?:[0-9a-f]{40}|[0-9a-f]{64})$/i.test(templateRevision.trim());
   const activeTemplateSelectionReady = guidedWebsiteQuickProfile
-    ? websiteQuickProfile.profileId.length > 0
+    ? selectedWebsiteProfile.profileId.length > 0
     : parsedTemplateIds.length > 0;
   const isDirectExternal = externalActivity === "low_impact_external" || externalActivity === "active_external";
   const directNetworkBoundaryConfirmed = selectedExternalAsset?.internetExposed === true
@@ -1203,13 +1218,21 @@ export function CoveragePage({
   }, [externalActivity, selectedExternalAsset?.id]);
 
   useEffect(() => {
+    setWebsiteScanProfile("quick");
+  }, [caseId]);
+
+  useEffect(() => {
+    setEnvironmentNetworkConfirmed(false);
+  }, [websiteScanProfile]);
+
+  useEffect(() => {
     if (!externalActivity || !limits) return;
     if (guidedWebsiteQuickProfile) {
-      setRequestsPerSecond(websiteQuickProfile.ratePolicy.requestsPerSecond);
-      setExternalConcurrency(websiteQuickProfile.ratePolicy.concurrency);
-      setExternalTimeout(websiteQuickProfile.ratePolicy.timeoutSeconds);
-      setTemplateRevision(websiteQuickProfile.templateRevision);
-      setAllowedTemplateIds(websiteQuickProfile.allowedTemplateIds.join("\n"));
+      setRequestsPerSecond(selectedWebsiteProfile.ratePolicy.requestsPerSecond);
+      setExternalConcurrency(selectedWebsiteProfile.ratePolicy.concurrency);
+      setExternalTimeout(selectedWebsiteProfile.ratePolicy.timeoutSeconds);
+      setTemplateRevision(selectedWebsiteProfile.templateRevision);
+      setAllowedTemplateIds(selectedWebsiteProfile.allowedTemplateIds.join("\n"));
       return;
     }
     if (guidedLowImpactNetwork) {
@@ -1224,7 +1247,7 @@ export function CoveragePage({
     setRequestsPerSecond((current) => Math.max(1, Math.min(current, limits.rate)));
     setExternalConcurrency((current) => Math.max(1, Math.min(current, limits.concurrency)));
     setExternalTimeout((current) => Math.max(1, Math.min(current, limits.timeout)));
-  }, [caseId, externalActivity, guidedLowImpactNetwork, guidedWebsiteQuickProfile, limits, selectedExternalAsset?.id]);
+  }, [caseId, externalActivity, guidedLowImpactNetwork, guidedWebsiteQuickProfile, limits, selectedExternalAsset?.id, selectedWebsiteProfile]);
 
   const resetScopeForm = () => {
     setSelectedAssets([]);
@@ -1369,14 +1392,14 @@ export function CoveragePage({
       protocol: externalProtocol,
       activity: externalActivity,
       ratePolicy: {
-        requestsPerSecond,
-        concurrency: externalConcurrency,
-        timeoutSeconds: externalTimeout,
+        requestsPerSecond: guidedWebsiteQuickProfile ? selectedWebsiteProfile.ratePolicy.requestsPerSecond : requestsPerSecond,
+        concurrency: guidedWebsiteQuickProfile ? selectedWebsiteProfile.ratePolicy.concurrency : externalConcurrency,
+        timeoutSeconds: guidedWebsiteQuickProfile ? selectedWebsiteProfile.ratePolicy.timeoutSeconds : externalTimeout,
       },
       templatePolicy: {
-        revision: externalActivity === "active_external" ? templateRevision.trim() : "not_applicable",
+        revision: externalActivity === "active_external" ? guidedWebsiteQuickProfile ? selectedWebsiteProfile.templateRevision : templateRevision.trim() : "not_applicable",
         ...(externalActivity === "active_external" && guidedWebsiteQuickProfile
-          ? { profileId: websiteQuickProfile.profileId }
+          ? { profileId: selectedWebsiteProfile.profileId }
           : {}),
         allowedTemplateIds: externalActivity === "active_external" && !guidedWebsiteQuickProfile
           ? parsedTemplateIds
@@ -1397,7 +1420,7 @@ export function CoveragePage({
       effectiveScopeConfirmation,
       externalScope,
       guidedWebsiteQuickProfile
-        ? [...websiteQuickProfile.engineIds]
+        ? [...selectedWebsiteProfile.engineIds]
         : guidedLocalEngineIds,
     );
     if (started) resetScopeForm();
@@ -1469,11 +1492,11 @@ export function CoveragePage({
           ports: [service.port],
           protocol: service.protocol,
           activity: "active_external",
-          ratePolicy: { ...websiteQuickProfile.ratePolicy },
+          ratePolicy: { ...selectedWebsiteProfile.ratePolicy },
           templatePolicy: {
-            revision: websiteQuickProfile.templateRevision,
-            profileId: websiteQuickProfile.profileId,
-            allowedTemplateIds: [...websiteQuickProfile.allowedTemplateIds],
+            revision: selectedWebsiteProfile.templateRevision,
+            profileId: selectedWebsiteProfile.profileId,
+            allowedTemplateIds: [...selectedWebsiteProfile.allowedTemplateIds],
             allowHeadless: false,
             allowOutOfBand: false,
             allowFuzzing: false,
@@ -1485,7 +1508,7 @@ export function CoveragePage({
           allowSensitiveNetworks: asset.internetExposed === false,
         },
       });
-      for (const engineId of websiteQuickProfile.engineIds) addEngineRoute(engineId, asset.id);
+      for (const engineId of selectedWebsiteProfile.engineIds) addEngineRoute(engineId, asset.id);
     }
 
     for (const { asset, target, origin, profile } of selectedEnvironmentEndpointAssets) {
@@ -1683,12 +1706,29 @@ export function CoveragePage({
       )}
     </article>
   );
+  const websiteProfileSelect = zapRunnable ? (
+    <label className="field">
+      <span>{text(pageCopy.websiteProfileLabel)}</span>
+      <select data-website-profile disabled={busy} value={websiteScanProfile}
+        onChange={(event) => setWebsiteScanProfile(event.target.value === "passive" ? "passive" : "quick")}>
+        <option value="quick">{text(pageCopy.websiteProfileQuick)}</option>
+        <option value="passive">{text(pageCopy.websiteProfilePassive)}</option>
+      </select>
+      {passiveWebsiteSelected && <small>{text(pageCopy.websitePassiveBounds)}</small>}
+    </label>
+  ) : null;
+  const websiteProfileChooser = zapRunnable ? (
+    <details className="coverage-form-technical coverage-scan-advanced">
+      <summary>{text(pageCopy.advancedScanSettings)}</summary>
+      {websiteProfileSelect}
+    </details>
+  ) : null;
   const guidedNetworkInputCard = (
     <article className="coverage-input-card coverage-input-card--active">
       <span><Icon name="coverage" size={20} /></span>
       <div><strong>{text(pageCopy.networkReadyTitle)}</strong><p>{text(
         assessmentIntent === "deployed_website"
-          ? pageCopy.websiteQuickReadyBody
+          ? passiveWebsiteSelected ? pageCopy.websitePassiveReadyBody : pageCopy.websiteQuickReadyBody
           : pageCopy.networkReadyBody,
       )}</p></div>
       <button className="button button--primary button--small" type="button" disabled={busy} onClick={() => scrollToCoverageStep("coverage-step-3")}>
@@ -2180,7 +2220,8 @@ export function CoveragePage({
             {environmentWebsiteAssets.length > 0 && (
               <fieldset className="scope-mode-fieldset">
                 <legend>{text(pageCopy.environmentWebsitesTitle)}</legend>
-                <p>{text(pageCopy.environmentWebsitesBody)}</p>
+                <p>{text(passiveWebsiteSelected ? pageCopy.environmentWebsitePassiveBody : pageCopy.environmentWebsitesBody)}</p>
+                {websiteProfileChooser}
                 <div className="scope-mode-grid">
                   {environmentWebsiteAssets.map(({ asset, origin }) => (
                     <label key={asset.id} className={selectedAssets.includes(asset.id) ? "scope-mode-card scope-mode-card--active" : "scope-mode-card"}>
@@ -2193,7 +2234,7 @@ export function CoveragePage({
                       />
                       <span>
                         <strong>{origin}</strong>
-                        <small>{text(pageCopy.environmentWebsiteCheck)}</small>
+                        <small>{text(passiveWebsiteSelected ? pageCopy.websiteProfilePassive : pageCopy.environmentWebsiteCheck)}</small>
                       </span>
                     </label>
                   ))}
@@ -2352,7 +2393,7 @@ export function CoveragePage({
                     <h4 id="external-scope-title">{text(pageCopy.externalTitle, { name: selectedExternalAsset.name })}</h4>
                     {!guidedLowImpactNetwork && <p>{text(
                       guidedWebsiteQuickProfile
-                        ? pageCopy.websiteQuickDescription
+                        ? passiveWebsiteSelected ? pageCopy.websitePassiveDescription : pageCopy.websiteQuickDescription
                         : pageCopy.externalDescription,
                     )}</p>}
                   </div>
@@ -2405,12 +2446,12 @@ export function CoveragePage({
 
                 {guidedWebsiteQuickProfile && quickProfileOrigin && selectedExternalAsset.declaredWebService && (
                   <p className="coverage-guided-boundary">
-                    {text(pageCopy.websiteQuickBoundary, {
+                    {text(passiveWebsiteSelected ? pageCopy.websitePassiveBoundary : pageCopy.websiteQuickBoundary, {
                       origin: quickProfileOrigin,
                       path: selectedExternalAsset.declaredWebService.path,
-                      rate: formatNumber(websiteQuickProfile.ratePolicy.requestsPerSecond),
-                      concurrency: formatNumber(websiteQuickProfile.ratePolicy.concurrency),
-                      timeout: formatNumber(websiteQuickProfile.ratePolicy.timeoutSeconds),
+                      rate: formatNumber(selectedWebsiteProfile.ratePolicy.requestsPerSecond),
+                      concurrency: formatNumber(selectedWebsiteProfile.ratePolicy.concurrency),
+                      timeout: formatNumber(selectedWebsiteProfile.ratePolicy.timeoutSeconds),
                     })}
                   </p>
                 )}
@@ -2424,6 +2465,7 @@ export function CoveragePage({
                     <span>{text(pageCopy.advancedScanSettings)}</span>
                     <small>{text(pageCopy.advancedScanSettingsHelp)}</small>
                   </summary>
+                  {guidedWebsiteQuickProfile && websiteProfileSelect}
                   {guidedLowImpactNetwork && parsedPorts && (
                     <p className="coverage-technical-preset-summary">{text(pageCopy.guidedNetworkTechnicalPreset, {
                       protocol: externalProtocol.toUpperCase(),

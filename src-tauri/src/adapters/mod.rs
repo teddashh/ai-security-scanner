@@ -26,7 +26,7 @@ use std::io::{BufRead, BufReader, Read, Take};
 use std::path::{Component, Path};
 use std::sync::Arc;
 
-pub const ADAPTER_VERSION: &str = "0.2.4";
+pub const ADAPTER_VERSION: &str = "0.2.5";
 /// Stable identity for the canonical finding fingerprint algorithm. Changing
 /// this value requires an explicit migration before cross-version diffs may be
 /// treated as comparable.
@@ -5541,6 +5541,13 @@ fn extract_zap(parsed: &ParsedArtifact, warnings: &mut Vec<String>) -> Vec<Sourc
         return Vec::new();
     };
 
+    if sites.is_empty() {
+        push_warning(
+            warnings,
+            "ZAP observed no website responses; no passive security check could be confirmed",
+        );
+        return Vec::new();
+    }
     let mut records = Vec::new();
     for (site_index, site) in sites.iter().enumerate() {
         let site_pointer = format!("/site/{site_index}");

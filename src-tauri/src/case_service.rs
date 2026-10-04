@@ -90,6 +90,7 @@ use crate::workspace_snapshot::{
     WORKSPACE_SNAPSHOT_REFERENCE_METADATA_KEY, WORKSPACE_SNAPSHOT_REFERENCE_SCHEMA,
     WorkspaceSnapshot, WorkspaceSnapshotManifest, WorkspaceSnapshotReference,
 };
+use crate::zap_work_plan::{ZAP_ENGINE_ID, ZAP_PASSIVE_PROFILE_ID, matches_zap_passive_profile};
 use chrono::{DateTime, NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -2927,6 +2928,7 @@ impl<'a> CaseService<'a> {
                 stage: ExecutionStage::Planned,
                 container_name: None,
                 scope_sha256: None,
+                zap_plan_sha256: None,
                 launcher_plan_sha256: None,
                 artifact_ids: Vec::new(),
                 cleanup_completed: true,
@@ -4204,6 +4206,7 @@ impl<'a> CaseService<'a> {
                         .copied()
                         .filter(|grant| {
                             grant.asset_id == asset.id
+                                && classify_external_grant_blocker(manifest, grant).is_none()
                                 && (manifest.required_permissions.contains(&grant.permission)
                                     || (manifest.active_external
                                         && grant.permission
@@ -4211,7 +4214,8 @@ impl<'a> CaseService<'a> {
                         })
                         .cloned()
                         .collect::<Vec<_>>();
-                    if manifest.id == "greenbone" {
+                    if matches!(manifest.id.as_str(), "greenbone" | ZAP_ENGINE_ID) {
+                        // Each exact target needs its own finalized output.
                         // The launcher finalizes one XML document atomically.
                         // Give each exact grant its own output directory so a
                         // later failed grant cannot delete a successful one.
@@ -4245,6 +4249,7 @@ impl<'a> CaseService<'a> {
                             stage: ExecutionStage::Planned,
                             container_name: None,
                             scope_sha256: None,
+                            zap_plan_sha256: None,
                             launcher_plan_sha256: None,
                             artifact_ids: Vec::new(),
                             cleanup_completed: true,
@@ -4338,7 +4343,11 @@ impl<'a> CaseService<'a> {
                     execution_timeout_seconds: Some(manifest.execution_timeout_seconds()),
                     knowledge_input: Some(dated_knowledge_input(manifest)),
                     scope_contract_sha256: Some(scope_contract_sha256),
-                    execution_scope_grant_ids: (manifest.id == "greenbone").then(|| {
+                    execution_scope_grant_ids: matches!(
+                        manifest.id.as_str(),
+                        "greenbone" | ZAP_ENGINE_ID
+                    )
+                    .then(|| {
                         relevant_grants
                             .iter()
                             .map(|grant| grant.id.clone())
@@ -4733,6 +4742,7 @@ impl<'a> CaseService<'a> {
                                 stage: ExecutionStage::Planned,
                                 container_name: None,
                                 scope_sha256: None,
+                                zap_plan_sha256: None,
                                 launcher_plan_sha256: None,
                                 artifact_ids: Vec::new(),
                                 cleanup_completed: true,
@@ -9248,6 +9258,19 @@ fn classify_external_grant_blocker(
     if !grant_has_authorization_reference(grant) {
         return Some(ExternalGrantBlocker::EmptyAuthorizationReference);
     }
+    if manifest.id == ZAP_ENGINE_ID
+        && !matches_zap_passive_profile(
+            scope.activity,
+            scope.protocol,
+            &scope.ports,
+            &scope.rate_policy,
+            &scope.template_policy,
+        )
+        || manifest.id != ZAP_ENGINE_ID
+            && scope.template_policy.profile_id.as_deref() == Some(ZAP_PASSIVE_PROFILE_ID)
+    {
+        return Some(ExternalGrantBlocker::Unusable);
+    }
     if !is_direct_external_permission(&grant.permission) {
         return None;
     }
@@ -9379,7 +9402,10 @@ fn declared_web_service_profile_matches(manifest: &EngineManifest, asset: &Asset
         // A declared website and a declared device are separate beginner
         // choices. Preserve that exact choice even if an IPC caller tampers
         // with the engine-to-asset route after Review.
-        None => manifest.id == DECLARED_WEBSITE_ENGINE_ID,
+        None => matches!(
+            manifest.id.as_str(),
+            DECLARED_WEBSITE_ENGINE_ID | ZAP_ENGINE_ID
+        ),
     }
 }
 
@@ -9497,13 +9523,19 @@ fn validate_declared_web_service_scope(
         }
         None => {
             common_exact_scope
-                && external.rate_policy.requests_per_second == 10
-                && external.rate_policy.concurrency == 5
-                && external.rate_policy.timeout_seconds == 10
-                && external.template_policy.revision == DECLARED_WEBSITE_TEMPLATE_REVISION
-                && requested_oids.is_empty()
-                && external.template_policy.profile_id.as_deref()
-                    == Some(NUCLEI_WEB_SAFE_PROFILE_ID)
+                && (matches_zap_passive_profile(
+                    external.activity,
+                    external.protocol,
+                    &external.ports,
+                    &external.rate_policy,
+                    &external.template_policy,
+                ) || (external.rate_policy.requests_per_second == 10
+                    && external.rate_policy.concurrency == 5
+                    && external.rate_policy.timeout_seconds == 10
+                    && external.template_policy.revision == DECLARED_WEBSITE_TEMPLATE_REVISION
+                    && requested_oids.is_empty()
+                    && external.template_policy.profile_id.as_deref()
+                        == Some(NUCLEI_WEB_SAFE_PROFILE_ID)))
         }
     };
     if !exact_profile {
@@ -13103,6 +13135,7 @@ fn resource_free_naabu_planned_checkpoint(
         stage: ExecutionStage::Planned,
         container_name: None,
         scope_sha256: None,
+        zap_plan_sha256: None,
         launcher_plan_sha256: None,
         artifact_ids: Vec::new(),
         cleanup_completed: true,
@@ -24429,6 +24462,7 @@ mod tests {
             stage,
             container_name: None,
             scope_sha256: None,
+            zap_plan_sha256: None,
             launcher_plan_sha256: None,
             artifact_ids: Vec::new(),
             cleanup_completed: true,
@@ -26881,6 +26915,7 @@ mod tests {
                     .unwrap(),
                 ),
                 scope_sha256: Some("b".repeat(64)),
+                zap_plan_sha256: None,
                 launcher_plan_sha256,
                 artifact_ids: Vec::new(),
                 cleanup_completed: true,
@@ -26939,6 +26974,7 @@ mod tests {
                 stage: ExecutionStage::Planned,
                 container_name: None,
                 scope_sha256: None,
+                zap_plan_sha256: None,
                 launcher_plan_sha256: None,
                 artifact_ids: Vec::new(),
                 cleanup_completed: true,
@@ -28751,6 +28787,7 @@ mod tests {
                     stage: terminal_stage.clone(),
                     container_name: None,
                     scope_sha256: None,
+                    zap_plan_sha256: None,
                     launcher_plan_sha256: None,
                     artifact_ids: Vec::new(),
                     cleanup_completed: true,
@@ -28866,6 +28903,7 @@ mod tests {
                 stage: ExecutionStage::Failed,
                 container_name: None,
                 scope_sha256: None,
+                zap_plan_sha256: None,
                 launcher_plan_sha256: None,
                 artifact_ids: Vec::new(),
                 cleanup_completed: true,
@@ -31676,6 +31714,162 @@ mod tests {
             stored.scope_grants.is_empty(),
             "{invalid:?} persisted authorization from a rejected atomic Start"
         );
+    }
+
+    #[test]
+    fn zap_website_profile_is_exact_and_cannot_authorize_a_device() {
+        let fixture = Fixture::new();
+        let start = mixed_environment_start(&fixture);
+        let case = fixture.service().show_case(&start.case_id).unwrap();
+        let website = case
+            .assets
+            .iter()
+            .find(|asset| asset.id == start.website_asset_id)
+            .unwrap();
+        let device = case
+            .assets
+            .iter()
+            .find(|asset| asset.id == start.first_device_asset_id)
+            .unwrap();
+        let mut external = start
+            .decisions
+            .iter()
+            .find(|decision| decision.asset_id == website.id)
+            .unwrap()
+            .external_scope
+            .clone()
+            .unwrap();
+        external.rate_policy.requests_per_second = 5;
+        external.template_policy = crate::external_scope::TemplatePolicy::conservative_profile(
+            crate::zap_work_plan::ZAP_PASSIVE_TEMPLATE_REVISION,
+            ZAP_PASSIVE_PROFILE_ID,
+        );
+        validate_declared_web_service_scope(website, &external).unwrap();
+        assert!(validate_declared_web_service_scope(device, &external).is_err());
+        for variation in 0..6 {
+            let mut changed = external.clone();
+            match variation {
+                0 => changed.rate_policy.requests_per_second = 6,
+                1 => changed.ports.insert(8443).then_some(()).unwrap(),
+                2 => changed.template_policy.allow_file_upload = true,
+                3 => changed.template_policy.revision = DECLARED_WEBSITE_TEMPLATE_REVISION.into(),
+                4 => changed.rate_policy.timeout_seconds = 11,
+                _ => changed.template_policy.profile_id = Some(NUCLEI_WEB_SAFE_PROFILE_ID.into()),
+            }
+            assert!(validate_declared_web_service_scope(website, &changed).is_err());
+        }
+    }
+
+    #[test]
+    fn zap_and_nuclei_grants_on_a_website_never_cross_engine_routes() {
+        let fixture = Fixture::new();
+        let mut start = mixed_environment_start(&fixture);
+        let website_decision = start
+            .decisions
+            .iter_mut()
+            .find(|decision| decision.asset_id == start.website_asset_id)
+            .unwrap();
+        let old_nuclei_decision = website_decision.clone();
+        let external = website_decision.external_scope.as_mut().unwrap();
+        external.rate_policy.requests_per_second = 5;
+        external.template_policy = crate::external_scope::TemplatePolicy::conservative_profile(
+            crate::zap_work_plan::ZAP_PASSIVE_TEMPLATE_REVISION,
+            ZAP_PASSIVE_PROFILE_ID,
+        );
+        start
+            .request
+            .engine_asset_routes
+            .iter_mut()
+            .find(|route| route.engine_id == "nuclei")
+            .unwrap()
+            .engine_id = ZAP_ENGINE_ID.into();
+        let service = fixture.service();
+        let first_plan = service
+            .authorize_and_persist_scan_before_execution_preflight(
+                &start.case_id,
+                start.decisions,
+                start.request,
+            )
+            .unwrap();
+        let zap_execution = first_plan
+            .executable
+            .iter()
+            .find(|execution| execution.manifest.id == ZAP_ENGINE_ID)
+            .unwrap();
+        assert_eq!(zap_execution.assets.len(), 1);
+        assert_eq!(zap_execution.assets[0].id, start.website_asset_id);
+        assert_eq!(zap_execution.scope_grants.len(), 1);
+        let zap_grant = zap_execution.scope_grants[0].clone();
+        let zap_grant_id = zap_grant.id.clone();
+        assert_eq!(
+            first_plan
+                .scan_run
+                .engine_runs
+                .iter()
+                .find(|task| task.id == zap_execution.engine_run_id)
+                .unwrap()
+                .execution_scope_grant_ids,
+            Some(vec![zap_grant_id.clone()])
+        );
+        let mut case = service.show_case(&start.case_id).unwrap();
+        case.scan_runs.clear();
+        fixture
+            .storage
+            .save_case(&mut case, "test.finish_zap_plan")
+            .unwrap();
+        service
+            .approve_scope(&case.id, old_nuclei_decision)
+            .unwrap();
+        // Imported legacy cases may retain several independently identified
+        // grants. A fresh approval deliberately replaces its permission.
+        let mut mixed = service.show_case(&case.id).unwrap();
+        let nuclei_grant = mixed
+            .scope_grants
+            .iter_mut()
+            .find(|grant| grant.id == zap_grant_id)
+            .unwrap();
+        nuclei_grant.id = new_id();
+        nuclei_grant.external_scope.as_mut().unwrap().id = nuclei_grant.id.clone();
+        mixed.scope_grants.push(zap_grant);
+        fixture
+            .storage
+            .save_case(&mut mixed, "test.legacy_profile_grants")
+            .unwrap();
+        let second = service
+            .plan_scan(
+                &case.id,
+                ScanPlanRequest {
+                    engine_ids: vec![],
+                    engine_asset_routes: vec![
+                        EngineAssetRoute {
+                            engine_id: "nuclei".into(),
+                            asset_ids: vec![start.website_asset_id.clone()],
+                        },
+                        EngineAssetRoute {
+                            engine_id: ZAP_ENGINE_ID.into(),
+                            asset_ids: vec![start.website_asset_id],
+                        },
+                    ],
+                },
+            )
+            .unwrap();
+        assert_eq!(second.executable.len(), 2);
+        for execution in second.executable {
+            assert_eq!(execution.scope_grants.len(), 1);
+            let profile = execution.scope_grants[0]
+                .external_scope
+                .as_ref()
+                .unwrap()
+                .template_policy
+                .profile_id
+                .as_deref();
+            if execution.manifest.id == ZAP_ENGINE_ID {
+                assert_eq!(execution.scope_grants[0].id, zap_grant_id);
+                assert_eq!(profile, Some(ZAP_PASSIVE_PROFILE_ID));
+            } else {
+                assert_eq!(profile, Some(NUCLEI_WEB_SAFE_PROFILE_ID));
+            }
+        }
     }
 
     #[test]
@@ -37174,6 +37368,24 @@ mod tests {
             rest = &after[end + 1..];
         }
         values
+    }
+
+    #[test]
+    fn html_severity_profile_retains_zero_rows_in_both_languages() {
+        for locale in [
+            crate::export::ReportLocale::En,
+            crate::export::ReportLocale::ZhHant,
+        ] {
+            let html = html_report_for_rated_httpx_finding(
+                EngineRunStatus::Completed,
+                None,
+                Some("httpx-task"),
+                locale,
+            );
+            assert_eq!(html.matches("severity-row__label\">").count(), 6);
+            assert_eq!(html.matches("severity-row severity-row--none").count(), 5);
+            assert_eq!(html.matches("severity-row__count\">0</span>").count(), 5);
+        }
     }
 
     #[test]
@@ -45307,6 +45519,7 @@ mod tests {
                 stage: ExecutionStage::Completed,
                 container_name: None,
                 scope_sha256: Some("b".repeat(64)),
+                zap_plan_sha256: None,
                 launcher_plan_sha256: None,
                 artifact_ids: vec![artifact.id.clone()],
                 cleanup_completed: true,

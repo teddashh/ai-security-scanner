@@ -109,6 +109,7 @@ fn fixture(engine: &str, outcomes: EngineOutcomes) -> (&'static [u8], &'static s
             include_bytes!("fixtures/adapters/httpx.jsonl"),
             "httpx.jsonl",
         ),
+        "zap" => (include_bytes!("fixtures/adapters/zap.json"), "zap.json"),
         "nuclei" if reporting => (
             include_bytes!("fixtures/adapters/nuclei.jsonl"),
             "nuclei.jsonl",
@@ -314,6 +315,14 @@ fn substituted_fixture(
             .replace("grant-1", grant_id)
             .replace("service.example.test", "portal.example.test")
             .replace("example.com", "portal.example.test")
+            .replace(
+                "portal.example.test",
+                if engine == "zap" {
+                    "passive.example.test"
+                } else {
+                    "portal.example.test"
+                },
+            )
             .into_bytes(),
     )
 }
@@ -432,6 +441,7 @@ fn execute(
     let gateway = naabu.map(|(_, attempt)| attempt.gateway.as_slice());
     let destinations = match execution.manifest.id.as_str() {
         "nuclei" | "httpx" => vec!["portal.example.test:443".into()],
+        "zap" => vec!["passive.example.test:443".into()],
         "greenbone" => vec!["203.0.113.10:443".into(), "203.0.113.10:8443".into()],
         "naabu" => gateway
             .expect("the Naabu run carries its prepared attempt")
@@ -686,6 +696,19 @@ fn all_engines_in_one_report<T>(
                 },
                 DeclaredAssetInput {
                     kind: DeclaredAssetKind::ExternalTarget,
+                    value: "passive.example.test".into(),
+                    internet_exposed: Some(true),
+                    web_service: Some(DeclaredWebServiceInput {
+                        protocol: DeclaredWebProtocol::Https,
+                        port: 443,
+                        path: "/".into(),
+                        scan_profile: None,
+                    }),
+                    network_service: None,
+                    host_scan: None,
+                },
+                DeclaredAssetInput {
+                    kind: DeclaredAssetKind::ExternalTarget,
                     value: "203.0.113.10".into(),
                     internet_exposed: Some(false),
                     web_service: None,
@@ -710,7 +733,24 @@ fn all_engines_in_one_report<T>(
     let website = case
         .assets
         .iter()
-        .find(|a| a.kind == AssetKind::WebService)
+        .find(|a| {
+            a.kind == AssetKind::WebService
+                && a.identifiers
+                    .iter()
+                    .any(|identifier| identifier.value == "portal.example.test")
+        })
+        .unwrap()
+        .id
+        .clone();
+    let passive_website = case
+        .assets
+        .iter()
+        .find(|asset| {
+            asset
+                .identifiers
+                .iter()
+                .any(|identifier| identifier.value == "passive.example.test")
+        })
         .unwrap()
         .id
         .clone();
@@ -883,6 +923,18 @@ fn all_engines_in_one_report<T>(
             ),
         ),
         (
+            &passive_website,
+            "passive.example.test",
+            BTreeSet::from([443]),
+            TransportProtocol::Https,
+            ScanPermission::ActiveExternalTesting,
+            ExternalActivity::ActiveExternal,
+            TemplatePolicy::conservative_profile(
+                ai_security_scanner_lib::zap_work_plan::ZAP_PASSIVE_TEMPLATE_REVISION,
+                ai_security_scanner_lib::zap_work_plan::ZAP_PASSIVE_PROFILE_ID,
+            ),
+        ),
+        (
             &naabu_host,
             "203.0.113.11",
             BTreeSet::from([443, 8443]),
@@ -930,15 +982,23 @@ fn all_engines_in_one_report<T>(
                         rate_policy: RatePolicy {
                             requests_per_second: if target == "portal.example.test" {
                                 10
+                            } else if target == "passive.example.test" {
+                                5
                             } else {
                                 2
                             },
-                            concurrency: if target == "portal.example.test" {
+                            concurrency: if matches!(
+                                target,
+                                "portal.example.test" | "passive.example.test"
+                            ) {
                                 5
                             } else {
                                 1
                             },
-                            timeout_seconds: if target == "portal.example.test" {
+                            timeout_seconds: if matches!(
+                                target,
+                                "portal.example.test" | "passive.example.test"
+                            ) {
                                 10
                             } else {
                                 15
@@ -946,7 +1006,10 @@ fn all_engines_in_one_report<T>(
                         },
                         template_policy: templates,
                         asserted_authority: "Exact fixture target approved".into(),
-                        allow_sensitive_networks: target != "portal.example.test",
+                        allow_sensitive_networks: !matches!(
+                            target,
+                            "portal.example.test" | "passive.example.test"
+                        ),
                     }),
                 },
             )
@@ -955,6 +1018,7 @@ fn all_engines_in_one_report<T>(
 
     let routes = [
         ("nuclei", &website),
+        ("zap", &passive_website),
         ("httpx", &website),
         ("greenbone", &host),
         ("naabu", &naabu_host),
@@ -1002,7 +1066,10 @@ fn all_engines_in_one_report<T>(
         "unroutable engines: {:?}",
         plan.not_executed
     );
-    assert_eq!(plan.executable.len(), 25);
+    assert_eq!(
+        plan.executable.len(),
+        dispatchable_engine_ids(&engines).len() + 3
+    );
     assert!(
         plan.executable
             .iter()
@@ -1037,6 +1104,7 @@ fn all_engines_in_one_report<T>(
                     stage: ExecutionStage::Cancelled,
                     container_name: None,
                     scope_sha256: None,
+                    zap_plan_sha256: None,
                     launcher_plan_sha256: None,
                     artifact_ids: vec![],
                     cleanup_completed: true,
@@ -2178,6 +2246,7 @@ fn every_integrated_engine_lands_in_one_terminal_report() {
             // covers: forty-one lines carried twelve distinct policies.
             for right in [
                 "<strong>Execution timeout:</strong> 900 seconds",
+                "<strong>Execution timeout:</strong> 1800 seconds",
                 "<strong>Execution timeout:</strong> 3600 seconds",
                 "Checkov, CloudQuery, Cloudsplaining, Gitleaks, Grype, KICS, kube-bench",
                 "<strong>Execution timeout:</strong> 7200 seconds",
@@ -2190,7 +2259,7 @@ fn every_integrated_engine_lands_in_one_terminal_report() {
             }
             assert_eq!(
                 limits.matches("Execution timeout:").count(),
-                4,
+                5,
                 "one execution timeout per distinct value, not per engine"
             );
             // Where a limit came from is a property of the grant, and it was
@@ -2235,8 +2304,9 @@ fn every_integrated_engine_lands_in_one_terminal_report() {
                 subjects_seen += seen.len();
             }
             assert!(subjects_seen >= 5, "the audit lost the limit subjects");
+            // ZAP contributes one distinct rate, profile and timeout policy.
             assert!(
-                limits.matches("<li>").count() - limits.matches("<strong>From the ").count() <= 13,
+                limits.matches("<li>").count() - limits.matches("<strong>From the ").count() <= 16,
                 "the limits list is repeating a policy per holder"
             );
             // A limit that names itself needs no holder after it.
@@ -2773,14 +2843,31 @@ fn every_integrated_engine_lands_in_one_terminal_report() {
                 })
                 .collect::<Vec<_>>();
             assert_eq!(headings.len(), cards);
-            let mut unique = headings.clone();
-            unique.sort();
-            unique.dedup();
-            assert_eq!(
-                unique.len(),
-                headings.len(),
-                "no two problems are titled the same: {headings:#?}"
-            );
+            let mut by_heading = BTreeMap::new();
+            for (heading, finding) in headings.iter().zip(&report.findings) {
+                by_heading
+                    .entry(heading)
+                    .or_insert_with(Vec::new)
+                    .push(finding);
+            }
+            for (heading, findings) in by_heading {
+                if findings.len() < 2 {
+                    continue;
+                }
+                // ZAP preserves each page affected by an upstream alert. A rule
+                // can therefore have the same title and website asset, while
+                // its retained page location distinguishes the original finding.
+                let mut locations = BTreeSet::new();
+                for finding in &findings {
+                    assert_eq!(finding.evidence_references.len(), 1, "{heading}");
+                    let evidence = &finding.evidence_references[0];
+                    assert_eq!(evidence.engine_id, "zap", "{heading}");
+                    assert!(evidence.source_rule.is_some(), "{heading}");
+                    assert!(evidence.location.is_some(), "{heading}");
+                    locations.insert((&evidence.source_rule, &evidence.location));
+                }
+                assert_eq!(locations.len(), findings.len(), "{heading}");
+            }
             for (heading, finding) in headings.iter().zip(&report.findings) {
                 assert!(
                     heading.contains("<span class=\"finding-asset\">"),
@@ -3342,10 +3429,8 @@ fn every_integrated_engine_lands_in_one_terminal_report() {
                     severities,
                     "the {named} severity profile dropped or reordered a severity"
                 );
-                assert!(
-                    rows.iter().any(|(_, count)| *count == 0),
-                    "the {named} run stopped exercising a zero severity row"
-                );
+                // The native ZAP fixture adds informational alerts, so this
+                // full-catalog run now legitimately covers all six severities.
                 // The zero is dimmed rather than drawn as a bar of its own.
                 assert_eq!(
                     html.matches("severity-row severity-row--none").count(),
@@ -3806,7 +3891,7 @@ fn aidefend_view(
 /// the audit above cannot reach any of it: coordinates are withheld from a
 /// case that declares a non-AI assessment, which is exactly what the
 /// IT-environment run declares. So the AI half of the mapping is exercised
-/// here -- catalog, adapter, report layer and export -- on the same 22 checks.
+/// here -- catalog, adapter, report layer and export -- on the same 23 checks.
 #[test]
 fn the_ai_framework_follows_the_case_answers_and_nothing_else() {
     let withheld = aidefend_view(
@@ -3870,13 +3955,11 @@ fn the_ai_framework_follows_the_case_answers_and_nothing_else() {
         ["AID-H-003.001", "AID-H-003.010", "AID-I-001.001"]
     );
 
-    // What the catalog could not place, said out loud. One finding in this run
-    // comes from the deliberately malformed Nuclei fixture, whose template id
-    // exists only in that fixture, so no reviewed relationship can be written
-    // for it -- and an absent coordinate has to read as unknown, not as "no
-    // control relates to this".
+    // The catalog cannot place the synthetic Nuclei rule and three native
+    // ZAP instances with no reviewed relationship. Preserve those unknown
+    // coordinates rather than inventing mappings when an engine is enabled.
     for view in [&withheld, &declared, &no_artifact] {
-        assert_eq!(view.mapped + view.unmapped, 47);
+        assert_eq!(view.mapped + view.unmapped, 52);
         assert_eq!(
             view.mapping_states.get("no_packaged_catalog_relationship"),
             Some(&view.unmapped),
@@ -3904,19 +3987,19 @@ fn the_ai_framework_follows_the_case_answers_and_nothing_else() {
         assert!(!view.zh_html.contains("未保留本輪的框架參考。"));
         assert!(
             view.limitations.iter().any(|limitation| limitation
-                == "1 of 47 selected-run findings has no relationship in the packaged mapping catalog. Its framework position is unknown, not absent."),
+                == "4 of 52 selected-run findings have no relationship in the packaged mapping catalog. Their framework position is unknown, not absent."),
             "{:#?}",
             view.limitations
         );
     }
     // Declaring an AI system adds coordinates to findings the catalog had
     // already placed, so it moves no finding across the line.
-    assert_eq!((withheld.mapped, withheld.unmapped), (46, 1));
-    assert_eq!((declared.mapped, declared.unmapped), (46, 1));
+    assert_eq!((withheld.mapped, withheld.unmapped), (48, 4));
+    assert_eq!((declared.mapped, declared.unmapped), (48, 4));
 
-    // None of this is detection. The same 22 checks found the same problems
+    // None of this is detection. The same 23 checks found the same problems
     // in all three runs; only the coordinates the report may name changed.
-    assert_eq!(withheld.finding_titles.len(), 47);
+    assert_eq!(withheld.finding_titles.len(), 52);
     assert_eq!(declared.finding_titles, withheld.finding_titles);
     assert_eq!(no_artifact.finding_titles, withheld.finding_titles);
 }

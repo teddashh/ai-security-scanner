@@ -815,7 +815,7 @@ fn reconcile_exact_runtime_cleanup(
             AppError::NotAuthorized("cleanup checkpoint has no frozen scope digest".into())
         })?,
         launcher_plan_sha256: checkpoint.launcher_plan_sha256.clone(),
-        zap_plan_sha256: None,
+        zap_plan_sha256: checkpoint.zap_plan_sha256.clone(),
         image,
     };
     if let Some(container_name) = checkpoint.container_name.as_deref()
@@ -5654,7 +5654,7 @@ fn cleanup_resume_container(
             AppError::NotAuthorized("resume cleanup checkpoint has no frozen scope digest".into())
         })?,
         launcher_plan_sha256: checkpoint.launcher_plan_sha256.clone(),
-        zap_plan_sha256: None,
+        zap_plan_sha256: checkpoint.zap_plan_sha256.clone(),
         image: PinnedImage::from_manifest(&execution.manifest)?,
     };
     if ownership.container_name()? != persisted_container_name {
@@ -6902,6 +6902,7 @@ fn checkpoint_for(
         stage,
         container_name: None,
         scope_sha256: None,
+        zap_plan_sha256: None,
         launcher_plan_sha256: None,
         artifact_ids: vec![],
         cleanup_completed: managed_network.is_none(),
@@ -7625,6 +7626,7 @@ mod tests {
             stage: ExecutionStage::Failed,
             container_name: Some("ass-scanner-engine-run-1-a1".into()),
             scope_sha256: Some("b".repeat(64)),
+            zap_plan_sha256: None,
             launcher_plan_sha256: None,
             artifact_ids: vec!["artifact-1".into()],
             cleanup_completed: true,
@@ -8396,6 +8398,7 @@ mod tests {
             stage: ExecutionStage::Planned,
             container_name: None,
             scope_sha256: None,
+            zap_plan_sha256: None,
             launcher_plan_sha256: None,
             artifact_ids: vec![],
             cleanup_completed: true,
@@ -10046,6 +10049,7 @@ mod tests {
             stage: ExecutionStage::Planned,
             container_name: None,
             scope_sha256: None,
+            zap_plan_sha256: None,
             launcher_plan_sha256: None,
             artifact_ids: vec![],
             cleanup_completed: false,

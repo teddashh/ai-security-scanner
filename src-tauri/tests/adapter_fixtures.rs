@@ -3887,6 +3887,83 @@ fn zap_preserves_alert_identity_severity_remediation_and_instance_evidence() {
 }
 
 #[test]
+fn pinned_native_zap_report_preserves_every_rule_and_response_instance() {
+    let bytes = include_bytes!("fixtures/adapters/native-zap-2.17.0.json");
+    let root: serde_json::Value = serde_json::from_slice(bytes).unwrap();
+    let assets = vec![authorized_asset(
+        "asset-1",
+        AssetKind::WebService,
+        None,
+        &[
+            ("dns_name", "zap-fixture.example.test"),
+            ("web_origin", "http://zap-fixture.example.test:8080"),
+        ],
+    )];
+    let output = normalize_bytes_with_assets(
+        "zap",
+        bytes,
+        "zap.json",
+        "application/json",
+        "run-native-zap",
+        &assets,
+    );
+    assert!(output.complete, "{:?}", output.warnings);
+    let alerts = root["site"][0]["alerts"].as_array().unwrap();
+    let native_instances: usize = alerts
+        .iter()
+        .map(|alert| alert["instances"].as_array().unwrap().len())
+        .sum();
+    assert_eq!(native_instances, 27);
+    assert_eq!(output.findings.len(), native_instances);
+    for alert in alerts {
+        let rule_id = alert["pluginid"].as_str().unwrap();
+        let expected = alert["instances"].as_array().unwrap().len();
+        let findings = output
+            .findings
+            .iter()
+            .filter(|finding| {
+                finding
+                    .evidence
+                    .iter()
+                    .any(|evidence| evidence.source_rule.as_deref() == Some(rule_id))
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(findings.len(), expected);
+        let severity = match alert["riskcode"].as_str().unwrap() {
+            "0" => Severity::Informational,
+            "1" => Severity::Low,
+            "2" => Severity::Medium,
+            "3" => Severity::High,
+            _ => panic!("unexpected native risk"),
+        };
+        assert!(
+            findings
+                .iter()
+                .all(|finding| finding.severity == severity && finding.asset_ids == ["asset-1"])
+        );
+    }
+}
+
+#[test]
+fn zap_without_observed_responses_is_incomplete_even_with_valid_empty_json() {
+    let output = normalize_bytes(
+        "zap",
+        br#"{"site":[]}"#,
+        "zap.json",
+        "application/json",
+        "run-unreached-zap",
+    );
+    assert!(!output.complete);
+    assert!(output.findings.is_empty());
+    assert!(
+        output
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("no website responses"))
+    );
+}
+
+#[test]
 fn empty_zap_alert_array_is_a_zero_finding_result_without_a_security_claim() {
     let output = normalize_bytes(
         "zap",

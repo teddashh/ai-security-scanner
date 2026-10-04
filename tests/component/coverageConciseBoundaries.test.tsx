@@ -8,7 +8,7 @@ import type { Asset, BootstrapCleanupObligationSummary, ConnectedSource, Coverag
 import { internalDeviceHttpsProfile } from "../../src/internalDeviceProfile";
 import { internalEndpointProfiles } from "../../src/internalEndpointProfile";
 import { internalHostGreenboneProfile } from "../../src/internalHostProfile";
-import { websiteQuickProfile } from "../../src/websiteQuickProfile";
+import { websitePassiveProfile, websiteQuickProfile } from "../../src/websiteQuickProfile";
 
 const pendingAsset = (overrides: Partial<Asset>): Asset => ({
   id: "asset-1",
@@ -1488,4 +1488,67 @@ test("an internal website uses the fixed Nuclei profile only after explicit priv
     },
     ["nuclei"],
   );
+});
+
+
+const zapManifest: EngineManifest = {
+  id: "zap", name: "ZAP", category: "external_attack_surface", version: "2.17.0",
+  imageDigest: "sha256:781a2bdaea47324e7bab583e2263f21d257b0aee61ed51521a5be45f5f5081ef",
+  license: "Apache-2.0", redistribution: "on_demand", platforms: ["external"], supportedProviders: [],
+  status: "ready", runnable: true, blockedBy: [], compatibilityValid: true,
+  providerExecutionProfiles: [], supportStatus: "supported",
+};
+
+for (const locale of ["en", "zh-TW"] as const) {
+  test(`the explicit passive website choice freezes ZAP's profile and limits in ${locale}`, async () => {
+    window.localStorage.setItem(localeStorageKey, locale);
+    const onStartScan = vi.fn().mockResolvedValue(false);
+    const { container, getByLabelText } = renderRoute({
+      assessmentIntent: "deployed_website", requestedActivities: ["active_external_vulnerability_tests"],
+      nativeMode: false, engineManifests: [zapManifest], onStartScan,
+      assets: [oneRepositoryAndOneWebsiteEnvironmentAssets()[1]!],
+    });
+    const details = container.querySelector<HTMLDetailsElement>(".coverage-scan-advanced")!;
+    expect(details.open).toBe(false);
+    fireEvent.click(details.querySelector("summary")!);
+    fireEvent.change(getByLabelText(locale === "en" ? "Website checks" : "網站檢查方式"), { target: { value: "passive" } });
+    await waitFor(() => expect(container.querySelector(".coverage-guided-boundary")?.textContent).toContain("ZAP"));
+    const start = container.querySelector<HTMLButtonElement>(".scope-confirmation-panel button[type=submit]")!;
+    fireEvent.click(start);
+    await waitFor(() => expect(onStartScan).toHaveBeenCalledTimes(1));
+    expect(onStartScan.mock.calls[0]![4]).toEqual(["zap"]);
+    const scope = onStartScan.mock.calls[0]![3];
+    expect(scope).toMatchObject({
+      target: "portal.example.com", ports: [443], protocol: "https", activity: "active_external",
+      ratePolicy: websitePassiveProfile.ratePolicy,
+      templatePolicy: { revision: websitePassiveProfile.templateRevision, profileId: websitePassiveProfile.profileId,
+        allowedTemplateIds: [], allowHeadless: false, allowOutOfBand: false, allowFuzzing: false,
+        allowFileUpload: false, allowDenialOfService: false, allowCredentialAttacks: false },
+    });
+  });
+}
+
+test("changing a mixed run's website profile requires review and keeps local engines on their own assets", async () => {
+  const onStartEnvironmentScan = vi.fn().mockResolvedValue(false);
+  const { container, getByLabelText } = renderRoute({
+    assessmentIntent: "internal_it_environment", requestedActivities: ["local_artifact_analysis", "active_external_vulnerability_tests"],
+    nativeMode: false, engineManifests: [zapManifest], onStartEnvironmentScan,
+    assets: oneRepositoryAndOneWebsiteEnvironmentAssets(),
+  });
+  const confirmation = Array.from(container.querySelectorAll<HTMLInputElement>('input[type=checkbox]'))
+    .find(input => input.closest('label')?.textContent?.includes('I confirm I am allowed'))!;
+  expect(confirmation).toBeTruthy();
+  fireEvent.click(confirmation);
+  fireEvent.change(getByLabelText("Website checks"), { target: { value: "passive" } });
+  expect(confirmation.checked).toBe(false);
+  fireEvent.click(confirmation);
+  fireEvent.click(container.querySelector<HTMLButtonElement>('form button[type=submit]')!);
+  await waitFor(() => expect(onStartEnvironmentScan).toHaveBeenCalledTimes(1));
+  const [authorizations, routes] = onStartEnvironmentScan.mock.calls[0]!;
+  expect(authorizations.find((authorization: { assetIds: string[] }) => authorization.assetIds.includes("website-public"))).toMatchObject({
+    externalScope: { ratePolicy: websitePassiveProfile.ratePolicy,
+      templatePolicy: { profileId: websitePassiveProfile.profileId, revision: websitePassiveProfile.templateRevision } },
+  });
+  expect(routes.find((route: { engineId: string }) => route.engineId === "zap")).toEqual({ engineId: "zap", assetIds: ["website-public"] });
+  expect(routes.filter((route: { engineId: string }) => route.engineId !== "zap").every((route: { assetIds: string[] }) => route.assetIds.length === 1 && route.assetIds[0] === "repo-a")).toBe(true);
 });

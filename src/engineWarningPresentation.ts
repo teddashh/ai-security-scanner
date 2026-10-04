@@ -20,6 +20,7 @@ const FIXED_ENGINE_WARNINGS: ReadonlyArray<readonly [string, string]> = [
   ["JSONL record limit reached; later lines remain only as raw evidence", "JSONL 已達記錄限制；後續行只保留為原始證據"],
   ["Nuclei execution evidence named an asset outside this engine task and was not counted", "Nuclei 執行證據指向這項引擎工作以外的資產，因此未納入計算"],
   ["ZAP expected one JSON report object", "ZAP 預期收到單一 JSON 報告物件"],
+  ["ZAP observed no website responses; no passive security check could be confirmed", "ZAP 未取得網站回應，無法確認被動安全檢查已執行"],
   ["ZAP output lacked its site array; the raw artifact was retained, and the scan should be retried with the pinned JSON reporter", "ZAP 輸出缺少 site 陣列；原始成品已保留，請使用固定的 JSON 報告器重試"],
   ["Greenbone XML event limit reached; later results remain only as raw evidence", "Greenbone XML 已達事件限制；後續結果只保留為原始證據"],
   ["Greenbone XML containing a DTD or custom entity reference was rejected", "含有 DTD 或自訂實體參照的 Greenbone XML 已遭拒絕"],

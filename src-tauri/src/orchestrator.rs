@@ -4,7 +4,7 @@ use crate::container_runtime::{
     CancellationToken, CleanupOutcome, ContainerPlanBuilder, ContainerRuntime,
     LOCAL_INPUT_PROFILE_REJECTION_MARKER, NAABU_LAUNCHER_PLAN_CONTROL_FILE, NetworkPolicy,
     PinnedImage, ResourceLimits, RuntimeCommandProvenance, RuntimePreflight, ScannerCredentialSet,
-    planned_container_name,
+    ZAP_PLAN_CONTROL_FILE, planned_container_name,
 };
 use crate::domain::{
     Asset, AssetIdentifier, EngineManifest, Finding, RawArtifact, ScanPermission, ScopeGrant,
@@ -17,6 +17,10 @@ use crate::naabu_work_plan::{
     MAX_NAABU_ENDPOINT_PAIRS_PER_UNIT, MAX_NAABU_FROZEN_ADDRESSES, MAX_NAABU_LAUNCHER_PLAN_BYTES,
     MAX_NAABU_WORK_UNITS, MAX_NAABU_WORK_UNITS_PER_ATTEMPT, NAABU_ENGINE_ID,
     NAABU_LAUNCHER_PLAN_SCHEMA_VERSION, NaabuLauncherPlanDocument,
+};
+use crate::zap_work_plan::{
+    ZAP_ENGINE_ID, ZapGatewayEndpoint, ZapPassiveBounds, ZapPlanDocument, build_zap_passive_plan,
+    matches_zap_passive_profile,
 };
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
@@ -65,6 +69,9 @@ pub struct ExecutionCheckpoint {
     /// container. Legacy executions omit it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub launcher_plan_sha256: Option<String>,
+    /// Exact private ZAP automation plan bound to the container ownership proof.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub zap_plan_sha256: Option<String>,
     pub artifact_ids: Vec<String>,
     pub cleanup_completed: bool,
     pub last_error: Option<String>,
@@ -135,6 +142,16 @@ impl ExecutionCheckpoint {
                     "checkpoint Naabu launcher plan digest is invalid".into(),
                 ));
             }
+        }
+        if let Some(digest) = self.zap_plan_sha256.as_deref()
+            && (self.engine_id != ZAP_ENGINE_ID
+                || self.scope_sha256.is_none()
+                || !is_lowercase_sha256(digest))
+        {
+            return Err(AppError::InvalidRequest(
+                "checkpoint ZAP automation plan digest requires its exact ZAP execution scope"
+                    .into(),
+            ));
         }
         let expected = planned_container_name(&self.engine_id, &self.engine_run_id, self.attempt)?;
         if self
@@ -439,6 +456,7 @@ impl<'a, R: ContainerRuntime> Orchestrator<'a, R> {
             request.frozen_destinations,
             request.naabu_launcher_plan,
         )?;
+        let zap_plan_document = zap_plan_for_request(request, &validated_scope)?;
         let image = PinnedImage::from_manifest(request.manifest)?;
         if request.attempt == 0 {
             return Err(AppError::InvalidRequest(
@@ -491,6 +509,13 @@ impl<'a, R: ContainerRuntime> Orchestrator<'a, R> {
                 "written Naabu launcher plan does not match its durable expected digest".into(),
             ));
         }
+        let zap_plan_file = zap_plan_document
+            .as_ref()
+            .map(|document| {
+                self.artifacts
+                    .write_control_json(&directories, ZAP_PLAN_CONTROL_FILE, document)
+            })
+            .transpose()?;
         let plan_directories = run_directories_with_workspace(
             &directories,
             request.workspace.unwrap_or(&directories.workspace),
@@ -513,6 +538,7 @@ impl<'a, R: ContainerRuntime> Orchestrator<'a, R> {
                 .as_ref()
                 .map(|control_file| control_file.path.as_path()),
         )
+        .with_zap_plan_file(zap_plan_file.as_ref().map(|file| file.path.as_path()))
         .build()?;
         if plan.launcher_plan_sha256() != request.expected_naabu_launcher_plan_sha256 {
             return Err(AppError::NotAuthorized(
@@ -529,6 +555,7 @@ impl<'a, R: ContainerRuntime> Orchestrator<'a, R> {
             stage: ExecutionStage::Planned,
             container_name: Some(plan.container_name().to_owned()),
             scope_sha256: Some(plan.scope_sha256().to_owned()),
+            zap_plan_sha256: plan.zap_plan_sha256().map(str::to_owned),
             launcher_plan_sha256: plan.launcher_plan_sha256().map(str::to_owned),
             artifact_ids: Vec::new(),
             // Planning, runtime preflight, and image pull cannot create the
@@ -828,6 +855,7 @@ impl<'a, R: ContainerRuntime> Orchestrator<'a, R> {
             || Some(ownership.scope_sha256.as_str()) != checkpoint.scope_sha256.as_deref()
             || ownership.launcher_plan_sha256.as_deref()
                 != checkpoint.launcher_plan_sha256.as_deref()
+            || ownership.zap_plan_sha256.as_deref() != checkpoint.zap_plan_sha256.as_deref()
         {
             return Err(AppError::NotAuthorized(
                 "cleanup ownership proof does not match the saved execution checkpoint".into(),
@@ -967,6 +995,90 @@ struct ValidatedAssetScope<'a> {
     asset: &'a Asset,
     identifiers: Vec<&'a AssetIdentifier>,
     grants: Vec<&'a ScopeGrant>,
+}
+
+/// Derive the private plan from the validated frozen grant, never from a
+/// caller-provided command or automation document. One grant is one task.
+fn zap_plan_for_request(
+    request: &EngineExecutionRequest<'_>,
+    scope: &[ValidatedAssetScope<'_>],
+) -> AppResult<Option<ZapPlanDocument>> {
+    if request.manifest.id != ZAP_ENGINE_ID {
+        return Ok(None);
+    }
+    if scope.len() != 1 || request.scope_grants.len() != 1 || scope[0].grants.len() != 1 {
+        return Err(AppError::NotAuthorized(
+            "ZAP requires one exact website authorization per check".into(),
+        ));
+    }
+    let external = scope[0].grants[0].external_scope.as_ref().ok_or_else(|| {
+        AppError::NotAuthorized("ZAP requires a structured website authorization".into())
+    })?;
+    if !matches_zap_passive_profile(
+        external.activity,
+        external.protocol,
+        &external.ports,
+        &external.rate_policy,
+        &external.template_policy,
+    ) {
+        return Err(AppError::NotAuthorized(
+            "ZAP requires its reviewed passive website profile".into(),
+        ));
+    }
+    let gateway = url::Url::parse(request.network_policy.gateway_endpoint().ok_or_else(|| {
+        AppError::NotAuthorized("ZAP requires the managed-network gateway".into())
+    })?)
+    .map_err(|_| AppError::NotAuthorized("ZAP gateway endpoint is malformed".into()))?;
+    let host = match &external.target {
+        crate::external_scope::CanonicalTarget::Hostname(host) => host.clone(),
+        crate::external_scope::CanonicalTarget::Address(std::net::IpAddr::V4(ip)) => ip.to_string(),
+        crate::external_scope::CanonicalTarget::Address(std::net::IpAddr::V6(ip)) => {
+            format!("[{ip}]")
+        }
+        crate::external_scope::CanonicalTarget::Network(_) => {
+            return Err(AppError::NotAuthorized(
+                "ZAP cannot crawl a network range".into(),
+            ));
+        }
+    };
+    let scheme = match external.protocol {
+        crate::external_scope::TransportProtocol::Http => "http",
+        crate::external_scope::TransportProtocol::Https => "https",
+        _ => return Err(AppError::NotAuthorized("ZAP requires HTTP or HTTPS".into())),
+    };
+    let port = external
+        .ports
+        .iter()
+        .next()
+        .expect("reviewed profile has one port");
+    let origin = url::Url::parse(&format!("{scheme}://{host}:{port}/"))
+        .map_err(|_| AppError::NotAuthorized("ZAP approved origin is malformed".into()))?;
+    let plan = build_zap_passive_plan(
+        &origin,
+        &ZapGatewayEndpoint {
+            host: gateway
+                .host_str()
+                .ok_or_else(|| AppError::NotAuthorized("ZAP gateway has no host".into()))?
+                .into(),
+            port: gateway
+                .port()
+                .ok_or_else(|| AppError::NotAuthorized("ZAP gateway has no port".into()))?,
+        },
+        &ZapPassiveBounds {
+            requests_per_second: external.rate_policy.requests_per_second,
+            request_timeout_seconds: 10,
+            thread_count: external.rate_policy.concurrency,
+            max_depth: 5,
+            max_children: 100,
+            spider_max_duration_minutes: 2,
+            passive_wait_max_duration_minutes: 2,
+            max_alerts_per_rule: 100,
+        },
+        "/output",
+        "zap",
+    )
+    .map_err(|error| AppError::NotAuthorized(error.to_string()))?;
+    Ok(Some(plan))
 }
 
 #[cfg(test)]
@@ -1887,11 +1999,14 @@ mod tests {
         ) -> AppResult<RuntimeOutcome> {
             *created_container = None;
             *creation_may_be_untracked = false;
-            let path = plan.launcher_plan_file().ok_or_else(|| {
-                AppError::Internal(
-                    "versioned launcher plan was not mounted into the run plan".into(),
-                )
-            })?;
+            let path = plan
+                .launcher_plan_file()
+                .or_else(|| plan.zap_plan_file())
+                .ok_or_else(|| {
+                    AppError::Internal(
+                        "versioned launcher plan was not mounted into the run plan".into(),
+                    )
+                })?;
             *self.observed.lock().expect("observed plan lock") = Some(ObservedLauncherPlan {
                 path: path.to_path_buf(),
                 bytes: std::fs::read(path)?,
@@ -2632,6 +2747,103 @@ mod tests {
             notes: None,
             external_scope,
         }
+    }
+
+    #[test]
+    fn zap_execution_writes_and_mounts_only_its_exact_frozen_profile() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = ArtifactStore::open(temp.path().join("artifacts")).unwrap();
+        let runtime = LauncherPlanCaptureRuntime::default();
+        let adapters = AdapterRegistry::default();
+        let orchestrator = Orchestrator::new(&runtime, &store, &adapters);
+        let manifest =
+            serde_json::from_str::<Vec<EngineManifest>>(include_str!("../../engines/catalog.json"))
+                .unwrap()
+                .into_iter()
+                .find(|manifest| manifest.id == ZAP_ENGINE_ID)
+                .unwrap();
+        let assets = vec![asset("one", true)];
+        let mut grants = vec![grant("one", ScanPermission::ActiveExternalTesting, true)];
+        let external = grants[0].external_scope.as_mut().unwrap();
+        external.rate_policy = RatePolicy {
+            requests_per_second: 5,
+            concurrency: 5,
+            timeout_seconds: 10,
+        };
+        external.template_policy = TemplatePolicy::conservative_profile(
+            crate::zap_work_plan::ZAP_PASSIVE_TEMPLATE_REVISION,
+            crate::zap_work_plan::ZAP_PASSIVE_PROFILE_ID,
+        );
+        let policy = NetworkPolicy::managed(
+            "ass-zap",
+            "policy-zap",
+            vec!["one.example:443".into()],
+            "socks5h://172.29.0.1:1080",
+        )
+        .unwrap();
+        let limits = ResourceLimits::default();
+        let credentials = ScannerCredentialSet::default();
+        let request = EngineExecutionRequest {
+            case_id: "case-1",
+            scan_run_id: "run-1",
+            engine_run_id: "zap-run-1",
+            manifest: &manifest,
+            ai_system_applicable: false,
+            ai_generated_artifact_applicable: false,
+            assets: &assets,
+            scope_grants: &grants,
+            frozen_destinations: None,
+            naabu_launcher_plan: None,
+            expected_naabu_launcher_plan_sha256: None,
+            workspace: None,
+            network_policy: &policy,
+            resource_limits: &limits,
+            credentials: &credentials,
+            attempt: 1,
+        };
+        let report = orchestrator
+            .execute(&request, &CancellationToken::default())
+            .unwrap();
+        let observed = runtime.observed().unwrap();
+        let document: serde_json::Value = serde_json::from_slice(&observed.bytes).unwrap();
+        assert_eq!(
+            document["env"]["contexts"][0]["urls"][0],
+            "https://one.example/"
+        );
+        assert_eq!(
+            document["env"]["configs"]["network.ratelimit.rules.rule(0).reqsPerSec"],
+            "5"
+        );
+        assert_eq!(
+            document["env"]["configs"]["network.connection.timeoutInSecs"],
+            "10"
+        );
+        assert_eq!(document["jobs"][3]["parameters"]["reportFile"], "zap");
+        assert_eq!(observed.path.file_name().unwrap(), ZAP_PLAN_CONTROL_FILE);
+        assert!(observed.runtime_args.iter().any(|arg| arg == "/zap/zap.sh"));
+        let digest = hex::encode(Sha256::digest(&observed.bytes));
+        assert_eq!(
+            report.checkpoint.zap_plan_sha256.as_deref(),
+            Some(digest.as_str())
+        );
+        let mut invalid_grants = grants.clone();
+        invalid_grants[0]
+            .external_scope
+            .as_mut()
+            .unwrap()
+            .rate_policy
+            .requests_per_second = 10;
+        let invalid_request = EngineExecutionRequest {
+            scope_grants: &invalid_grants,
+            ..request
+        };
+        assert!(matches!(
+            orchestrator.execute(&invalid_request, &CancellationToken::default()),
+            Err(AppError::NotAuthorized(_))
+        ));
+        let mut cross_engine = report.checkpoint.clone();
+        cross_engine.engine_id = "nuclei".into();
+        assert!(cross_engine.resume_token().is_err());
     }
 
     fn execute_failed_local_check(stderr: Vec<u8>) -> ExecutionReport {
@@ -4342,6 +4554,7 @@ mod tests {
             stage: ExecutionStage::CapturedAwaitingAdapter,
             container_name: Some("ass-scanner-engine-run-1-a1".into()),
             scope_sha256: Some("abc".into()),
+            zap_plan_sha256: None,
             launcher_plan_sha256: None,
             artifact_ids: vec!["artifact-1".into()],
             cleanup_completed: true,

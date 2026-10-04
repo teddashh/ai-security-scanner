@@ -152,6 +152,8 @@ The pinned Nuclei template snapshot owns vulnerability and technology coverage. 
 
 The profile does not crawl other hosts, follow redirects, authenticate, submit forms or request bodies, use out-of-band callbacks, headless flows, fuzzing, credential attacks, uploads, denial-of-service, or exploit-oriented templates. Positive findings retain the upstream template ID, severity, evidence, and remediation. A zero-match result means only that Nuclei completed its applicability-driven scan and returned no findings; it does not mean every eligible template ran or every page and API workflow was tested.
 
+The advanced website choice may instead crawl links on that same approved origin with ZAP and apply its upstream passive rules to the responses. Nuclei remains the recommended quick default. Review freezes ZAP's own profile, request rate, concurrency, timeout and crawl bounds; it does not reuse another scanner's authorization. ZAP does not sign in, submit forms, send attack payloads or contact another origin. A run without observed responses is incomplete. A zero-alert result covers only the responses examined within the displayed bounds.
+
 ### 4.2 Local project
 
 The recommended profile creates a bounded read-only snapshot of the chosen folder and runs applicable upstream checks for:

@@ -12,11 +12,11 @@ product behavior, and the [current product review](product-audit.md) tracks the 
 
 - The current release, [v0.3.1](https://github.com/teddashh/ai-security-scanner/releases/tag/v0.3.1), is on the stable channel for Linux, macOS, and Windows. See the [release record](release/v0.3.1.md) for exact installer and updater observations.
 - The released desktop includes Prowler failure headlines, approved AWS report grouping, reconnect-and-rescan, blocked-scan continuations, Semgrep `1.174.0-4`, and explicit kube-bench/KICS incomplete-coverage handling.
-- A fresh owner-signed-in Microsoft 365 live rerun remains unobserved. Garak, Agentic Radar and ZAP remain non-runnable; these records are not additional advertised capabilities.
+- A fresh owner-signed-in Microsoft 365 live rerun remains unobserved. Garak and Agentic Radar remain non-runnable; these records are not additional advertised capabilities.
 - The paired repository [Agent Skills](getting-started.md#use-with-an-agent-skill) install the
   desktop release, check that a computer can scan, guide a scan in the app, and save its report;
   the Linux source build is documented there for changing the product.
-- The engine catalog contains 25 records: 22 integrated, runnable engines and 3 experimental
+- The engine catalog contains 25 records: 23 integrated, runnable engines and 2 experimental
   integrations that remain non-runnable.
 - Repository, website/API, infrastructure, cloud, Microsoft 365, and Kubernetes paths use bounded
   upstream checks and feed one product-owned report.
@@ -31,7 +31,7 @@ product behavior, and the [current product review](product-audit.md) tracks the 
   wire contracts; unknown permissions and tasks cannot claim authorization, execution, or coverage.
 - No model endpoint or hosted provider was contacted while developing the experimental AI paths.
 
-The owner has selected result integrity, engine build/patch maintenance, and experimental integrations before **v0.4.0 stable**. Result-integrity work now separates Greenbone tasks by exact grant, freezes task grant membership for resume, rejects malformed or unevaluated Kubescape output as complete coverage, and streams large reports within the 512 MiB evidence budget. This is development work; it is not included in the frozen v0.3.1 installer. Engine rebuilding and Garak/Agentic Radar/ZAP activation remain in progress; v0.4.0 has not been packaged or published.
+The owner has selected result integrity, engine build/patch maintenance, and experimental integrations before **v0.4.0 stable**. Result-integrity work now separates Greenbone tasks by exact grant, freezes task grant membership for resume, rejects malformed or unevaluated Kubescape output as complete coverage, and streams large reports within the 512 MiB evidence budget. This is development work; it is not included in the frozen v0.3.1 installer. The Gitleaks fixture rebuild and complete recipe/patch audit are finished. ZAP now has an explicit passive website choice, per-grant dispatch and native per-request pacing; Garak and Agentic Radar activation remain in progress; v0.4.0 has not been packaged or published.
 
 ## AI integration work
 
@@ -53,7 +53,7 @@ current scan capability.
 
 | Integration | Implemented | Current fail-closed boundary |
 | --- | --- | --- |
-| ZAP | A thin adapter normalizes the pinned upstream JSON report, preserving alert identity, upstream severity, remediation, and per-instance evidence. The product builds the bounded passive automation plan the pinned command reads, confining the crawl to one approved origin and routing every request through the managed-network gateway; a run against a site linking off-site requested only the approved origin. The pinned upstream image was verified by digest and observed completing a passive crawl under a read-only root filesystem, a dropped-capability non-root user, and a hard memory limit. | No scope-grant profile exists for a ZAP passive website scan, so no run could be authorized against a website; the generated automation plan is not yet delivered into a run; and ZAP enforces no requests-per-second limit of its own, which the managed gateway cannot substitute for because it bounds connections rather than requests: measured against a keep-alive site, one ZAP run held the connection bound while sending 114 requests per second. |
+| ZAP | The reviewed `zap_passive_v1` profile derives a passive-only plan from one exact frozen grant. Native network add-on 0.29.0 paces every HTTP request, including keep-alive requests, at 5/s with five spider threads and a 10-second request timeout. The orchestrator mounts and hashes the private plan, and saves its digest for recovery and cleanup. Website Advanced and mixed-environment website settings explicitly select it; Nuclei remains the default. | Dispatchable on main; absent from frozen v0.3.1 installers. Crawl is bounded to two minutes, depth five and 100 children per page; response processing is bounded to two minutes. No authentication, form submission, active attack jobs or other origins. Empty unobserved-site reports are incomplete. |
 
 ## Grype repository scan
 
@@ -64,6 +64,8 @@ and MCP Armor had no selected MCP configuration. These are results for that fixt
 counts for other repositories. See [the exact pin and recorded result](engine-catalog.md#grype-repository-support).
 
 ## Recorded verification baseline
+
+The October 4 ZAP integration passed 2,092 Rust tests, 798 frontend tests (six explicit skips), 518 component tests, formatting, Clippy, and the production build. Controlled native amd64 scans verified frozen hostname resolution, origin boundaries, keep-alive request pacing and cancellation; the report regression preserves all native alert instances. This verifies the current source and controlled fixtures, not a published v0.4.0 installer.
 
 The October 3 source-readiness audit recorded 2,072 passing Rust tests, 798 frontend tests (six explicit skips), 515 component tests, 89 CI contracts and 202 release contracts. Formatting, Clippy, production build, engine admission and release identity passed. The v0.3.1 preparation also passed the full release self-test and the three gateway identity/security tests. Exact installer observations are recorded separately in [v0.3.1](release/v0.3.1.md); source tests do not substitute for installation or human-path evidence.
 
@@ -97,7 +99,7 @@ warning, and `complete: true` under `network=none`.
 
 ## Current blockers
 
-- Garak, Agentic Radar, and ZAP remain non-runnable while their catalog blockers exist.
+- Garak and Agentic Radar remain non-runnable while their catalog blockers exist.
 
 These blockers describe fail-closed admission state; they do not authorize a publication or release
 plan. Publication, packaging, signing, versioning, and compliance posture remain product-owner

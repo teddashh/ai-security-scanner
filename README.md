@@ -62,7 +62,7 @@ See the [release record](docs/release/v0.3.1.md) for exact installer verificatio
 
 ## Integrated tools
 
-The current runnable engine set integrates 22 upstream projects. The catalog separately retains experimental, non-dispatchable AI contracts; those are not current scan capabilities. See [Development status](docs/development-status.md). The product runs only the tools that apply to each selected asset, keeps their original identifiers, severity, evidence, and remediation, then organizes every completed result in the same report.
+On main, the current runnable engine set integrates 23 upstream projects. The upcoming v0.4.0 adds the optional ZAP passive website profile; the published v0.3.1 installers retain their frozen set of 22 tools. The catalog separately retains experimental, non-dispatchable AI contracts; those are not current scan capabilities. See [Development status](docs/development-status.md). The product runs only the tools that apply to each selected asset, keeps their original identifiers, severity, evidence, and remediation, then organizes every completed result in the same report.
 
 **Selected assets and authorization → thin adapters → upstream scanners → output converters → one standardized report organized by asset**
 
@@ -88,6 +88,7 @@ The released catalog pins the Grype image to **`0.117.0-4`**, digest `sha256:56b
 | Tool | What ai-security-scanner uses it for |
 | --- | --- |
 | [Nuclei](https://github.com/projectdiscovery/nuclei) | Technology-aware, bounded read-only HTTP security checks from a pinned [Nuclei Templates](https://github.com/projectdiscovery/nuclei-templates) snapshot. |
+| [ZAP](https://github.com/zaproxy/zaproxy) | Optional page-crawling and upstream passive response checks for one approved origin; available on main for v0.4.0, outside the frozen v0.3.1 installers. |
 | [Greenbone OpenVAS Scanner](https://github.com/greenbone/openvas-scanner) | Service-aware remote checks from a pinned Community Feed for exact approved hosts and ports. |
 | [Naabu](https://github.com/projectdiscovery/naabu) | Selected TCP-port reachability and exposure discovery; an open port is not a vulnerability finding. |
 | [httpx](https://github.com/projectdiscovery/httpx) | Bounded HTTP reachability and status metadata; it is not a vulnerability scanner. |

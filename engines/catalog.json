@@ -21,7 +21,7 @@
     "source_revision": "e27e4ab61ad85479a5d53dae9b08440bc63e72b3",
     "engine_version": "2.0.31-aws9.2.0-file1.0.4",
     "rule_version": "804be3a90d6f15d3e6c662c0eb7afa88a9596180",
-    "adapter_version": "0.2.4",
+    "adapter_version": "0.2.5",
     "supported_asset_kinds": [
       "cloud_account"
     ],
@@ -83,7 +83,7 @@
       },
       "adapter": {
         "id": "ai-security-scanner:cloudquery",
-        "version": "0.2.4",
+        "version": "0.2.5",
         "acquisition_source": "workspace://src-tauri/src/adapters/mod.rs",
         "source_revision": "bbec04155dba2685741d4f956f51d41f9992de5c",
         "release_state": "released"
@@ -158,7 +158,7 @@
     "source_revision": "71fa72fc9ce33897bcb0bd0c9ebf09b867b881cf",
     "engine_version": "2.4.5",
     "rule_version": "6e79b2dece502bc198310b39bd54bc95d2842c99",
-    "adapter_version": "0.2.4",
+    "adapter_version": "0.2.5",
     "supported_asset_kinds": [
       "cloud_account"
     ],
@@ -217,7 +217,7 @@
       },
       "adapter": {
         "id": "ai-security-scanner:steampipe",
-        "version": "0.2.4",
+        "version": "0.2.5",
         "acquisition_source": "workspace://src-tauri/src/adapters/mod.rs",
         "source_revision": "bbec04155dba2685741d4f956f51d41f9992de5c",
         "release_state": "released"
@@ -293,7 +293,7 @@
     "source_revision": "40ecbd035e5541bf099917c5033cceb8959c4737",
     "engine_version": "5.39.1",
     "rule_version": "40ecbd035e5541bf099917c5033cceb8959c4737",
-    "adapter_version": "0.2.4",
+    "adapter_version": "0.2.5",
     "supported_asset_kinds": [
       "cloud_account",
       "subscription",
@@ -390,7 +390,7 @@
       },
       "adapter": {
         "id": "ai-security-scanner:prowler",
-        "version": "0.2.4",
+        "version": "0.2.5",
         "acquisition_source": "workspace://src-tauri/src/adapters/mod.rs",
         "source_revision": "bbec04155dba2685741d4f956f51d41f9992de5c",
         "release_state": "released"
@@ -468,7 +468,7 @@
     "source_revision": "7909f2fc6186063e5c9e7ddef8c4d7d1072c8f3d",
     "engine_version": "5.14.0",
     "rule_version": "7909f2fc6186063e5c9e7ddef8c4d7d1072c8f3d",
-    "adapter_version": "0.2.4",
+    "adapter_version": "0.2.5",
     "supported_asset_kinds": [
       "cloud_account"
     ],
@@ -529,7 +529,7 @@
       },
       "adapter": {
         "id": "ai-security-scanner:scoutsuite",
-        "version": "0.2.4",
+        "version": "0.2.5",
         "acquisition_source": "workspace://src-tauri/src/adapters/mod.rs",
         "source_revision": "bbec04155dba2685741d4f956f51d41f9992de5c",
         "release_state": "released"
@@ -604,7 +604,7 @@
     "source_revision": "75a67ea9cb6d0fdf35ff185d08dad0d45587e6f7",
     "engine_version": "0.9.1",
     "rule_version": "75a67ea9cb6d0fdf35ff185d08dad0d45587e6f7",
-    "adapter_version": "0.2.4",
+    "adapter_version": "0.2.5",
     "supported_asset_kinds": [
       "cloud_account"
     ],
@@ -664,7 +664,7 @@
       },
       "adapter": {
         "id": "ai-security-scanner:cloudsplaining",
-        "version": "0.2.4",
+        "version": "0.2.5",
         "acquisition_source": "workspace://src-tauri/src/adapters/mod.rs",
         "source_revision": "bbec04155dba2685741d4f956f51d41f9992de5c",
         "release_state": "released"
@@ -738,7 +738,7 @@
     "source_revision": "4d34e9a48e38ce5c2e14c0fdfbaee53e57594ae2",
     "engine_version": "1.8.0",
     "rule_version": "4d34e9a48e38ce5c2e14c0fdfbaee53e57594ae2",
-    "adapter_version": "0.2.4",
+    "adapter_version": "0.2.5",
     "supported_asset_kinds": [
       "tenant"
     ],
@@ -799,7 +799,7 @@
       },
       "adapter": {
         "id": "ai-security-scanner:scubagear",
-        "version": "0.2.4",
+        "version": "0.2.5",
         "acquisition_source": "workspace://src-tauri/src/adapters/mod.rs",
         "source_revision": "bbec04155dba2685741d4f956f51d41f9992de5c",
         "release_state": "released"
@@ -872,7 +872,7 @@
     "source_revision": "6bf1d98f094fc7a68e449d2f40f73ef820b72ee3",
     "engine_version": "2.0.0",
     "rule_version": "6bf1d98f094fc7a68e449d2f40f73ef820b72ee3",
-    "adapter_version": "0.2.4",
+    "adapter_version": "0.2.5",
     "supported_asset_kinds": [
       "tenant"
     ],
@@ -934,7 +934,7 @@
       },
       "adapter": {
         "id": "ai-security-scanner:maester",
-        "version": "0.2.4",
+        "version": "0.2.5",
         "acquisition_source": "workspace://src-tauri/src/adapters/mod.rs",
         "source_revision": "bbec04155dba2685741d4f956f51d41f9992de5c",
         "release_state": "released"
@@ -1005,7 +1005,7 @@
     "source_revision": "5a0ca8bde91b5bb16213e9e8b5c6871eac954bd8",
     "engine_version": "2.6.1",
     "rule_version": null,
-    "adapter_version": "0.2.4",
+    "adapter_version": "0.2.5",
     "supported_asset_kinds": [
       "ip_address",
       "host",
@@ -1084,7 +1084,7 @@
       },
       "adapter": {
         "id": "ai-security-scanner:naabu",
-        "version": "0.2.4",
+        "version": "0.2.5",
         "acquisition_source": "workspace://src-tauri/src/adapters/mod.rs",
         "source_revision": "bbec04155dba2685741d4f956f51d41f9992de5c",
         "release_state": "released"
@@ -1156,7 +1156,7 @@
     "source_revision": "13037dd08b9715cfbd960a70ae1edfef6686a857",
     "engine_version": "1.10.0",
     "rule_version": null,
-    "adapter_version": "0.2.4",
+    "adapter_version": "0.2.5",
     "supported_asset_kinds": [
       "domain",
       "ip_address",
@@ -1228,7 +1228,7 @@
       },
       "adapter": {
         "id": "ai-security-scanner:httpx",
-        "version": "0.2.4",
+        "version": "0.2.5",
         "acquisition_source": "workspace://src-tauri/src/adapters/mod.rs",
         "source_revision": "bbec04155dba2685741d4f956f51d41f9992de5c",
         "release_state": "released"
@@ -1299,7 +1299,7 @@
     "source_revision": "a8c88feb4a1c8e961b7902534ce3af97e9d524a4",
     "engine_version": "3.11.1",
     "rule_version": "24858b4bfabfa86f0bcfd36aea24fb535152b012",
-    "adapter_version": "0.2.4",
+    "adapter_version": "0.2.5",
     "supported_asset_kinds": [
       "domain",
       "ip_address",
@@ -1372,7 +1372,7 @@
       },
       "adapter": {
         "id": "ai-security-scanner:nuclei",
-        "version": "0.2.4",
+        "version": "0.2.5",
         "acquisition_source": "workspace://src-tauri/src/adapters/mod.rs",
         "source_revision": "bbec04155dba2685741d4f956f51d41f9992de5c",
         "release_state": "released"
@@ -1443,7 +1443,7 @@
     "source_revision": "26465a11ff0e6a98d60a253265fab5974fc757b6",
     "engine_version": "23.50.24",
     "rule_version": "816c24126e0375d32c667b78d20342ce7c58ec58",
-    "adapter_version": "0.2.4",
+    "adapter_version": "0.2.5",
     "supported_asset_kinds": [
       "ip_address",
       "host",
@@ -1517,7 +1517,7 @@
       },
       "adapter": {
         "id": "ai-security-scanner:greenbone",
-        "version": "0.2.4",
+        "version": "0.2.5",
         "acquisition_source": "workspace://src-tauri/src/adapters/mod.rs",
         "source_revision": "bbec04155dba2685741d4f956f51d41f9992de5c",
         "release_state": "released"
@@ -1588,7 +1588,7 @@
     "source_revision": "2665d972f6d587ba4773a95053ac39af3fdf8df9",
     "engine_version": "2.17.0",
     "rule_version": "pscanrules-75.0.0",
-    "adapter_version": "0.2.4",
+    "adapter_version": "0.2.5",
     "supported_asset_kinds": [
       "domain",
       "ip_address",
@@ -1618,6 +1618,7 @@
       "json"
     ],
     "command": [
+      "/zap/zap.sh",
       "-Xmx1200m",
       "-cmd",
       "-silent",
@@ -1626,7 +1627,7 @@
       "-autorun",
       "/run/ai-security-scanner/zap-plan.yaml"
     ],
-    "status": "experimental",
+    "status": "integrated",
     "notices": [
       "The passive scan reads only the responses returned by crawling; it sends no attack payloads and does not exercise ZAP's active scanner.",
       "The pinned image loads 48 upstream add-ons. The Automation Framework (automation 0.60.0) is upstream beta and the passive scan framework (pscan 0.6.0) is upstream alpha; the rule pack itself (pscanrules 75.0.0) is upstream release.",
@@ -1663,10 +1664,10 @@
       },
       "adapter": {
         "id": "ai-security-scanner:zap",
-        "version": "0.2.4",
+        "version": "0.2.5",
         "acquisition_source": "workspace://src-tauri/src/adapters/mod.rs",
         "source_revision": "bbec04155dba2685741d4f956f51d41f9992de5c",
-        "release_state": "workspace_unreleased"
+        "release_state": "released"
       }
     },
     "compatibility": {
@@ -1674,13 +1675,9 @@
       "support_until": "2026-11-05",
       "maintenance_owner": "teddashh/ai-security-scanner maintainers",
       "update_procedure": "docs/engine-maintenance.md",
-      "runnable": false,
+      "runnable": true,
       "artifact_state": "verified_upstream_image",
-      "blocked_by": [
-        "no scope-grant profile exists for a ZAP passive website scan, so no run could be authorized against a website",
-        "the generated automation plan is not yet delivered into a run, so the pinned command finds nothing at /run/ai-security-scanner/zap-plan.yaml",
-        "ZAP enforces no requests-per-second limit of its own, and the managed gateway bounds connections rather than requests, so a website scan cannot yet be held to the rate its grant would declare"
-      ],
+      "blocked_by": [],
       "knowledge_input": {
         "kind": "runtime_live",
         "identifier": "authorized service responses",
@@ -1690,7 +1687,7 @@
       },
       "wrapper": {
         "required": false,
-        "strategy": "The product writes the automation plan for one frozen website grant into the read-only /run/ai-security-scanner mount, so the pinned upstream entrypoint reads an exact origin it cannot widen.",
+        "strategy": "The product derives one bounded passive automation plan from the exact frozen website grant and mounts it read-only; the command invokes the pinned image program explicitly.",
         "entrypoint": null
       },
       "packaging_plan": "engines/images/zap/plan.json"
@@ -1700,7 +1697,7 @@
         "primary_format": "json",
         "path": "/output/zap.json",
         "media_type": "application/json",
-        "adapter_state": "workspace_unreleased"
+        "adapter_state": "released"
       },
       "resources": {
         "memory_mb": 2048,
@@ -1738,7 +1735,7 @@
     "source_revision": "a0c13f304151e531c7e7c00838076211a07a790c",
     "engine_version": "source@a0c13f304151e531c7e7c00838076211a07a790c",
     "rule_version": "0f5a85ceab1b82b193d0eaa418784c932d237d68",
-    "adapter_version": "0.2.4",
+    "adapter_version": "0.2.5",
     "supported_asset_kinds": [
       "repository"
     ],
@@ -1804,7 +1801,7 @@
       },
       "adapter": {
         "id": "ai-security-scanner:semgrep",
-        "version": "0.2.4",
+        "version": "0.2.5",
         "acquisition_source": "workspace://src-tauri/src/adapters/mod.rs",
         "source_revision": "bbec04155dba2685741d4f956f51d41f9992de5c",
         "release_state": "released"
@@ -1873,7 +1870,7 @@
     "source_revision": "83d9cd684c87d95d656c1458ef04895a7f1cbd8e",
     "engine_version": "8.30.1",
     "rule_version": "sha256:e163e53b9e7e8a8511e77271e2b323ed057759542a6d988258afe3a1fa329caf",
-    "adapter_version": "0.2.4",
+    "adapter_version": "0.2.5",
     "supported_asset_kinds": [
       "repository"
     ],
@@ -1935,7 +1932,7 @@
       },
       "adapter": {
         "id": "ai-security-scanner:gitleaks",
-        "version": "0.2.4",
+        "version": "0.2.5",
         "acquisition_source": "workspace://src-tauri/src/adapters/mod.rs",
         "source_revision": "bbec04155dba2685741d4f956f51d41f9992de5c",
         "release_state": "released"
@@ -2004,7 +2001,7 @@
     "source_revision": "3ab759fef4bb5935d4fe9ac68b503d05346b8364",
     "engine_version": "source@3ab759fef4bb5935d4fe9ac68b503d05346b8364",
     "rule_version": "3ab759fef4bb5935d4fe9ac68b503d05346b8364",
-    "adapter_version": "0.2.4",
+    "adapter_version": "0.2.5",
     "supported_asset_kinds": [
       "repository"
     ],
@@ -2067,7 +2064,7 @@
       },
       "adapter": {
         "id": "ai-security-scanner:trufflehog",
-        "version": "0.2.4",
+        "version": "0.2.5",
         "acquisition_source": "workspace://src-tauri/src/adapters/mod.rs",
         "source_revision": "bbec04155dba2685741d4f956f51d41f9992de5c",
         "release_state": "released"
@@ -2136,7 +2133,7 @@
     "source_revision": "0604e97b0f77c89a8c6c1fe2219c3d251cbb9789",
     "engine_version": "3.3.13",
     "rule_version": "0604e97b0f77c89a8c6c1fe2219c3d251cbb9789",
-    "adapter_version": "0.2.4",
+    "adapter_version": "0.2.5",
     "supported_asset_kinds": [
       "repository",
       "iac_project"
@@ -2213,7 +2210,7 @@
       },
       "adapter": {
         "id": "ai-security-scanner:checkov",
-        "version": "0.2.4",
+        "version": "0.2.5",
         "acquisition_source": "workspace://src-tauri/src/adapters/mod.rs",
         "source_revision": "bbec04155dba2685741d4f956f51d41f9992de5c",
         "release_state": "released"
@@ -2282,7 +2279,7 @@
     "source_revision": "e1f23cad9640f55b963f22a116b04906b8c16ac6",
     "engine_version": "2.1.20",
     "rule_version": "e1f23cad9640f55b963f22a116b04906b8c16ac6",
-    "adapter_version": "0.2.4",
+    "adapter_version": "0.2.5",
     "supported_asset_kinds": [
       "repository",
       "iac_project"
@@ -2359,7 +2356,7 @@
       },
       "adapter": {
         "id": "ai-security-scanner:kics",
-        "version": "0.2.4",
+        "version": "0.2.5",
         "acquisition_source": "workspace://src-tauri/src/adapters/mod.rs",
         "source_revision": "bbec04155dba2685741d4f956f51d41f9992de5c",
         "release_state": "released"
@@ -2428,7 +2425,7 @@
     "source_revision": "e1fd17a0ea4a8cf24bc4b4dd7e2cfbf4bb31b994",
     "engine_version": "0.74.0",
     "rule_version": "e1fd17a0ea4a8cf24bc4b4dd7e2cfbf4bb31b994",
-    "adapter_version": "0.2.4",
+    "adapter_version": "0.2.5",
     "supported_asset_kinds": [
       "repository",
       "iac_project",
@@ -2508,7 +2505,7 @@
       },
       "adapter": {
         "id": "ai-security-scanner:trivy",
-        "version": "0.2.4",
+        "version": "0.2.5",
         "acquisition_source": "workspace://src-tauri/src/adapters/mod.rs",
         "source_revision": "bbec04155dba2685741d4f956f51d41f9992de5c",
         "release_state": "released"
@@ -2577,7 +2574,7 @@
     "source_revision": "b5fa92bbcbef655497e3be840a2f718380e2cdd3",
     "engine_version": "0.117.0",
     "rule_version": "b5fa92bbcbef655497e3be840a2f718380e2cdd3",
-    "adapter_version": "0.2.4",
+    "adapter_version": "0.2.5",
     "supported_asset_kinds": [
       "repository",
       "container_image"
@@ -2649,7 +2646,7 @@
       },
       "adapter": {
         "id": "ai-security-scanner:grype",
-        "version": "0.2.4",
+        "version": "0.2.5",
         "acquisition_source": "workspace://src-tauri/src/adapters/mod.rs",
         "source_revision": "bbec04155dba2685741d4f956f51d41f9992de5c",
         "release_state": "released"
@@ -2718,7 +2715,7 @@
     "source_revision": "2293641e3bd628a01bb37639318d62c0ebe89b39",
     "engine_version": "1.51.0",
     "rule_version": "2293641e3bd628a01bb37639318d62c0ebe89b39",
-    "adapter_version": "0.2.4",
+    "adapter_version": "0.2.5",
     "supported_asset_kinds": [
       "repository",
       "container_image"
@@ -2793,7 +2790,7 @@
       },
       "adapter": {
         "id": "ai-security-scanner:syft",
-        "version": "0.2.4",
+        "version": "0.2.5",
         "acquisition_source": "workspace://src-tauri/src/adapters/mod.rs",
         "source_revision": "bbec04155dba2685741d4f956f51d41f9992de5c",
         "release_state": "released"
@@ -2862,7 +2859,7 @@
     "source_revision": "469969f6bebf46bef5e808b91a4bb46fb2bbf4ed",
     "engine_version": "4.0.12",
     "rule_version": "a12188c49147bb6ec379b42a4159d3d5852634b8",
-    "adapter_version": "0.2.4",
+    "adapter_version": "0.2.5",
     "supported_asset_kinds": [
       "kubernetes_cluster"
     ],
@@ -2925,7 +2922,7 @@
       },
       "adapter": {
         "id": "ai-security-scanner:kubescape",
-        "version": "0.2.4",
+        "version": "0.2.5",
         "acquisition_source": "workspace://src-tauri/src/adapters/mod.rs",
         "source_revision": "bbec04155dba2685741d4f956f51d41f9992de5c",
         "release_state": "released"
@@ -2994,7 +2991,7 @@
     "source_revision": "9f133cb7509ce1dbedfc860e94474588000e25ac",
     "engine_version": "source@9f133cb7509ce1dbedfc860e94474588000e25ac",
     "rule_version": "9f133cb7509ce1dbedfc860e94474588000e25ac",
-    "adapter_version": "0.2.4",
+    "adapter_version": "0.2.5",
     "supported_asset_kinds": [
       "host"
     ],
@@ -3057,7 +3054,7 @@
       },
       "adapter": {
         "id": "ai-security-scanner:kube-bench",
-        "version": "0.2.4",
+        "version": "0.2.5",
         "acquisition_source": "workspace://src-tauri/src/adapters/mod.rs",
         "source_revision": "bbec04155dba2685741d4f956f51d41f9992de5c",
         "release_state": "released"
@@ -3120,7 +3117,7 @@
     "source_revision": "93aa9cdec309ec4170559676f1826ea2a679920c",
     "engine_version": "0.17.0",
     "rule_version": null,
-    "adapter_version": "0.2.4",
+    "adapter_version": "0.2.5",
     "supported_providers": [],
     "supported_asset_kinds": [
       "ai_model_endpoint"
@@ -3189,7 +3186,7 @@
       },
       "adapter": {
         "id": "ai-security-scanner:garak",
-        "version": "0.2.4",
+        "version": "0.2.5",
         "acquisition_source": "workspace://src-tauri/src/adapters/mod.rs",
         "source_revision": "bbec04155dba2685741d4f956f51d41f9992de5c",
         "release_state": "workspace_unreleased"
@@ -3258,7 +3255,7 @@
     "source_revision": "65a7e4bd01e2034c7cb52e9620eeed287688cc53",
     "engine_version": "0.14.1",
     "rule_version": null,
-    "adapter_version": "0.2.4",
+    "adapter_version": "0.2.5",
     "supported_providers": [],
     "supported_asset_kinds": [
       "repository"
@@ -3323,7 +3320,7 @@
       },
       "adapter": {
         "id": "ai-security-scanner:agentic-radar",
-        "version": "0.2.4",
+        "version": "0.2.5",
         "acquisition_source": "workspace://src-tauri/src/adapters/mod.rs",
         "source_revision": "bbec04155dba2685741d4f956f51d41f9992de5c",
         "release_state": "workspace_unreleased"
@@ -3395,7 +3392,7 @@
     "source_revision": "6af4cee4665ab6242f02a88952f9127b6a04922a",
     "engine_version": "1.0.2",
     "rule_version": "6af4cee4665ab6242f02a88952f9127b6a04922a",
-    "adapter_version": "0.2.4",
+    "adapter_version": "0.2.5",
     "supported_providers": [],
     "supported_asset_kinds": [
       "repository"
@@ -3460,7 +3457,7 @@
       },
       "adapter": {
         "id": "ai-security-scanner:mcp-armor",
-        "version": "0.2.4",
+        "version": "0.2.5",
         "acquisition_source": "workspace://src-tauri/src/adapters/mod.rs",
         "source_revision": "bbec04155dba2685741d4f956f51d41f9992de5c",
         "release_state": "released"

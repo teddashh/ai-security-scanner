@@ -62,7 +62,7 @@ Agent 的沙箱擋住下載或應用程式時，它會請你允許那一個指�
 
 ## 串接的工具
 
-目前可執行的引擎集合整合了 22 個上游專案。目錄另外保留實驗性、不可派送的 AI 契約；它們不是目前的掃描能力。詳見[開發狀態](docs/development-status.zh-TW.md)。產品只會針對每個選定資產執行適用工具，保留原始識別碼、嚴重度、證據與修正建議，再把所有已完成結果整理到同一份報告。
+main 目前可執行的引擎集合整合了 23 個上游專案。準備中的 v0.4.0 新增可選的 ZAP 被動網站檢查；已發布的 v0.3.1 安裝包仍維持固定的 22 個工具。目錄另外保留實驗性、不可派送的 AI 契約；它們不是目前的掃描能力。詳見[開發狀態](docs/development-status.zh-TW.md)。產品只會針對每個選定資產執行適用工具，保留原始識別碼、嚴重度、證據與修正建議，再把所有已完成結果整理到同一份報告。
 
 **選定資產與授權 → 薄層轉接器 → 上游掃描器 → 輸出轉換器 → 一份依資產整理的標準化報告**
 
@@ -88,6 +88,7 @@ Agent 的沙箱擋住下載或應用程式時，它會請你允許那一個指�
 | 工具 | ai-security-scanner 的使用方式 |
 | --- | --- |
 | [Nuclei](https://github.com/projectdiscovery/nuclei) | 從固定的 [Nuclei Templates](https://github.com/projectdiscovery/nuclei-templates) 快照，執行會辨識技術、範圍受限的唯讀 HTTP 安全檢查。 |
+| [ZAP](https://github.com/zaproxy/zaproxy) | 對一個核准來源爬取頁面並執行上游被動回應檢查；已在 main 接通，預計納入 v0.4.0，未包含於固定的 v0.3.1 安裝包。 |
 | [Greenbone OpenVAS Scanner](https://github.com/greenbone/openvas-scanner) | 針對精確獲准的主機與連接埠，從固定 Community Feed 執行會辨識服務的遠端檢查。 |
 | [Naabu](https://github.com/projectdiscovery/naabu) | 探索選定 TCP 連接埠的可達性與曝露；開放連接埠不等於弱點。 |
 | [httpx](https://github.com/projectdiscovery/httpx) | 取得範圍受限的 HTTP 可達性與狀態資訊；它不是弱點掃描器。 |

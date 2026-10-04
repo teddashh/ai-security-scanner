@@ -852,7 +852,7 @@ pub struct EngineRun {
     /// semantically identical re-approval remains comparable.
     #[serde(default)]
     pub scope_contract_sha256: Option<String>,
-    /// Exact grants bound to a per-grant Greenbone execution. Other engines
+    /// Exact grants bound to a per-grant Greenbone or ZAP execution. Other engines
     /// and legacy runs retain their original combined grant contract.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub execution_scope_grant_ids: Option<Vec<Id>>,

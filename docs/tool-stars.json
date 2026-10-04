@@ -1,33 +1,132 @@
 {
   "schemaVersion": 1,
-  "checkedAt": "2026-09-18T21:30:00-04:00",
+  "checkedAt": "2026-10-04T03:30:11Z",
   "source": "GitHub REST API",
   "tools": [
-    { "id": "cloudquery", "repository": "cloudquery/cloudquery", "stars": 6520 },
-    { "id": "steampipe", "repository": "turbot/steampipe", "stars": 7956 },
-    { "id": "prowler", "repository": "prowler-cloud/prowler", "stars": 14836 },
-    { "id": "scoutsuite", "repository": "nccgroup/ScoutSuite", "stars": 7821 },
-    { "id": "cloudsplaining", "repository": "salesforce/cloudsplaining", "stars": 2246 },
-    { "id": "scubagear", "repository": "cisagov/ScubaGear", "stars": 2672 },
-    { "id": "maester", "repository": "maester365/maester", "stars": 1096 },
-    { "id": "naabu", "repository": "projectdiscovery/naabu", "stars": 6253 },
-    { "id": "httpx", "repository": "projectdiscovery/httpx", "stars": 10408 },
-    { "id": "nuclei", "repository": "projectdiscovery/nuclei", "stars": 31292 },
-    { "id": "greenbone", "repository": "greenbone/openvas-scanner", "stars": 4832 },
-    { "id": "semgrep", "repository": "semgrep/semgrep", "stars": 16693 },
-    { "id": "gitleaks", "repository": "gitleaks/gitleaks", "stars": 29384 },
-    { "id": "trufflehog", "repository": "trufflesecurity/trufflehog", "stars": 27987 },
-    { "id": "checkov", "repository": "bridgecrewio/checkov", "stars": 9015 },
-    { "id": "kics", "repository": "Checkmarx/kics", "stars": 2701 },
-    { "id": "trivy", "repository": "aquasecurity/trivy", "stars": 37976 },
-    { "id": "grype", "repository": "anchore/grype", "stars": 12903 },
-    { "id": "syft", "repository": "anchore/syft", "stars": 9581 },
-    { "id": "kubescape", "repository": "kubescape/kubescape", "stars": 11733 },
-    { "id": "kube-bench", "repository": "aquasecurity/kube-bench", "stars": 8190 },
-    { "id": "mcp-armor", "repository": "aira-security/mcp-armor", "stars": 124 }
+    {
+      "id": "cloudquery",
+      "repository": "cloudquery/cloudquery",
+      "stars": 6534
+    },
+    {
+      "id": "steampipe",
+      "repository": "turbot/steampipe",
+      "stars": 7972
+    },
+    {
+      "id": "prowler",
+      "repository": "prowler-cloud/prowler",
+      "stars": 14926
+    },
+    {
+      "id": "scoutsuite",
+      "repository": "nccgroup/ScoutSuite",
+      "stars": 7832
+    },
+    {
+      "id": "cloudsplaining",
+      "repository": "salesforce/cloudsplaining",
+      "stars": 2250
+    },
+    {
+      "id": "scubagear",
+      "repository": "cisagov/ScubaGear",
+      "stars": 2692
+    },
+    {
+      "id": "maester",
+      "repository": "maester365/maester",
+      "stars": 1121
+    },
+    {
+      "id": "naabu",
+      "repository": "projectdiscovery/naabu",
+      "stars": 6276
+    },
+    {
+      "id": "httpx",
+      "repository": "projectdiscovery/httpx",
+      "stars": 10443
+    },
+    {
+      "id": "nuclei",
+      "repository": "projectdiscovery/nuclei",
+      "stars": 31701
+    },
+    {
+      "id": "greenbone",
+      "repository": "greenbone/openvas-scanner",
+      "stars": 4850
+    },
+    {
+      "id": "semgrep",
+      "repository": "semgrep/semgrep",
+      "stars": 16857
+    },
+    {
+      "id": "gitleaks",
+      "repository": "gitleaks/gitleaks",
+      "stars": 29641
+    },
+    {
+      "id": "trufflehog",
+      "repository": "trufflesecurity/trufflehog",
+      "stars": 28262
+    },
+    {
+      "id": "checkov",
+      "repository": "bridgecrewio/checkov",
+      "stars": 9054
+    },
+    {
+      "id": "kics",
+      "repository": "Checkmarx/kics",
+      "stars": 2713
+    },
+    {
+      "id": "trivy",
+      "repository": "aquasecurity/trivy",
+      "stars": 38211
+    },
+    {
+      "id": "grype",
+      "repository": "anchore/grype",
+      "stars": 12968
+    },
+    {
+      "id": "syft",
+      "repository": "anchore/syft",
+      "stars": 9633
+    },
+    {
+      "id": "kubescape",
+      "repository": "kubescape/kubescape",
+      "stars": 11762
+    },
+    {
+      "id": "kube-bench",
+      "repository": "aquasecurity/kube-bench",
+      "stars": 8209
+    },
+    {
+      "id": "mcp-armor",
+      "repository": "aira-security/mcp-armor",
+      "stars": 123
+    },
+    {
+      "id": "zap",
+      "repository": "zaproxy/zaproxy",
+      "stars": 15865
+    }
   ],
   "ruleSources": [
-    { "repository": "projectdiscovery/nuclei-templates", "stars": 12989 },
-    { "repository": "semgrep/semgrep-rules", "stars": 1254 }
+    {
+      "repository": "projectdiscovery/nuclei-templates",
+      "stars": 13053
+    },
+    {
+      "repository": "semgrep/semgrep-rules",
+      "stars": 1263
+    }
   ]
 }
