@@ -79,7 +79,7 @@ const MANAGED_RUNTIME_QUALIFICATION_CASE_ID: &str = "q";
 const MANAGED_RUNTIME_QUALIFICATION_SCAN_RUN_ID: &str = "s";
 const MANAGED_RUNTIME_QUALIFICATION_IMAGE: &str = concat!(
     "ghcr.io/teddashh/ai-security-scanner-engine-gitleaks@",
-    "sha256:5b4538ca17201dba53fed7d5ea49f94cfd7815a4ce2a5b36cac408757ff349aa"
+    "sha256:95313654f9c37115a906629a82113ba6e1c729950be70909da8362e9482b477e"
 );
 const MANAGED_RUNTIME_QUALIFICATION_REPORT: &str = "gitleaks.json";
 const MAX_MANAGED_RUNTIME_QUALIFICATION_REPORT_BYTES: u64 = 1024 * 1024;
