@@ -1,92 +1,68 @@
 # ai-security-scanner
 
-[專案網站](https://teddashh.github.io/ai-security-scanner/?lang=zh-TW) · [English](README.md) · [文件](docs/README.zh-TW.md) · [下載](https://github.com/teddashh/ai-security-scanner/releases)
+[專案網站](https://teddashh.github.io/ai-security-scanner/?lang=zh-TW) · [English](README.md) · [使用說明](docs/README.zh-TW.md) · [下載](https://github.com/teddashh/ai-security-scanner/releases)
 
-透過桌面應用程式，或 Claude Code／Codex 的 Agent Skill，檢查程式碼專案、網站與內部系統。選定目標、確認網路檢查授權後，啟動一次掃描。偵測由既有上游掃描器負責，薄層轉接器與輸出轉換器將結果整理成一份標準化、依優先順序排列的報告。
+檢查你的程式碼、網站與公司系統，把需要注意的安全問題整理成一份報告。你會知道哪裡有問題、為什麼重要，以及接下來可以怎麼做。
 
-## 開始使用
+在桌面應用程式裡選好要檢查的項目，程式就會選用適合的安全工具，整理檢查結果。可以先從一個資料夾或網站開始，也可以一次檢查公司環境中的多個系統。
 
-下載適合你電腦的 **v0.4.0 正式版**：
+## 完成第一次掃描
 
-| 電腦 | 安裝檔 | 第一次開啟前 |
-| --- | --- | --- |
-| macOS（Apple 晶片或 Intel） | [ai-security-scanner_0.4.0_universal.dmg](https://github.com/teddashh/ai-security-scanner/releases/download/v0.4.0/ai-security-scanner_0.4.0_universal.dmg) | 把應用程式拖進**應用程式**資料夾。此版本未經 Apple 公證，開啟前先在「終端機」執行一次 `xattr -dr com.apple.quarantine /Applications/ai-security-scanner.app`。 |
-| Windows x86-64 | [ai-security-scanner_0.4.0_x64-setup.exe](https://github.com/teddashh/ai-security-scanner/releases/download/v0.4.0/ai-security-scanner_0.4.0_x64-setup.exe) 或 [MSI](https://github.com/teddashh/ai-security-scanner/releases/download/v0.4.0/ai-security-scanner_0.4.0_x64_en-US.msi) | 安裝檔未簽章。SmartScreen 警告時，選**其他資訊 → 仍要執行**。Windows 要求安裝或更新 WSL 時請允許。 |
-| Debian 或 Ubuntu x86-64 | [ai-security-scanner_0.4.0_amd64.deb](https://github.com/teddashh/ai-security-scanner/releases/download/v0.4.0/ai-security-scanner_0.4.0_amd64.deb) | 以 `sudo apt install ./ai-security-scanner_0.4.0_amd64.deb` 安裝。 |
+1. [下載 v0.4.0](https://github.com/teddashh/ai-security-scanner/releases/tag/v0.4.0)，依你的 Windows、macOS 或 Linux 電腦[完成安裝](docs/getting-started.zh-TW.md#安裝)。程式會準備掃描工具，不需要另外安裝 Docker。
+2. 開啟程式，選擇**掃描公司環境**、**檢查網站**或**檢查程式碼或 AI 專案**，加入想檢查的資料夾、網址或內部系統。
+3. 確認畫面列出的目標與檢查內容。網站及內部系統必須是你有權檢查的對象，再從應用程式視窗開始掃描。
+4. 掃描結束後，打開**掃描結果**。按**保存或分享報告**，再儲存 **HTML 報告**，就能用瀏覽器閱讀。
 
-第一次需要掃描時，應用程式會自行準備掃描環境，不需要另外安裝 Docker。檢查碼與此版本的驗證範圍請見 [v0.4.0 發布頁](https://github.com/teddashh/ai-security-scanner/releases/tag/v0.4.0)。
+第一次可能需要等候工具下載，之後可以重複使用。每個畫面的操作方式都在[開始使用](docs/getting-started.zh-TW.md#從開始新掃描到-html-報告)。
 
-開啟應用程式並選擇一條路徑：
+## 可以檢查什麼？
 
-- **掃描公司環境**：在同一輪加入多個專案資料夾、網站與已獲准的內部系統。
-- **檢查網站**：使用經過審查的 Nuclei 設定檢查一個精確網站來源範圍。
-- **檢查程式碼或 AI 專案**：掃描本機唯讀副本中的秘密、弱點相依套件、危險程式碼與設定問題。
-
-依**開始新掃描 → 確認後開始 → 掃描進度 → 掃描結果**前進。在掃描結果按**保存或分享報告**進入**分享結果**，再按**儲存「HTML 報告」**。詳見[取得 HTML 報告的逐步操作](docs/getting-started.zh-TW.md#從開始新掃描到-html-報告)，也包含如何從**我的掃描**回到原本的專案。
-
-## 透過 Claude Code 或 Codex 使用
-
-掃描在你自己電腦上的桌面應用程式中執行，**開始**是應用程式視窗裡的按鈕。在同一台電腦上的 Agent 可以從上方表格安裝應用程式、確認這台電腦能否掃描、引導你操作應用程式、解讀結果，並保存 HTML 報告，不需要建置本儲存庫。兩者共用同一份 Skill：
-
-| Agent | 儲存庫內的 Skill |
+| 你想檢查的東西 | 可以了解的問題 |
 | --- | --- |
-| Claude Code | [ai-security-scanner](.claude/skills/ai-security-scanner/SKILL.md) |
-| Codex | [ai-security-scanner](.codex/skills/ai-security-scanner/SKILL.md) |
+| 程式碼資料夾，包括 AI 專案 | 支援的檔案中，是否留下密碼或金鑰、使用有已知漏洞的套件，或有危險寫法與不安全設定。程式會複製檔案來檢查，不會執行或修改你的專案。 |
+| 網站與 API | 核准範圍內的網站是否有已知漏洞，或暴露了不該公開的資訊。開始前會列出檢查的網址範圍與限制。 |
+| 公司內部系統 | 指定主機與連接埠提供哪些服務，以及適用的安全檢查發現了什麼。連接埠開著，本身不代表有漏洞。 |
+| 雲端帳號與 Microsoft 365 | 支援的帳號與權限檢查發現了什麼。目前 AWS、Azure、GCP 只檢查部分身分與權限設定，還不能代表整個雲端環境的安全狀況。 |
+| 部署設定、容器與 Kubernetes | 支援的設定檔或容器內容，是否使用有已知漏洞的套件，或有不安全設定。可執行的檢查會依提供的資料而定。 |
 
-在任一 Agent 開啟本儲存庫後，可以這樣要求：
+進階 AI 選項可以整理支援的工作流程、檢查 MCP 設定，或測試一個你核准的模型服務。模型測試會送出 54 個固定提示，可能產生服務商費用；開始前會讓你確認。詳細內容見[掃描範圍](docs/scanning-scope.zh-TW.md)。
 
-> 使用 ai-security-scanner skill 在這台電腦安裝應用程式、確認可以掃描、引導我完成一次掃描，並保存最終 HTML 報告。
+## 看完報告，知道下一步
 
-Agent 的沙箱擋住下載或應用程式時，它會請你允許那一個指令。雲端 Agent 無法在你的電腦上安裝任何東西，會改為提供安裝檔連結。範圍由你決定，產品選擇適用的上游檢查。詳見 [Agent 需要的環境](docs/getting-started.zh-TW.md#透過-agent-skill-使用)。
+先看需要優先處理的問題。每一項都會說明影響哪個系統或檔案、為什麼值得注意，以及可以先做什麼。負責調查或修正的人，也能展開技術細節，查看掃描工具原本的證據、評級與建議。
 
-## 所有資產集中在一份報告
+報告同時列出已檢查與未檢查的項目。某項檢查失敗，其他結果仍會保留。「沒有發現問題」只代表完成的檢查沒有找到問題，不代表所有風險都已排除。程式會提供修正建議，不會自行更改你的系統。
 
-報告首先呈現：
+報告可以重新開啟、比較相容的前後兩次掃描，也能存成英文或繁體中文 HTML 分享。未遮蔽的匯出可在報告最後附上原始掃描報告 ZIP。詳見[閱讀與分享結果](docs/results-and-exports.zh-TW.md)。
 
-- 已確認有問題的資產；
-- 優先處理的問題及其影響；
-- 最小可行的處理動作與修正驗證方式；
-- 每個資產已完成及尚未執行的檢查；
-- 技術細節中的原始掃描器識別碼、嚴重度、證據與修正建議。
+### 先看看報告長什麼樣
 
-個別檢查失敗時，其他已完成結果仍會保留。報告可重新開啟、與後續掃描比較，並匯出成好讀的 HTML 或結構化資料。
+[打開範例報告](https://teddashh.github.io/ai-security-scanner/samples/v0.4.0/sample-report-redacted-zh-TW.html)，或[選擇其他語言與顯示方式](https://teddashh.github.io/ai-security-scanner/sample-reports.html?lang=zh-TW)。
 
-## 直接閱讀標準報告
+範例使用模擬資料，包含 25 個工具的 62 筆發現與 42 筆盤點紀錄。它用來展示報告，不代表任何真實公司的安全狀況。盤點紀錄會另外列出，不算成安全問題。[範例製作方式](docs/samples/v0.4.0/README.zh-TW.md)。
 
-**v0.4.0 · 2026-10-04**：全部 25 個 adapter 的真實支援格式，透過正式報告流程產生模擬評估，包含 62 筆原始發現與 42 筆盤點觀察。每個來源均說明掃描用途；盤點不算漏洞。
+## 請 Claude Code 或 Codex 幫忙
 
-- [遮蔽版 HTML](https://teddashh.github.io/ai-security-scanner/samples/v0.4.0/sample-report-redacted-zh-TW.html) · [GitHub 直接下載](https://raw.githubusercontent.com/teddashh/ai-security-scanner/main/docs/samples/v0.4.0/sample-report-redacted-zh-TW.html)
-- [完整揭露版 HTML](https://teddashh.github.io/ai-security-scanner/samples/v0.4.0/sample-report-full-zh-TW.html) · [GitHub 直接下載](https://raw.githubusercontent.com/teddashh/ai-security-scanner/main/docs/samples/v0.4.0/sample-report-full-zh-TW.html)
-- [中英文四份範例與產製方式](docs/samples/v0.4.0/README.zh-TW.md) · [網站下載頁](https://teddashh.github.io/ai-security-scanner/sample-reports.html?lang=zh-TW)
-- [25 個掃描器詳細指南](https://teddashh.github.io/ai-security-scanner/scanner-guide.html?lang=zh-TW)：SWOT、選用原因、使用情境、實際啟用功能、版本及來源日期（[GitHub 版](docs/scanner-guide.zh-TW.md)）。
+在同一台電腦上的 AI 助手，可以協助安裝、確認設定、解讀結果與儲存報告。你負責選好目標，並在桌面應用程式裡開始、暫停或繼續掃描。
 
-兩版使用相同模擬資料。完整揭露保留虛構資產及帳號背景，機密值在兩版均維持隱藏；報告本文採用產品標準匯出，另加範例標記與來源附錄。
+在 AI 助手中開啟這個專案，告訴它：
 
-## v0.4.0 更新
+> 使用 ai-security-scanner skill，幫我安裝程式、引導我完成第一次掃描，並存下最後的 HTML 報告。
 
-- **ZAP：**對一個核准來源進行可選的被動網站檢查。
-- **Agentic Radar：**選擇五種框架之一，離線盤點工作流程。
-- **Garak：**四個固定原生模型探針共 54 個提示，需精確 HTTPS／模型確認、一次性本機金鑰，以及明確請求限制與服務商費用。
-- 改善涵蓋範圍判定、精確授權的 Greenbone 復原、HTML 平板版面、M365 平台辨識，並提供可重現的引擎建置更新筆記。
+這裡有 [Claude Code 指引](.claude/skills/ai-security-scanner/SKILL.md)與 [Codex 指引](.codex/skills/ai-security-scanner/SKILL.md)。如果助手在另一台機器上，它可以提供操作說明與下載連結，無法直接替你的電腦安裝。[查看使用方式](docs/getting-started.zh-TW.md#透過-agent-skill-使用)。
 
-詳見 [v0.4.0 發布紀錄](docs/release/v0.4.0.zh-TW.md)。
+## 資料放在哪裡？權限會留下嗎？
 
-## v0.3.1 的先前更新
+專案、檢查結果與證據存放在你的電腦。本機程式碼檢查不會上傳或執行專案；網站與雲端檢查會連到你核准的服務。儲存 HTML 報告只會建立本機檔案，是否分享由你決定。
 
-- 雲端結果說明實際失敗原因；需要相同修正的 AWS 發現合併呈現，保留原始證據。
-- 唯讀連線過期後，可直接重新連接再掃描。
-- Semgrep 提供 1,493 條固定的舊版上游規則與四條產品規則。
-- kube-bench 人工檢查與 KICS 執行失敗會標示涵蓋範圍未完成。
+雲端登入與雲端權限是兩件事。登入可能已經過期，但設定時建立的權限仍然存在。Microsoft 365 有可選用的[清理 script](cloud-setup/README.md)：等指定掃描結束、存下報告，再撤除紀錄中的設定變更。AWS 也新增了[掃描專用存取與清理](cloud-setup/README.md#aws-專用存取與清理)。執行時須保持清理視窗開啟；管理員登入過期時可能需要重新登入。這些還不是桌面程式的預設動作，也不會一併撤除缺少建立紀錄的舊 AWS 或 Azure 權限。
 
-安裝檔實際驗證與待擁有者操作的 Microsoft 365 複驗，請見[發布紀錄](docs/release/v0.3.1.zh-TW.md)。
+## 報告背後有哪些工具？
 
-## 串接的工具
+程式整合了 25 個開源工具。各工具負責原本的安全檢查，程式再整理結果、說明處理順序。想了解用途、限制與版本，可以閱讀[工具指南](https://teddashh.github.io/ai-security-scanner/scanner-guide.html?lang=zh-TW)。
 
-v0.4.0 正式版整合 25 個上游專案，包含可選的 ZAP 被動網站檢查、Agentic Radar 離線工作流程盤點，以及受限的 Garak 模型檢查。Garak 需要精確 HTTPS 端點與模型、新的本機金鑰，以及 54 個固定原生提示和服務商費用的明確核准。研究用候選不是目前的掃描能力。詳見[開發狀態](docs/development-status.zh-TW.md)。產品只會針對每個選定資產執行適用工具，保留原始識別碼、嚴重度、證據與修正建議，再把所有已完成結果整理到同一份報告。
-
-**選定資產與授權 → 薄層轉接器 → 上游掃描器 → 輸出轉換器 → 一份依資產整理的標準化報告**
-
-偵測規則沿用上游；產品的排序、去重與白話說明集中在共用報告層。
+<details>
+<summary>展開各工具的技術資料</summary>
 
 ### 程式碼專案、相依套件與基礎設施即程式碼
 
@@ -144,22 +120,19 @@ v0.4.0 正式版整合 25 個上游專案，包含可選的 ZAP 被動網站檢�
 
 完整掃描界線與設定行為請參閱[掃描範圍](docs/scanning-scope.zh-TW.md)。
 
-## 資料與授權
+仍在評估中的工具另行記錄，還不能用來掃描。
 
-案件、問題與證據會保留在裝置上，直到使用者連接外部來源或匯出報告。本機資料夾會複製成有界的唯讀副本；網路掃描器只會接觸確認頁面列出的目標與連接埠。
 
-網路掃描只適用於自行擁有或已獲准評估的資產。應用程式不會自動套用修正。
+</details>
 
-## 文件
+## 更多說明
 
 - [開始使用](docs/getting-started.zh-TW.md)
 - [掃描範圍](docs/scanning-scope.zh-TW.md)
-- [結果與匯出](docs/results-and-exports.zh-TW.md)
-- [文件索引](docs/README.zh-TW.md)
+- [閱讀與分享結果](docs/results-and-exports.zh-TW.md)
 - [目前開發狀態](docs/development-status.zh-TW.md)
-- [參與開發](CONTRIBUTING.md)
-- [貢獻者](CONTRIBUTORS.md)
-- [安全政策](SECURITY.md)
+- [v0.4.0 更新](docs/release/v0.4.0.zh-TW.md) · [v0.3.1 更新](docs/release/v0.3.1.md)
+- [參與開發](CONTRIBUTING.md) · [貢獻者](CONTRIBUTORS.md) · [安全政策](SECURITY.md)
 
 ## 開發
 

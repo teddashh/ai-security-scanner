@@ -622,7 +622,7 @@ const copy = {
   reportConnectionOnly: { en: "Connection result only", zhTW: "僅連線結果" },
   reportInventoryOnly: { en: "Service inventory only", zhTW: "僅完成服務盤點" },
   reportNonSecurityOnly: { en: "Inventory or connectivity only", zhTW: "僅完成盤點或連線工作" },
-  reportPartial: { en: "Completed with gaps", zhTW: "已完成，但有涵蓋缺口" },
+  reportPartial: { en: "Some checks are incomplete", zhTW: "部分檢查未完成" },
   reportNoChecks: { en: "No checks completed", zhTW: "沒有完成任何檢查" },
   reportRun: { en: "Report run", zhTW: "報告輪次" },
   finishedRunWhileScanning: {
@@ -644,7 +644,7 @@ const copy = {
   unattributedCount: { en: "Not linked to your asset", zhTW: "未連結到你的資產" },
   manualReviewCount: { en: "No automated verdict", zhTW: "未回傳自動判定" },
   coverageGaps: { en: "Recorded coverage gaps", zhTW: "已記錄的涵蓋缺口" },
-  coverageAttention: { en: "Coverage gaps and checks without verdicts", zhTW: "涵蓋缺口與未回傳判定的檢查" },
+  coverageAttention: { en: "Unfinished checks and results to review", zhTW: "未完成的檢查與待判讀結果" },
   recordNotes: { en: "Record notes", zhTW: "記錄備註" },
   reportFindings: { en: "Problems found", zhTW: "發現的問題" },
   askedTitle: { en: "What you asked to scan", zhTW: "你要求掃描的內容" },

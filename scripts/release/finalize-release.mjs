@@ -297,6 +297,40 @@ const RELEASE_COPY = new Map([
     },
   ],
   [
+    "0.4.1",
+    {
+      updaterNotes:
+        "Attach original scanner reports to English or Traditional Chinese HTML reports, with clearer results and safer temporary credential cleanup. 中英文 HTML 報告可附上原始掃描報告，並改善結果說明與臨時憑證清理。",
+      releaseNotes: [
+        "ai-security-scanner 0.4.1 is the stable desktop release for Linux, macOS, and Windows.",
+        "",
+        "- HTML exports can include original scanner reports and supporting files as downloadable ZIP attachments at the end of the document. Files retain their exact bytes and folder structure, with a SHA-256 manifest for each scanner run.",
+        "- English and Traditional Chinese exports support full, unredacted reports. Attachments are optional and require unredacted export; only the selected scan is included. Embedded attachments remain in the HTML file and are not carried into printed PDFs.",
+        "- Results, public sample reports and scanner guides use clearer descriptions of findings, incomplete checks and next steps.",
+        "- Temporary credential files are covered by cleanup immediately after creation, including later validation failures. Existing files are preserved.",
+        "- AWS and Microsoft 365 setup helpers can record temporary access and use companion cleanup scripts to wait for a selected scan, save its report, and revoke recorded access. These are explicitly started helper workflows, not automatic desktop cleanup. New full live-cloud and Windows PowerShell 5.1 flows remain unobserved.",
+        "",
+        "### 繁體中文",
+        "",
+        "0.4.1 為 Linux、macOS 與 Windows 的正式版。",
+        "",
+        "- HTML 報告最後可附上原始掃描報告與支援檔案，以 ZIP 下載；保留原始位元組與資料夾結構，每個掃描工具都有 SHA-256 檔案清單。",
+        "- 支援英文與繁體中文的未遮蔽完整報告。附件預設關閉，僅在未遮蔽匯出時提供，且只包含選定掃描；附件保留在 HTML 中，列印成 PDF 不會攜帶附件。",
+        "- 結果、公開範例報告與工具指南改用更清楚的發現、未完成檢查及下一步說明。",
+        "- 臨時憑證檔建立後立即納入清理保護，後續驗證失敗也會清理；既有檔案保留。",
+        "- AWS 與 Microsoft 365 設定輔助程式可記錄臨時存取，搭配清理程式等待指定掃描、保存報告與撤除記錄中的權限；需明確啟動，尚非桌面預設收尾。新版完整真實雲端流程與 Windows PowerShell 5.1 實測仍未觀察。",
+        "",
+        "Windows installers are unsigned; macOS is not notarized. / Windows 安裝檔未簽章，macOS 尚未公證。",
+        "",
+        "On macOS, drag the app to Applications, then remove quarantine from this app if macOS blocks it:",
+        "macOS 請先將程式拖入 Applications；若系統阻擋開啟，再針對此程式移除隔離標記：",
+        "",
+        "    xattr -dr com.apple.quarantine /Applications/ai-security-scanner.app",
+        "",
+      ],
+    },
+  ],
+  [
     "1.0.0",
     {
       updaterNotes:

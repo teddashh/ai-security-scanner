@@ -725,7 +725,7 @@ struct ExportCreateArgs {
     /// Readable HTML presentation locale. Canonical scan facts stay unchanged.
     #[arg(long, value_enum, default_value_t = ReportLocaleArg::En)]
     locale: ReportLocaleArg,
-    /// Bundle only. Raw artifacts may contain sensitive provider or target data.
+    /// HTML or bundle. Attach original files, which may contain sensitive data.
     #[arg(long, requires = "acknowledge_sensitive_raw_artifacts")]
     include_raw_artifacts: bool,
     /// Explicit acknowledgement required with --include-raw-artifacts.
@@ -2137,9 +2137,15 @@ fn execute_export(
 ) -> AppResult<()> {
     match command {
         ExportCommand::Create(args) => {
-            if args.include_raw_artifacts && !matches!(args.format, ExportFormatArg::CaseBundle) {
+            if args.include_raw_artifacts
+                && !matches!(
+                    args.format,
+                    ExportFormatArg::CaseBundle | ExportFormatArg::Html
+                )
+            {
                 return Err(AppError::InvalidRequest(
-                    "raw artifacts can only be included in the signed case bundle format".into(),
+                    "original files can only be included in HTML reports or signed case bundles"
+                        .into(),
                 ));
             }
             let export = service.export_case(

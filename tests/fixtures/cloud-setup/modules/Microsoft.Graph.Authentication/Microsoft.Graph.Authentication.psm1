@@ -15,6 +15,12 @@ function Save-FakeState($State) {
     Set-Content -LiteralPath $env:FAKE_GRAPH_STATE -Value (ConvertTo-Json -InputObject $State -Depth 20)
 }
 
+function Throw-FakeNotFound {
+    $exception = [Exception]::new('Resource not found.')
+    $exception | Add-Member -NotePropertyName ResponseStatusCode -NotePropertyValue 404
+    throw $exception
+}
+
 function New-FakeId { [guid]::NewGuid().ToString() }
 
 function Read-TokenClaims([string] $Token) {
@@ -49,6 +55,12 @@ function Connect-MgGraph {
             contextScope = $ContextScope
         }
     }
+    if ($state['helperConsentOnConnect']) {
+        $grant = $state['helperConsentOnConnect']
+        $current = @($state['oauth2PermissionGrants'] | Where-Object { $_['id'] -eq $grant['id'] })
+        if ($current.Count) { $current[0]['scope'] = $grant['scope'] }
+        else { $state['oauth2PermissionGrants'] += , $grant }
+    }
     Save-FakeState $state
     $script:Connected = $true
 }
@@ -82,6 +94,13 @@ function Invoke-RestMethod {
             }
         }
         '^https://login\.microsoftonline\.com/[^/]+/oauth2/v2\.0/token$' {
+            if ($Body['grant_type'] -eq 'refresh_token') {
+                if ($Body['refresh_token'] -ne $signIn['refreshToken'] -or $state['denyRefresh']) { throw 'Refresh token rejected.' }
+                $state['expiredToken'] = $false
+                $state['refreshCount'] = [int] $state['refreshCount'] + 1
+                Save-FakeState $state
+                return [pscustomobject]@{ token_type = 'Bearer'; expires_in = 3599; access_token = $signIn['token']; refresh_token = $signIn['refreshToken'] }
+            }
             if ($Body['device_code'] -ne 'fake-device-code') { throw 'the token request did not carry the issued device code' }
             $refusal = $null
             if ($signIn['pending'] -gt 0) {
@@ -102,7 +121,7 @@ function Invoke-RestMethod {
                 $record.ErrorDetails = [Management.Automation.ErrorDetails]::new((ConvertTo-Json -InputObject $refusal -Compress))
                 throw $record
             }
-            return [pscustomobject]@{ token_type = 'Bearer'; expires_in = 3599; access_token = $signIn['token'] }
+            return [pscustomobject]@{ token_type = 'Bearer'; expires_in = 3599; access_token = $signIn['token']; refresh_token = $signIn['refreshToken'] }
         }
         default { throw "the fake does not answer $Method $Uri" }
     }
@@ -142,6 +161,20 @@ function Invoke-MgGraphRequest {
             }
         }
     }
+    if ($state['expiredToken']) {
+        $exception = [Exception]::new('Access token expired.')
+        $exception | Add-Member -NotePropertyName Response -NotePropertyValue ([pscustomobject]@{ StatusCode = 401 })
+        throw $exception
+    }
+    if ($state['failDelete'] -and $Method -eq 'DELETE') { throw 'Simulated permission denied (403).' }
+    if ($state['pauseBeforeUri'] -eq $Uri -and $Method -eq 'POST') {
+        Set-Content -LiteralPath (Join-Path $env:HOME 'graph-paused') -Value 'paused'
+        $deadline = (Get-Date).AddSeconds(15)
+        while (-not (Test-Path -LiteralPath (Join-Path $env:HOME 'graph-continue'))) {
+            if ((Get-Date) -ge $deadline) { throw 'Mock pause timeout.' }
+            Start-Sleep -Milliseconds 25
+        }
+    }
     $request = if ($Body) { ConvertFrom-Json -InputObject $Body -AsHashtable } else { $null }
     $list = {
         param([string] $Collection)
@@ -154,12 +187,36 @@ function Invoke-MgGraphRequest {
         "^GET v1\.0/servicePrincipals\(appId='00000003-0000-0000-c000-000000000000'\)$" {
             return $state['graphServicePrincipal']
         }
+        '^GET v1\.0/(applications|servicePrincipals|oauth2PermissionGrants)/([^/]+)$' {
+            $collection, $id = $Matches[1], $Matches[2]
+            $found = @($state[$collection] | Where-Object { $_['id'] -eq $id })
+            if (-not $found.Count) { Throw-FakeNotFound }
+            if ($state['changeAppOnRead'] -and $collection -eq 'applications') {
+                $found[0]['requiredResourceAccess'] += , $state['changeAppOnRead']
+                $state['changeAppOnRead'] = $null
+                Save-FakeState $state
+            }
+            return $found[0]
+        }
+        '^DELETE v1\.0/(applications|servicePrincipals|oauth2PermissionGrants)/([^/]+)$' {
+            $collection, $id = $Matches[1], $Matches[2]
+            if ($state['ignoreDelete']) { return $null }
+            $state[$collection] = @($state[$collection] | Where-Object { $_['id'] -ne $id })
+            Save-FakeState $state
+            return $null
+        }
+        '^GET v1\.0/(servicePrincipals/[^/]+/(appRoleAssignments|appRoleAssignedTo)|applications/[^/]+/federatedIdentityCredentials)$' {
+            return @{ value = @() }
+        }
         '^GET v1\.0/applications$' { return & $list 'applications' }
         '^POST v1\.0/applications$' {
             $app = @{
                 id                     = New-FakeId
                 appId                  = New-FakeId
                 displayName            = $request['displayName']
+                description            = $request['description']
+                passwordCredentials    = @()
+                keyCredentials         = @()
                 signInAudience         = $request['signInAudience']
                 isFallbackPublicClient = $request['isFallbackPublicClient']
                 requiredResourceAccess = @($request['requiredResourceAccess'])
@@ -181,18 +238,26 @@ function Invoke-MgGraphRequest {
             if ($state['replicationDelays'] -gt 0) {
                 $state['replicationDelays'] -= 1
                 Save-FakeState $state
-                throw 'Response status code does not indicate success: BadRequest (Bad Request).'
+                $exception = [Exception]::new('Bad Request: replication delayed.')
+                $exception | Add-Member -NotePropertyName ResponseStatusCode -NotePropertyValue 400
+                throw $exception
             }
             if (-not @($state['applications'] | Where-Object { $_['appId'] -eq $request['appId'] }).Count) {
                 throw 'Response status code does not indicate success: BadRequest (Bad Request).'
             }
-            $principal = @{ id = New-FakeId; appId = $request['appId'] }
+            $principal = @{ id = New-FakeId; appId = $request['appId']; tags = @($request['tags']) }
             $state['servicePrincipals'] += , $principal
             Save-FakeState $state
+            if ($state['losePrincipalResponse']) { throw 'Simulated lost creation response.' }
             return $principal
         }
         '^GET v1\.0/oauth2PermissionGrants$' { return & $list 'oauth2PermissionGrants' }
         '^POST v1\.0/oauth2PermissionGrants$' {
+            if ($state['denyGrantCreate']) {
+                $exception = [Exception]::new('Permission denied.')
+                $exception | Add-Member -NotePropertyName ResponseStatusCode -NotePropertyValue 403
+                throw $exception
+            }
             $grant = @{
                 id          = New-FakeId
                 clientId    = $request['clientId']

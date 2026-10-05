@@ -856,7 +856,7 @@ impl ScannerCredentialSet {
         Ok(())
     }
 
-    fn write_envelope(&self, path: &Path) -> AppResult<()> {
+    fn write_envelope(&self, path: &Path) -> AppResult<SecretFileGuard> {
         #[derive(Serialize)]
         struct Envelope<'a> {
             schema_version: &'static str,
@@ -887,20 +887,39 @@ impl ScannerCredentialSet {
         let bytes = Zeroizing::new(serde_json::to_vec(&envelope).map_err(|error| {
             AppError::Internal(format!("credential envelope could not be encoded: {error}"))
         })?);
-        let mut file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(path)
-            .map_err(|error| {
-                AppError::Runtime(format!(
-                    "protected credential channel could not be created: {error}"
-                ))
-            })?;
+        let mut options = OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let file = options.open(path).map_err(|error| {
+            AppError::Runtime(format!(
+                "protected credential channel could not be created: {error}"
+            ))
+        })?;
+        // Take ownership immediately after create_new succeeds. Permission,
+        // write, sync, canonicalization and hashing failures must all remove
+        // this file, while a pre-existing file must never be touched.
+        let mut guard = SecretFileGuard {
+            path: path.to_path_buf(),
+            sha256: String::new(),
+            cleaned: false,
+        };
+        // Drop the open handle before the guard on an error (also on Windows).
+        let mut file = file;
         restrict_secret_file(path, false)?;
         file.write_all(bytes.as_slice())?;
         file.sync_all()?;
         restrict_secret_file(path, true)?;
-        Ok(())
+        guard.path = canonical_mount_path(path, "credential channel")?;
+        guard.sha256 = hash_bounded_control_file(
+            &guard.path,
+            MAX_CREDENTIAL_DOCUMENT_BYTES,
+            "credential channel",
+        )?;
+        Ok(guard)
     }
 }
 
@@ -932,15 +951,7 @@ impl SecretFileGuard {
         getrandom::fill(&mut nonce)
             .map_err(|_| AppError::Internal("operating system random source failed".into()))?;
         let path = control_dir.join(format!("credentials-{}.json", hex::encode(nonce)));
-        credentials.write_envelope(&path)?;
-        let path = canonical_mount_path(&path, "credential channel")?;
-        let sha256 =
-            hash_bounded_control_file(&path, MAX_CREDENTIAL_DOCUMENT_BYTES, "credential channel")?;
-        Ok(Some(Self {
-            path,
-            sha256,
-            cleaned: false,
-        }))
+        credentials.write_envelope(&path).map(Some)
     }
 
     fn validate_integrity(&self) -> AppResult<()> {
@@ -6362,6 +6373,42 @@ esac\n",
             libc::kill(pid, 0) == -1
                 && io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH)
         });
+    }
+
+    #[test]
+    fn credential_envelope_validation_failure_removes_the_created_file() {
+        let temp = tempfile::tempdir().expect("private test directory");
+        let path = temp.path().join("credential.json");
+        let credentials = ScannerCredentialSet::new(vec![
+            ScannerCredential::ephemeral_read_only(
+                "AWS_SESSION_TOKEN",
+                "x".repeat(MAX_CREDENTIAL_DOCUMENT_BYTES as usize + 1),
+                Utc::now() + Duration::minutes(10),
+                CredentialSource::EphemeralScanRole,
+            )
+            .expect("test credential"),
+        ])
+        .expect("test credential set");
+
+        assert!(credentials.write_envelope(&path).is_err());
+        assert!(
+            !path.exists(),
+            "failed creation must not leave secret bytes"
+        );
+    }
+
+    #[test]
+    fn credential_envelope_creation_never_removes_an_existing_file() {
+        let temp = tempfile::tempdir().expect("private test directory");
+        let path = temp.path().join("existing.json");
+        fs::write(&path, b"unrelated data").expect("existing file");
+
+        assert!(
+            ScannerCredentialSet::default()
+                .write_envelope(&path)
+                .is_err()
+        );
+        assert_eq!(fs::read(&path).unwrap(), b"unrelated data");
     }
 
     #[test]

@@ -9,8 +9,8 @@
       "id": "cloudquery",
       "category": "cloud",
       "purpose": {
-        "en": "AWS IAM inventory: establish which identities and policies exist.",
-        "zh-TW": "AWS IAM 身分與政策盤點：先掌握帳號裡有哪些資源。"
+        "en": "Lists selected AWS identities and permission policies. This inventory is kept separate from security findings.",
+        "zh-TW": "整理部分 AWS 身分與權限政策，作為盤點資料，和安全問題分開列出。"
       },
       "upstream": {
         "en": "CloudQuery moves structured API data into destinations that can be queried and compared. Its CLI, source plugin and destination plugin are independently versioned; recording only the CLI version does not identify the data collection behavior.",
@@ -57,8 +57,8 @@
       "id": "steampipe",
       "category": "cloud",
       "purpose": {
-        "en": "Query AWS IAM resources as SQL-shaped inventory.",
-        "zh-TW": "以 SQL 形式查詢 AWS IAM 資源底冊。"
+        "en": "Lists AWS users and selected account settings so you can review who has access.",
+        "zh-TW": "列出 AWS 使用者與部分帳號設定，方便了解哪些人可以存取。"
       },
       "upstream": {
         "en": "Steampipe exposes APIs through SQL tables using provider plugins. That makes cloud metadata available in a familiar relational model, while the plugin determines which services and columns can be queried.",
@@ -105,8 +105,8 @@
       "id": "prowler",
       "category": "cloud",
       "purpose": {
-        "en": "Evaluate identity and access configuration in AWS, Azure or GCP.",
-        "zh-TW": "評估 AWS、Azure 或 GCP 的身分與存取設定。"
+        "en": "Checks selected identity and permission settings in an approved AWS account, Azure subscription or GCP project.",
+        "zh-TW": "檢查核准的 AWS 帳號、Azure 訂用帳戶或 GCP 專案中的部分身分與權限設定。"
       },
       "upstream": {
         "en": "Prowler is a cloud security assessment project with provider-specific checks and remediation guidance. Its upstream platform is broader than the narrow provider profiles selected by this desktop integration.",
@@ -153,8 +153,8 @@
       "id": "scoutsuite",
       "category": "cloud",
       "purpose": {
-        "en": "Review the AWS IAM configuration snapshot with ScoutSuite rules.",
-        "zh-TW": "以上游 ScoutSuite 規則檢視 AWS IAM 設定快照。"
+        "en": "Checks selected AWS identity and access settings. This app uses a limited part of ScoutSuite.",
+        "zh-TW": "檢查部分 AWS 身分與存取設定。本程式使用的是 ScoutSuite 的部分功能。"
       },
       "upstream": {
         "en": "ScoutSuite collects cloud configuration through provider APIs and identifies risky configurations for review. Upstream supports a wider multi-cloud assessment workflow and its own presentation.",
@@ -201,8 +201,8 @@
       "id": "cloudsplaining",
       "category": "cloud",
       "purpose": {
-        "en": "Explain excessive AWS IAM policy permissions and least-privilege risks.",
-        "zh-TW": "解釋 AWS IAM 政策的過度權限與最小權限風險。"
+        "en": "Reviews collected AWS permission policies for access that may be broader than needed.",
+        "zh-TW": "分析收集到的 AWS 權限政策，找出可能給得太多的權限。"
       },
       "upstream": {
         "en": "Cloudsplaining specializes in AWS IAM policy analysis. It examines authorization data and classifies risky permissions such as privilege escalation, data access or infrastructure-changing capabilities.",
@@ -249,8 +249,8 @@
       "id": "scubagear",
       "category": "m365",
       "purpose": {
-        "en": "Assess Microsoft Entra ID against the selected CISA SCuBA baseline.",
-        "zh-TW": "依選定的 CISA SCuBA 基準評估 Microsoft Entra ID。"
+        "en": "Compares supported Microsoft 365 settings with CISA security guidance.",
+        "zh-TW": "依照美國 CISA 的安全建議，檢查支援的 Microsoft 365 設定。"
       },
       "upstream": {
         "en": "CISA ScubaGear evaluates Microsoft 365 tenant configuration against published SCuBA secure configuration baselines. Upstream has separate product assessments; a baseline result must identify which product was actually assessed.",
@@ -297,8 +297,8 @@
       "id": "maester",
       "category": "m365",
       "purpose": {
-        "en": "Run repeatable Microsoft Entra security-configuration tests.",
-        "zh-TW": "執行可重複的 Microsoft Entra 安全設定測試。"
+        "en": "Tests supported Microsoft 365 security settings and explains which checks need attention.",
+        "zh-TW": "檢查支援的 Microsoft 365 安全設定，列出需要注意的項目。"
       },
       "upstream": {
         "en": "Maester is a PowerShell-based test framework for Microsoft 365 security configuration. Tests express expected settings and retain a verdict that can be reviewed over time.",
@@ -345,8 +345,8 @@
       "id": "naabu",
       "category": "network",
       "purpose": {
-        "en": "Discover open TCP ports on exact approved targets.",
-        "zh-TW": "在精確核准目標上探索開放 TCP 連接埠。"
+        "en": "Shows which approved ports accept connections. An open port is information to investigate, not proof of a vulnerability.",
+        "zh-TW": "查看核准的連接埠是否接受連線。連接埠開著值得了解，但不代表有漏洞。"
       },
       "upstream": {
         "en": "Naabu is a network port-discovery tool. Upstream offers several scan methods and discovery options; this product binds its invocation to a frozen work plan instead of exposing an unrestricted port-scanning command.",
@@ -393,8 +393,8 @@
       "id": "httpx",
       "category": "network",
       "purpose": {
-        "en": "Collect HTTP reachability and response metadata.",
-        "zh-TW": "收集 HTTP 可達性與回應中繼資料。"
+        "en": "Checks whether a selected web service responds and records basic response information. It does not assess vulnerabilities.",
+        "zh-TW": "確認選定的網站服務是否回應，並記錄基本資訊；這不是漏洞檢查。"
       },
       "upstream": {
         "en": "ProjectDiscovery httpx is an HTTP probing toolkit, distinct from the Python HTTPX client library. Its probes help characterize responding web services; a response alone does not diagnose a vulnerability.",
@@ -441,8 +441,8 @@
       "id": "nuclei",
       "category": "network",
       "purpose": {
-        "en": "Run technology-aware vulnerability and exposure templates against a website.",
-        "zh-TW": "對網站執行依技術選擇的弱點與曝露範本。"
+        "en": "Identifies website technologies, then runs suitable read-only checks within the approved address and limits.",
+        "zh-TW": "先辨識網站使用的技術，再於核准的網址與限制內執行適用的唯讀檢查。"
       },
       "upstream": {
         "en": "Nuclei evaluates targets using upstream YAML templates. The template repository supplies detector logic and evolves independently of the engine, so the engine and template revisions must both be identified.",
@@ -489,8 +489,8 @@
       "id": "greenbone",
       "category": "network",
       "purpose": {
-        "en": "Perform service-aware remote checks on approved internal hosts and ports.",
-        "zh-TW": "對核准內部主機與連接埠執行依服務適用的遠端檢查。"
+        "en": "Identifies services on approved hosts and ports, then runs the security checks that apply.",
+        "zh-TW": "辨識核准主機與連接埠上的服務，再執行適合的安全檢查。"
       },
       "upstream": {
         "en": "Greenbone OpenVAS Scanner executes vulnerability tests from its feed, using service detection and test dependencies to determine applicability. The engine and feed are separate inputs; a current engine with an old feed has different knowledge from a refreshed assessment.",
@@ -537,8 +537,8 @@
       "id": "zap",
       "category": "network",
       "purpose": {
-        "en": "Crawl one website origin and inspect observed responses with passive rules.",
-        "zh-TW": "爬取單一網站來源，以上游被動規則檢查觀察到的回應。"
+        "en": "Visits pages on one approved website and checks the responses. It does not submit forms or send attack payloads.",
+        "zh-TW": "瀏覽一個核准網站的頁面並檢查回應，不會送出表單或攻擊內容。"
       },
       "upstream": {
         "en": "ZAP is a web application security testing project with proxy, crawling, passive and active capabilities. Passive scanning analyzes messages it observes; it is a specific part of the much broader upstream tool.",
@@ -585,8 +585,8 @@
       "id": "semgrep",
       "category": "repository",
       "purpose": {
-        "en": "Find security-relevant code patterns in a saved project.",
-        "zh-TW": "在保存的專案中尋找與安全相關的程式碼模式。"
+        "en": "Finds risky patterns in code, using the rule set included with this version.",
+        "zh-TW": "依照本版提供的規則，找出程式碼中可能不安全的寫法。"
       },
       "upstream": {
         "en": "Semgrep analyzes source code with declarative rules. Language support, rule selection and Community Edition capabilities determine what can be observed without compiling or executing the target project.",
@@ -633,8 +633,8 @@
       "id": "gitleaks",
       "category": "repository",
       "purpose": {
-        "en": "Detect credential-like strings and hardcoded secrets in local files.",
-        "zh-TW": "偵測本機檔案中的憑證樣式字串與硬編碼祕密。"
+        "en": "Looks for passwords and keys left in project files. Values are hidden in the report.",
+        "zh-TW": "找出專案檔案裡可能留下的密碼與金鑰，報告會隱藏它們的內容。"
       },
       "upstream": {
         "en": "Gitleaks detects secrets using its scanner-owned rules and pattern context. It supports workflows beyond the file snapshot used here; the scan mode matters when interpreting what was searched.",
@@ -681,8 +681,8 @@
       "id": "trufflehog",
       "category": "repository",
       "purpose": {
-        "en": "Find exposed credential patterns using TruffleHog’s native detectors.",
-        "zh-TW": "以 TruffleHog 原生偵測器尋找曝露憑證模式。"
+        "en": "Looks for exposed secrets in local files. It does not try the credentials against a live service.",
+        "zh-TW": "在本機檔案裡找出可能外洩的密碼與金鑰，不會拿它們登入服務。"
       },
       "upstream": {
         "en": "TruffleHog provides detector families for many credential types and supports multiple source and verification workflows. The available upstream online verification feature is deliberately disabled in this product’s local scan.",
@@ -729,8 +729,8 @@
       "id": "checkov",
       "category": "repository",
       "purpose": {
-        "en": "Find risky infrastructure and deployment configuration before it is applied.",
-        "zh-TW": "在基礎設施與部署設定套用前找出風險。"
+        "en": "Checks supported deployment and infrastructure files for unsafe settings.",
+        "zh-TW": "檢查支援的部署與基礎設施設定檔，找出不安全的設定。"
       },
       "upstream": {
         "en": "Checkov provides policy checks for infrastructure as code, container configuration and delivery pipelines. It understands resources and relationships rather than treating every file as plain text.",
@@ -777,8 +777,8 @@
       "id": "kics",
       "category": "repository",
       "purpose": {
-        "en": "Detect insecure settings in infrastructure-as-code files.",
-        "zh-TW": "偵測基礎設施即程式碼檔案中的不安全設定。"
+        "en": "Looks for unsafe settings in files that describe how your systems are deployed.",
+        "zh-TW": "檢查用來部署系統的設定檔，找出可能造成風險的設定。"
       },
       "upstream": {
         "en": "KICS evaluates infrastructure definitions with a library of security queries across formats such as Terraform, CloudFormation, Kubernetes and Dockerfile. Its results connect a query to individual file locations.",
@@ -825,8 +825,8 @@
       "id": "trivy",
       "category": "repository",
       "purpose": {
-        "en": "Match installed or declared software versions against vulnerability advisories.",
-        "zh-TW": "將已安裝或宣告的軟體版本與漏洞公告比對。"
+        "en": "Checks supported project and container packages against the included vulnerability database.",
+        "zh-TW": "用內附的漏洞資料庫，檢查支援的專案與容器套件。"
       },
       "upstream": {
         "en": "Trivy has capabilities for vulnerability, misconfiguration, secret and other security checks across multiple target types. This integration deliberately selects its vulnerability scanner and fixed offline databases.",
@@ -873,8 +873,8 @@
       "id": "grype",
       "category": "repository",
       "purpose": {
-        "en": "Identify known vulnerabilities in software packages and container contents.",
-        "zh-TW": "辨識軟體套件及容器內容中的已知漏洞。"
+        "en": "Finds known vulnerabilities in supported project and container packages using the included database.",
+        "zh-TW": "使用內附資料庫，找出支援的專案與容器套件是否有已知漏洞。"
       },
       "upstream": {
         "en": "Grype matches software components to vulnerability data and reports the affected package, advisory and available fix. It works with package catalogs, directories and container-related inputs.",
@@ -921,8 +921,8 @@
       "id": "syft",
       "category": "repository",
       "purpose": {
-        "en": "List the software components present in a selected project or container image.",
-        "zh-TW": "列出所選專案或容器映像內的軟體元件。"
+        "en": "Lists the software components in your project or container. The list helps you track what is installed.",
+        "zh-TW": "列出專案或容器裡的軟體元件，幫你掌握用了哪些東西；清單本身不是漏洞報告。"
       },
       "upstream": {
         "en": "Syft generates software bills of materials by identifying packages in directories and container images. Its component inventory can be used by vulnerability tools and supply-chain workflows.",
@@ -969,8 +969,8 @@
       "id": "kubescape",
       "category": "kubernetes",
       "purpose": {
-        "en": "Check saved Kubernetes resource definitions for insecure configuration.",
-        "zh-TW": "檢查已儲存的 Kubernetes 資源定義是否含不安全設定。"
+        "en": "Checks the Kubernetes configuration files you select, without connecting to a running cluster.",
+        "zh-TW": "檢查你選好的 Kubernetes 設定檔，不會連到正在運作的叢集。"
       },
       "upstream": {
         "en": "Kubescape offers Kubernetes posture and security capabilities spanning configuration assessment and broader cluster workflows. This product selects its offline manifest assessment with a pinned framework and policy library.",
@@ -1017,8 +1017,8 @@
       "id": "kube-bench",
       "category": "kubernetes",
       "purpose": {
-        "en": "Evaluate Kubernetes node hardening against the selected CIS node benchmark.",
-        "zh-TW": "依所選 CIS 節點基準評估 Kubernetes 節點強化設定。"
+        "en": "Checks a saved copy of node settings against CIS guidance. It does not inspect a live host with administrator access.",
+        "zh-TW": "依照 CIS 建議檢查節點設定的副本，不會取得管理員權限來檢查運作中的主機。"
       },
       "upstream": {
         "en": "kube-bench runs benchmark checks against Kubernetes configuration and process facts. Its native outcomes include PASS, FAIL and WARN; some checks require information or judgment that automation cannot supply.",
@@ -1065,8 +1065,8 @@
       "id": "garak",
       "category": "ai",
       "purpose": {
-        "en": "Probe an approved model endpoint for selected undesirable response behaviors.",
-        "zh-TW": "對已核准的模型端點探測特定不當回應行為。"
+        "en": "Sends 54 fixed test prompts to one approved model service. Review the request limits and provider charges before starting.",
+        "zh-TW": "對一個核准的模型服務送出 54 個固定測試提示。開始前請確認請求限制與服務商費用。"
       },
       "upstream": {
         "en": "NVIDIA garak is an LLM vulnerability scanner with probe, generator and detector plugins. The full upstream project supports many research workflows; this product exposes one deliberately bounded native probe profile.",
@@ -1113,8 +1113,8 @@
       "id": "agentic-radar",
       "category": "ai",
       "purpose": {
-        "en": "Map the static structure of an agentic application: agents, tools and their connections.",
-        "zh-TW": "盤點代理式應用程式的靜態結構：代理、工具及其連線。"
+        "en": "Maps agents, tools and connections in supported AI workflows without running them.",
+        "zh-TW": "整理支援的 AI 工作流程，讓你看懂有哪些代理、工具與連線，不會執行那些流程。"
       },
       "upstream": {
         "en": "Agentic Radar analyzes agentic workflows and provides architecture and security-oriented analysis capabilities. Our integration selects its framework parsers and graph inventory, not the complete upstream analysis workflow.",
@@ -1161,8 +1161,8 @@
       "id": "mcp-armor",
       "category": "ai",
       "purpose": {
-        "en": "Check a selected MCP configuration for hardcoded secrets and excessive tool permissions.",
-        "zh-TW": "檢查所選 MCP 設定中的硬編碼機密資料與過大工具權限。"
+        "en": "Checks a selected MCP configuration for exposed keys and overly broad tool permissions. It does not start or contact MCP servers.",
+        "zh-TW": "檢查選定的 MCP 設定是否留下金鑰，或給了工具過大的權限；不會啟動或連線 MCP 伺服器。"
       },
       "upstream": {
         "en": "MCP Armor provides security checks for Model Context Protocol configurations and related workflows. The product isolates two existing native static checks in a configuration-only mode.",

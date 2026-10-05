@@ -106,8 +106,8 @@ impl ReportLocale {
 pub struct ExportOptions {
     #[serde(default)]
     pub redaction: RedactionProfile,
-    /// Raw artifacts are excluded by default because scanner output frequently
-    /// contains credentials, internal identifiers, and exploitable details.
+    /// Opt in to raw artifacts in case bundles or embedded HTML attachments.
+    /// Excluded by default because output may contain credentials and identifiers.
     #[serde(default)]
     pub include_raw_artifacts: bool,
     /// Presentation-only locale used by the readable HTML renderer.
@@ -2644,7 +2644,7 @@ fn validate_destination(destination: &Path) -> AppResult<()> {
     Ok(())
 }
 
-fn validate_portable_archive_path(path: &Path) -> AppResult<String> {
+pub(crate) fn validate_portable_archive_path(path: &Path) -> AppResult<String> {
     let value = path
         .to_str()
         .ok_or_else(|| AppError::InvalidRequest("archive path is not valid UTF-8".into()))?;

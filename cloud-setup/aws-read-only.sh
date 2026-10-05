@@ -15,6 +15,15 @@
 # anything; when something is in the way, it stops and says what to change.
 set -euo pipefail
 
+# Temporary access has its own receipt and a matching cleanup command. Keep
+# the long-lived SecurityAudit workflow below compatible with existing users.
+for option in "$@"; do
+  if [ "$option" = "--temporary" ]; then
+    command -v python3 >/dev/null 2>&1 || { printf '%s\n' 'Python 3 is required for temporary access.' >&2; exit 1; }
+    exec python3 "$(dirname "${BASH_SOURCE[0]}")/aws-cleanup.py" setup "$@"
+  fi
+done
+
 readonly PERMISSION_SET_NAME="SecurityAudit"
 readonly POLICY_ARN="arn:aws:iam::aws:policy/SecurityAudit"
 readonly SETUP_FILE="ai-security-scanner-aws-setup.json"
@@ -33,6 +42,7 @@ usage() {
   say "  --user     The IAM Identity Center user who will sign in to scan."
   say "             Needed only when there is more than one user."
   say "  --account  The 12-digit AWS account to scan. Defaults to this account."
+  say "  --temporary  Create dedicated scan access with a cleanup receipt (requires aws-cleanup.py)."
 }
 
 user_hint=""

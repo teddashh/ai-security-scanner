@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
@@ -339,7 +339,7 @@ const graphState = (overrides: Record<string, unknown> = {}) => ({
   ...overrides,
 });
 
-const runMicrosoft = async (dir: string, state: object, args: string[] = []) => {
+const runMicrosoft = async (dir: string, state: object, args: string[] = [], script = microsoftScript) => {
   const statePath = join(dir, "graph-state.json");
   writeFileSync(statePath, JSON.stringify(state));
   // PowerShell searches the user's own module folder before the machine-wide
@@ -350,7 +350,7 @@ const runMicrosoft = async (dir: string, state: object, args: string[] = []) => 
     mkdirSync(dirname(userModules), { recursive: true });
     symlinkSync(fakeGraphModules, userModules, "dir");
   }
-  const result = await run(pwsh, ["-NoProfile", "-NonInteractive", "-File", microsoftScript, ...args], dir, {
+  const result = await run(pwsh, ["-NoProfile", "-NonInteractive", "-File", script, ...args], dir, {
     PATH: process.env.PATH ?? "/usr/bin:/bin",
     HOME: dir,
     FAKE_GRAPH_STATE: statePath,
@@ -581,4 +581,410 @@ test("the Microsoft 365 script asks for exactly the permissions the sign-in requ
   assert.deepEqual(signInScopes, ["openid", "profile", "offline_access"]);
   assert.deepEqual(listed("SignInPermissions"), signInScopes);
   assert.doesNotMatch(source, /Invoke-Graph DELETE|-Method DELETE/u, "the script never removes anything");
+});
+
+const cleanupScript = path("../../cloud-setup/microsoft365-cleanup.ps1");
+const receiptPath = (dir: string) => join(dir, readdirSync(dir).find((file) => /^ai-security-scanner-microsoft365-cleanup-.*\.json$/u.test(file))!);
+const runCleanup = (dir: string, state: object, args: string[] = []) => runMicrosoft(dir, state, ["-ReceiptPath", receiptPath(dir), ...args], cleanupScript);
+
+test("Microsoft 365 cleanup removes its own consent, principal and application, and can run twice", { skip: skipWithoutPwsh }, async (t) => {
+  const dir = workspace(t);
+  const setup = await runMicrosoft(dir, graphState({ replicationDelays: 1 }));
+  assert.equal(setup.status, 0, setup.stdout + setup.stderr);
+  const receipt = JSON.parse(readFileSync(receiptPath(dir), "utf8"));
+  assert.equal(receipt.tenant_id, tenantId);
+  assert.equal(receipt.actions.length, 4, "a failed replication attempt also keeps its intent");
+  assert.equal(readFileSync(receiptPath(dir), "utf8").includes(setupToken), false);
+  const cleanup = await runCleanup(dir, { ...setup.state, calls: [] });
+  assert.equal(cleanup.status, 0, cleanup.stdout + cleanup.stderr);
+  assert.deepEqual(cleanup.state.applications, []);
+  assert.deepEqual(cleanup.state.servicePrincipals, []);
+  assert.deepEqual(cleanup.state.oauth2PermissionGrants, []);
+  assert.deepEqual(cleanup.changes.map((call) => call.method), ["DELETE", "DELETE", "DELETE"]);
+  assert.equal(JSON.parse(readFileSync(receiptPath(dir), "utf8")).state, "completed");
+  const again = await runCleanup(dir, { ...cleanup.state, calls: [], connect: null, disconnected: false });
+  assert.equal(again.status, 0, again.stdout + again.stderr);
+  assert.deepEqual(again.changes, []);
+  assert.equal(again.state.connect, null, "a completed retry must not grant Graph helper consent again");
+  assert.equal(again.state.disconnected, false);
+});
+
+test("Microsoft 365 cleanup preserves reused resources and permissions added by someone else", { skip: skipWithoutPwsh }, async (t) => {
+  const dir = workspace(t);
+  const app = {
+    id: "7d1c2b3a-4f5e-4d6c-8b7a-695847362514", appId: "3e2d1c0b-9a8f-4e7d-8c6b-5a4938271605",
+    displayName: "ai-security-scanner", isFallbackPublicClient: null,
+    requiredResourceAccess: [{ resourceAppId: graphAppId, resourceAccess: [{ id: scopeId("User.Read"), type: "Scope" }] }],
+  };
+  const principal = { id: "a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d", appId: app.appId };
+  const grant = { id: "l5eW7x0ga0-WDOntXzHateQDNpSH5-lPk9HjD3Sarjk", clientId: principal.id, consentType: "AllPrincipals", principalId: null, resourceId: graphPrincipalId, scope: "User.Read" };
+  const setup = await runMicrosoft(dir, graphState({ applications: [app], servicePrincipals: [principal], oauth2PermissionGrants: [grant] }));
+  assert.equal(setup.status, 0, setup.stdout + setup.stderr);
+  setup.state.oauth2PermissionGrants[0].scope += " Mail.Read";
+  const otherResource = { resourceAppId: "9d1c2b3a-4f5e-4d6c-8b7a-695847362514", resourceAccess: [{ id: "8d1c2b3a-4f5e-4d6c-8b7a-695847362514", type: "Scope" }] };
+  setup.state.applications[0].requiredResourceAccess.push(otherResource);
+  const cleanup = await runCleanup(dir, { ...setup.state, calls: [] });
+  assert.equal(cleanup.status, 0, cleanup.stdout + cleanup.stderr);
+  assert.equal(cleanup.state.oauth2PermissionGrants[0].scope, "User.Read Mail.Read");
+  assert.deepEqual(cleanup.state.servicePrincipals, [principal]);
+  assert.deepEqual(cleanup.state.applications[0].requiredResourceAccess, [...app.requiredResourceAccess, otherResource]);
+  assert.equal(cleanup.state.applications[0].isFallbackPublicClient, null);
+  assert.equal(cleanup.changes.some((call) => call.method === "DELETE"), false);
+});
+
+test("Microsoft 365 cleanup previews without writes and retains failed work for retry", { skip: skipWithoutPwsh }, async (t) => {
+  const dir = workspace(t);
+  const setup = await runMicrosoft(dir, graphState());
+  assert.equal(setup.status, 0, setup.stdout + setup.stderr);
+  const original = readFileSync(receiptPath(dir), "utf8");
+  const preview = await runCleanup(dir, { ...setup.state, calls: [] }, ["-WhatIf"]);
+  assert.equal(preview.status, 0, preview.stdout + preview.stderr);
+  assert.deepEqual(preview.changes, []);
+  assert.equal(readFileSync(receiptPath(dir), "utf8"), original);
+  const failure = await runCleanup(dir, { ...setup.state, calls: [], failDelete: true });
+  assert.equal(failure.status, 1, failure.stdout + failure.stderr);
+  assert.match(failure.stdout, /Cleanup incomplete/u);
+  assert.equal(JSON.parse(readFileSync(receiptPath(dir), "utf8")).state, "cleanup_pending");
+  const retry = await runCleanup(dir, { ...failure.state, calls: [], failDelete: false });
+  assert.equal(retry.status, 0, retry.stdout + retry.stderr);
+  assert.deepEqual(retry.state.applications, []);
+});
+
+test("Microsoft 365 cleanup refuses another tenant and malformed IDs before mutation", { skip: skipWithoutPwsh }, async (t) => {
+  const dir = workspace(t);
+  const setup = await runMicrosoft(dir, graphState());
+  const otherTenant = await runCleanup(dir, { ...setup.state, calls: [], tenantId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa" });
+  assert.equal(otherTenant.status, 1);
+  assert.deepEqual(otherTenant.changes, []);
+  const receipt = JSON.parse(readFileSync(receiptPath(dir), "utf8"));
+  receipt.actions[0].id = "../other";
+  writeFileSync(receiptPath(dir), JSON.stringify(receipt));
+  const invalid = await runCleanup(dir, { ...setup.state, calls: [] });
+  assert.equal(invalid.status, 1);
+  assert.deepEqual(invalid.calls, []);
+});
+
+test("Graph PowerShell cleanup removes only two setup scopes from explicitly selected grants", { skip: skipWithoutPwsh }, async (t) => {
+  const dir = workspace(t);
+  const setup = await runMicrosoft(dir, graphState());
+  const helper = { id: "c1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d", appId: graphPowerShellClientId };
+  const selected = { id: "selected-helper-grant", clientId: helper.id, resourceId: graphPrincipalId, consentType: "Principal", principalId: "d1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d", scope: [...setupScopes, "User.Read"].join(" ") };
+  const untouched = { ...selected, id: "other-helper-grant", consentType: "AllPrincipals", principalId: null };
+  setup.state.servicePrincipals.push(helper);
+  setup.state.oauth2PermissionGrants.push(selected, untouched);
+  const cleanup = await runCleanup(dir, { ...setup.state, calls: [] }, ["-GraphPowerShellGrantId", selected.id]);
+  assert.equal(cleanup.status, 0, cleanup.stdout + cleanup.stderr);
+  assert.deepEqual(cleanup.state.servicePrincipals, [helper]);
+  assert.deepEqual(cleanup.state.oauth2PermissionGrants, [{ ...selected, scope: "User.Read" }, untouched]);
+  const again = await runCleanup(dir, { ...cleanup.state, calls: [], connect: null }, ["-GraphPowerShellGrantId", selected.id]);
+  assert.equal(again.status, 0, again.stdout + again.stderr);
+  assert.equal(again.state.connect, null);
+  assert.deepEqual(again.changes, []);
+});
+
+const fakeScanner = path("../fixtures/cloud-setup/fake-scanner-cli.mjs");
+const caseId = "case-cloud-test";
+const runId = "run-cloud-test";
+const scanStatus = (status: string, completed = false) => ({ case_id: caseId, runs: [{ id: runId, case_id: caseId, completed_at: completed ? "2026-10-04T00:00:00Z" : null, engine_runs: [{ status }] }] });
+const prepareWatcher = (dir: string, statuses: object[], failExport = false) => {
+  writeFileSync(join(dir, "scanner-state.json"), JSON.stringify({ caseId, runId, statuses, failExport, calls: [] }));
+  return ["-WaitForRun", "-CaseId", caseId, "-RunId", runId, "-DataDir", dir, "-ReportPath", join(dir, "saved report.html"), "-CliPath", fakeScanner, "-PollSeconds", "1"];
+};
+
+test("automatic Graph cleanup waits through running and paused states, saves the report, then revokes", { skip: skipWithoutPwsh }, async (t) => {
+  const dir = workspace(t);
+  const setup = await runMicrosoft(dir, graphState(), ["-Temporary"]);
+  assert.equal(setup.status, 0, setup.stdout + setup.stderr);
+  assert.match(setup.state.applications[0].displayName, /^ai-security-scanner-[a-f0-9-]+$/u);
+  const args = prepareWatcher(dir, [scanStatus("running"), scanStatus("paused"), scanStatus("failed", true)]);
+  const cleanup = await runCleanup(dir, { ...setup.state, calls: [] }, args);
+  assert.equal(cleanup.status, 0, cleanup.stdout + cleanup.stderr);
+  const scanner = JSON.parse(readFileSync(join(dir, "scanner-state.json"), "utf8"));
+  assert.equal(scanner.calls.length, 4);
+  assert.equal(scanner.grantsAtExport, 1, "the report is saved before cloud permissions are revoked");
+  assert.ok(existsSync(join(dir, "saved report.html")));
+  assert.deepEqual(cleanup.state.applications, []);
+  const receipt = JSON.parse(readFileSync(receiptPath(dir), "utf8"));
+  assert.equal(receipt.report.run_id, runId);
+  assert.equal(receipt.state, "completed");
+});
+
+test("automatic cleanup treats cancelled as terminal and still revokes if HTML export fails", { skip: skipWithoutPwsh }, async (t) => {
+  const dir = workspace(t);
+  const setup = await runMicrosoft(dir, graphState());
+  const args = prepareWatcher(dir, [scanStatus("cancelled", true)], true);
+  const cleanup = await runCleanup(dir, { ...setup.state, calls: [] }, args);
+  assert.equal(cleanup.status, 1, cleanup.stdout + cleanup.stderr);
+  assert.match(cleanup.stdout, /Access cleanup finished, but HTML export failed/u);
+  assert.deepEqual(cleanup.state.applications, []);
+  assert.equal(JSON.parse(readFileSync(receiptPath(dir), "utf8")).report, null);
+});
+
+test("automatic cleanup refuses to infer completion from queued, unknown, or unreadable scan state", { skip: skipWithoutPwsh }, async (t) => {
+  const dir = workspace(t);
+  const setup = await runMicrosoft(dir, graphState());
+  // A completed timestamp alone does not make queued/resumable work terminal.
+  const args = prepareWatcher(dir, [scanStatus("queued", true), scanStatus("future_unknown_state", true)]);
+  const cleanup = await runCleanup(dir, { ...setup.state, calls: [] }, args);
+  assert.equal(cleanup.status, 1, cleanup.stdout + cleanup.stderr);
+  assert.deepEqual(cleanup.changes, []);
+  assert.equal(existsSync(join(dir, "saved report.html")), false);
+});
+
+test("automatic cleanup refuses a mismatched run without exporting or revoking", { skip: skipWithoutPwsh }, async (t) => {
+  const dir = workspace(t);
+  const setup = await runMicrosoft(dir, graphState());
+  const wrong = scanStatus("completed", true);
+  wrong.runs[0]!.id = "different-run";
+  const args = prepareWatcher(dir, [wrong]);
+  const cleanup = await runCleanup(dir, { ...setup.state, calls: [] }, args);
+  assert.equal(cleanup.status, 1);
+  assert.deepEqual(cleanup.changes, []);
+  assert.equal(existsSync(join(dir, "saved report.html")), false);
+});
+
+test("partial setup can be cleaned after Graph refuses consent creation", { skip: skipWithoutPwsh }, async (t) => {
+  const dir = workspace(t);
+  const setup = await runMicrosoft(dir, graphState({ denyGrantCreate: true }));
+  assert.equal(setup.status, 1);
+  assert.equal(setup.state.applications.length, 1);
+  const cleanup = await runCleanup(dir, { ...setup.state, calls: [] });
+  assert.equal(cleanup.status, 0, cleanup.stdout + cleanup.stderr);
+  assert.deepEqual(cleanup.state.applications, []);
+  assert.deepEqual(cleanup.state.servicePrincipals, []);
+});
+
+test("cleanup reconciles a creation whose response was not saved", { skip: skipWithoutPwsh }, async (t) => {
+  const dir = workspace(t);
+  const setup = await runMicrosoft(dir, graphState());
+  const receipt = JSON.parse(readFileSync(receiptPath(dir), "utf8"));
+  receipt.actions[0].id = null;
+  delete receipt.actions[0].after.appId;
+  receipt.actions[0].state = "pending";
+  writeFileSync(receiptPath(dir), JSON.stringify(receipt));
+  const cleanup = await runCleanup(dir, { ...setup.state, calls: [] });
+  assert.equal(cleanup.status, 0, cleanup.stdout + cleanup.stderr);
+  assert.deepEqual(cleanup.state.applications, []);
+});
+
+test("cleanup reports incomplete until Graph confirms deletion", { skip: skipWithoutPwsh }, async (t) => {
+  const dir = workspace(t);
+  const setup = await runMicrosoft(dir, graphState());
+  const cleanup = await runCleanup(dir, { ...setup.state, calls: [], ignoreDelete: true });
+  assert.equal(cleanup.status, 1);
+  assert.match(cleanup.stdout, /has not confirmed the deletion/u);
+  assert.equal(cleanup.state.servicePrincipals.length, 1);
+  assert.equal(JSON.parse(readFileSync(receiptPath(dir), "utf8")).state, "cleanup_pending");
+});
+
+test("cleanup refuses any teardown when its created app has been repurposed", { skip: skipWithoutPwsh }, async (t) => {
+  const dir = workspace(t);
+  const setup = await runMicrosoft(dir, graphState());
+  setup.state.applications[0].passwordCredentials.push({ keyId: "another-credential-id" });
+  const cleanup = await runCleanup(dir, { ...setup.state, calls: [] });
+  assert.equal(cleanup.status, 1);
+  assert.deepEqual(cleanup.changes, []);
+});
+
+test("cleanup cannot consume a journal while setup is still creating resources", { skip: skipWithoutPwsh }, async (t) => {
+  const dir = workspace(t);
+  const setupTask = runMicrosoft(dir, graphState({ pauseBeforeUri: "/v1.0/applications" }));
+  const deadline = Date.now() + 10_000;
+  while (!existsSync(join(dir, "graph-paused"))) {
+    assert.ok(Date.now() < deadline, "setup should reach the paused Graph request");
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  let result: Awaited<ReturnType<typeof runCleanup>>;
+  try {
+    const state = JSON.parse(readFileSync(join(dir, "graph-state.json"), "utf8"));
+    result = await runCleanup(dir, { ...state, calls: [], connect: null });
+    assert.equal(result.status, 1);
+    assert.equal(result.state.connect, null, "lock conflict must stop before signing in");
+    assert.deepEqual(result.changes, []);
+  } finally { writeFileSync(join(dir, "graph-continue"), "continue"); }
+  const setup = await setupTask;
+  assert.equal(setup.status, 0, setup.stdout + setup.stderr);
+  const cleanup = await runCleanup(dir, { ...setup.state, calls: [] });
+  assert.equal(cleanup.status, 0, cleanup.stdout + cleanup.stderr);
+});
+
+test("setup refuses to overwrite a permission added after its initial app lookup", { skip: skipWithoutPwsh }, async (t) => {
+  const dir = workspace(t);
+  const other = { resourceAppId: "9d1c2b3a-4f5e-4d6c-8b7a-695847362514", resourceAccess: [{ id: "8d1c2b3a-4f5e-4d6c-8b7a-695847362514", type: "Scope" }] };
+  const app = { id: "7d1c2b3a-4f5e-4d6c-8b7a-695847362514", appId: "3e2d1c0b-9a8f-4e7d-8c6b-5a4938271605", displayName: "ai-security-scanner", isFallbackPublicClient: true, requiredResourceAccess: [] };
+  const setup = await runMicrosoft(dir, graphState({ applications: [app], changeAppOnRead: other }));
+  assert.equal(setup.status, 1, setup.stdout + setup.stderr);
+  assert.match(setup.stdout, /No stale update was sent/u);
+  assert.deepEqual(setup.changes, []);
+  assert.deepEqual(setup.state.applications[0].requiredResourceAccess, [other]);
+});
+
+test("cleanup requires the service principal creation marker before touching its grants", { skip: skipWithoutPwsh }, async (t) => {
+  const dir = workspace(t);
+  const setup = await runMicrosoft(dir, graphState());
+  setup.state.servicePrincipals[0].tags = [];
+  const cleanup = await runCleanup(dir, { ...setup.state, calls: [] });
+  assert.equal(cleanup.status, 1);
+  assert.deepEqual(cleanup.changes, []);
+});
+
+test("device-code cleanup renews expired access only in memory after waiting", { skip: skipWithoutPwsh }, async (t) => {
+  const dir = workspace(t);
+  const setup = await runMicrosoft(dir, graphState());
+  const args = prepareWatcher(dir, [scanStatus("completed", true)]);
+  const scannerStatePath = join(dir, "scanner-state.json");
+  const scanner = JSON.parse(readFileSync(scannerStatePath, "utf8"));
+  writeFileSync(scannerStatePath, JSON.stringify({ ...scanner, expireTokenOnFinish: true }));
+  const refreshToken = "fake-refresh-token-only-for-tests";
+  const cleanup = await runCleanup(dir, { ...setup.state, calls: [], login: [], signIn: { ...setup.state.signIn, pending: 0, refreshToken } }, [...args, "-UseDeviceCode"]);
+  assert.equal(cleanup.status, 0, cleanup.stdout + cleanup.stderr);
+  assert.equal(cleanup.state.refreshCount, 1);
+  assert.equal(cleanup.state.login.filter((item: { uri: string }) => item.uri.endsWith("/devicecode")).length, 1);
+  assert.ok(cleanup.state.login[0].body.scope.endsWith(" offline_access"));
+  assert.deepEqual(cleanup.state.applications, []);
+  assert.equal((readFileSync(receiptPath(dir), "utf8") + cleanup.stdout + cleanup.stderr).includes(refreshToken), false);
+});
+
+test("preview inspects an active scan once without waiting or exporting", { skip: skipWithoutPwsh }, async (t) => {
+  const dir = workspace(t);
+  const setup = await runMicrosoft(dir, graphState());
+  const args = prepareWatcher(dir, [scanStatus("running")]);
+  const cleanup = await runCleanup(dir, { ...setup.state, calls: [] }, [...args, "-WhatIf"]);
+  assert.equal(cleanup.status, 0, cleanup.stdout + cleanup.stderr);
+  assert.deepEqual(cleanup.changes, []);
+  assert.equal(JSON.parse(readFileSync(join(dir, "scanner-state.json"), "utf8")).calls.length, 1);
+  assert.equal(existsSync(join(dir, "saved report.html")), false);
+});
+
+test("explicit immediate revocation recovers a watched receipt when the scan status is unavailable", { skip: skipWithoutPwsh }, async (t) => {
+  const dir = workspace(t);
+  const setup = await runMicrosoft(dir, graphState());
+  const args = prepareWatcher(dir, []);
+  const first = await runCleanup(dir, { ...setup.state, calls: [] }, args);
+  assert.equal(first.status, 1);
+  assert.deepEqual(first.changes, []);
+  const retry = await runCleanup(dir, { ...first.state, calls: [] }, ["-RevokeNow"]);
+  assert.equal(retry.status, 0, retry.stdout + retry.stderr);
+  assert.deepEqual(retry.state.applications, []);
+  const receipt = JSON.parse(readFileSync(receiptPath(dir), "utf8"));
+  assert.ok(receipt.immediate_revocation_requested_at);
+  assert.equal(receipt.report, null);
+});
+
+test("listing helper grants after cleanup invalidates the completed shortcut", { skip: skipWithoutPwsh }, async (t) => {
+  const dir = workspace(t);
+  const setup = await runMicrosoft(dir, graphState());
+  const helper = { id: "c1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d", appId: graphPowerShellClientId };
+  const grant = { id: "repeat-helper-grant", clientId: helper.id, resourceId: graphPrincipalId, consentType: "Principal", principalId: "d1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d", scope: [...setupScopes, "User.Read"].join(" ") };
+  setup.state.servicePrincipals.push(helper);
+  setup.state.oauth2PermissionGrants.push(grant);
+  const cleaned = await runCleanup(dir, { ...setup.state, calls: [] }, ["-GraphPowerShellGrantId", grant.id]);
+  assert.equal(cleaned.status, 0, cleaned.stdout + cleaned.stderr);
+  const listed = await runCleanup(dir, { ...cleaned.state, calls: [], helperConsentOnConnect: grant }, ["-ListGraphPowerShellGrants"]);
+  assert.equal(listed.status, 0, listed.stdout + listed.stderr);
+  assert.equal(JSON.parse(readFileSync(receiptPath(dir), "utf8")).state, "cleanup_pending");
+  const again = await runCleanup(dir, { ...listed.state, calls: [] }, ["-GraphPowerShellGrantId", grant.id]);
+  assert.equal(again.status, 0, again.stdout + again.stderr);
+  assert.equal(again.state.oauth2PermissionGrants[0].scope, "User.Read");
+});
+
+test("a second no-change setup receipt never claims to have revoked existing access", { skip: skipWithoutPwsh }, async (t) => {
+  const dir = workspace(t);
+  const first = await runMicrosoft(dir, graphState());
+  const original = receiptPath(dir);
+  const second = await runMicrosoft(dir, { ...first.state, calls: [] });
+  assert.equal(second.status, 0, second.stdout + second.stderr);
+  assert.match(second.stdout, /This record revokes nothing/u);
+  const latest = readdirSync(dir).map((name) => join(dir, name)).find((name) => name !== original && /microsoft365-cleanup-.*\.json$/u.test(name))!;
+  const cleanup = await runMicrosoft(dir, { ...second.state, calls: [] }, ["-ReceiptPath", latest], cleanupScript);
+  assert.equal(cleanup.status, 0, cleanup.stdout + cleanup.stderr);
+  assert.match(cleanup.stdout, /No scanner access was revoked/u);
+  assert.deepEqual(cleanup.changes, []);
+  assert.equal(cleanup.state.oauth2PermissionGrants.length, 1);
+});
+
+test("relative receipt and Unicode report paths follow PowerShell's current location", { skip: skipWithoutPwsh }, async (t) => {
+  const dir = workspace(t);
+  const setup = await runMicrosoft(dir, graphState());
+  prepareWatcher(dir, [scanStatus("completed", true)]);
+  const sub = join(dir, "中文 子目錄");
+  mkdirSync(sub);
+  const quote = (value: string) => `'${value.replaceAll("'", "''")}'`;
+  const wrapper = join(dir, "relative-path-test.ps1");
+  writeFileSync(wrapper, `Set-Location -LiteralPath ${quote(sub)}\n& ${quote(cleanupScript)} -ReceiptPath ${quote("../" + receiptPath(dir).split("/").at(-1))} -WaitForRun -CaseId ${quote(caseId)} -RunId ${quote(runId)} -DataDir '..' -ReportPath './報告.html' -CliPath ${quote(fakeScanner)}\n`);
+  const cleanup = await runMicrosoft(dir, { ...setup.state, calls: [] }, [], wrapper);
+  assert.equal(cleanup.status, 0, cleanup.stdout + cleanup.stderr);
+  assert.ok(existsSync(join(sub, "報告.html")));
+  const saved = JSON.parse(readFileSync(receiptPath(dir), "utf8"));
+  assert.equal(saved.report.path, join(sub, "報告.html"));
+});
+
+test("setup recovers a lost principal creation response using its creation marker without another POST", { skip: skipWithoutPwsh }, async (t) => {
+  const dir = workspace(t);
+  const setup = await runMicrosoft(dir, graphState({ losePrincipalResponse: true }));
+  assert.equal(setup.status, 0, setup.stdout + setup.stderr);
+  assert.equal(setup.changes.filter((call) => call.method === "POST" && call.uri === "/v1.0/servicePrincipals").length, 1);
+  const cleanup = await runCleanup(dir, { ...setup.state, calls: [] });
+  assert.equal(cleanup.status, 0, cleanup.stdout + cleanup.stderr);
+  assert.deepEqual(cleanup.state.servicePrincipals, []);
+});
+
+test("a malformed patch receipt cannot turn a missing baseline into revocation", { skip: skipWithoutPwsh }, async (t) => {
+  const dir = workspace(t);
+  const setup = await runMicrosoft(dir, graphState());
+  const receipt = JSON.parse(readFileSync(receiptPath(dir), "utf8"));
+  receipt.actions.at(-1).method = "PATCH";
+  receipt.actions.at(-1).before = null;
+  writeFileSync(receiptPath(dir), JSON.stringify(receipt));
+  const cleanup = await runCleanup(dir, { ...setup.state, calls: [], connect: null });
+  assert.equal(cleanup.status, 1);
+  assert.equal(cleanup.state.connect, null);
+  assert.deepEqual(cleanup.changes, []);
+});
+
+test("a mistyped new helper grant ID stops before cleanup", { skip: skipWithoutPwsh }, async (t) => {
+  const dir = workspace(t);
+  const setup = await runMicrosoft(dir, graphState());
+  const cleanup = await runCleanup(dir, { ...setup.state, calls: [] }, ["-GraphPowerShellGrantId", "wrong-grant-id"]);
+  assert.equal(cleanup.status, 1);
+  assert.match(cleanup.stdout, /GrantId was not found/u);
+  assert.deepEqual(cleanup.changes, []);
+});
+
+test("refresh refusal leaves access cleanup pending without leaking the refresh token", { skip: skipWithoutPwsh }, async (t) => {
+  const dir = workspace(t);
+  const setup = await runMicrosoft(dir, graphState());
+  const args = prepareWatcher(dir, [scanStatus("completed", true)]);
+  const scannerStatePath = join(dir, "scanner-state.json");
+  const scanner = JSON.parse(readFileSync(scannerStatePath, "utf8"));
+  writeFileSync(scannerStatePath, JSON.stringify({ ...scanner, expireTokenOnFinish: true }));
+  const refreshToken = "fake-refresh-token-refused";
+  const cleanup = await runCleanup(dir, { ...setup.state, calls: [], login: [], denyRefresh: true, signIn: { ...setup.state.signIn, pending: 0, refreshToken } }, [...args, "-UseDeviceCode"]);
+  assert.equal(cleanup.status, 1);
+  assert.deepEqual(cleanup.changes, []);
+  assert.equal(JSON.parse(readFileSync(receiptPath(dir), "utf8")).state, "cleanup_pending");
+  assert.equal((cleanup.stdout + cleanup.stderr + readFileSync(receiptPath(dir), "utf8")).includes(refreshToken), false);
+});
+
+test("a new helper consent ID after interrupted cleanup must be explicitly selected before revocation", { skip: skipWithoutPwsh }, async (t) => {
+  const dir = workspace(t);
+  const setup = await runMicrosoft(dir, graphState());
+  const helper = { id: "c1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d", appId: graphPowerShellClientId };
+  const original = { id: "original-helper-grant", clientId: helper.id, resourceId: graphPrincipalId, consentType: "Principal", principalId: "d1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d", scope: setupScopes.join(" ") };
+  setup.state.servicePrincipals.push(helper);
+  setup.state.oauth2PermissionGrants.push(original);
+  const cleaned = await runCleanup(dir, { ...setup.state, calls: [] }, ["-GraphPowerShellGrantId", original.id]);
+  assert.equal(cleaned.status, 0, cleaned.stdout + cleaned.stderr);
+  // Model a lost final checkpoint after the provider already deleted the grant.
+  const receipt = JSON.parse(readFileSync(receiptPath(dir), "utf8"));
+  receipt.state = "cleanup_pending";
+  writeFileSync(receiptPath(dir), JSON.stringify(receipt));
+  const replacement = { ...original, id: "replacement-helper-grant" };
+  const retry = await runCleanup(dir, { ...cleaned.state, calls: [], helperConsentOnConnect: replacement });
+  assert.equal(retry.status, 1, retry.stdout + retry.stderr);
+  assert.match(retry.stdout, /new helper consent record/u);
+  assert.deepEqual(retry.changes, []);
+  const selected = await runCleanup(dir, { ...retry.state, calls: [] }, ["-GraphPowerShellGrantId", replacement.id]);
+  assert.equal(selected.status, 0, selected.stdout + selected.stderr);
+  assert.deepEqual(selected.state.oauth2PermissionGrants, []);
 });

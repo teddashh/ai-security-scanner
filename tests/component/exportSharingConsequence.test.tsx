@@ -116,13 +116,14 @@ const renderExport = ({
     unknownSourceCount: 0,
     connectedNoAssetCount: 0,
     rawArtifactCount: 4,
-    rawArtifactsIncluded: request.redactSensitiveValues ? 0 : 4,
-    rawArtifactsOmitted: request.redactSensitiveValues ? 4 : 0,
-    sensitiveRawArtifactsOmitted: request.redactSensitiveValues ? 4 : 0,
+    rawArtifactsIncluded: request.includeRawEvidence && !request.redactSensitiveValues ? 4 : 0,
+    rawArtifactsOmitted: request.includeRawEvidence && !request.redactSensitiveValues ? 0 : 4,
+    sensitiveRawArtifactsOmitted: request.includeRawEvidence && !request.redactSensitiveValues ? 0 : 4,
     sensitiveDataWarning: "backend warning",
     coverageManifestIncluded: true,
   } as ExportPreview));
 
+  const onExport = vi.fn(() => Promise.resolve());
   const { container } = render(
     <I18nProvider>
       <ExportPage
@@ -131,13 +132,13 @@ const renderExport = ({
         exports={[]}
         demoMode={demoMode}
         onPreview={onPreview}
-        onExport={() => Promise.resolve()}
+        onExport={onExport}
         onVerify={() => Promise.resolve()}
         onVerifyReceived={() => Promise.resolve()}
       />
     </I18nProvider>,
   );
-  return { container };
+  return { container, onPreview, onExport };
 };
 
 /** The sentence describing what the current settings leave in the file. */
@@ -307,7 +308,7 @@ test("turning redaction off without attaching sources claims neither more nor le
   expect(consequence(container)).not.toContain("may contain secrets");
 });
 
-test("the source-file option appears only for a case bundle and cannot create a redacted no-op state", async () => {
+test("the case-bundle source-file option cannot create a redacted no-op state", async () => {
   const { container } = renderExport();
   await waitFor(() => expect(consequence(container)).toContain("Sensitive identifiers hidden"));
 
@@ -523,3 +524,43 @@ test("in Traditional Chinese the default decision summary has no dangling senten
   expect(decisionSummary(container).textContent).toContain("僅交付可信對象 · ");
   expect(decisionSummary(container).textContent).not.toContain("。 ·");
 });
+
+for (const [locale, masking, attachment] of [
+  ["en", "Hide sensitive identifiers (recommended)", "Attach original reports at the end"],
+  ["zh-TW", "遮罩敏感識別資訊（建議）", "在報告最後附上原始報告"],
+] as const) {
+  test(`HTML attachments follow the selected run and export choices in ${locale}`, async () => {
+    window.localStorage.setItem(localeStorageKey, locale);
+    const { container, onPreview, onExport } = renderExport();
+    const raw = toggle(container, attachment);
+    expect(raw.disabled).toBe(true);
+    expect(raw.checked).toBe(false);
+    fireEvent.click(toggle(container, masking));
+    expect(raw.disabled).toBe(false);
+    fireEvent.click(raw);
+    await waitFor(() => expect(onPreview).toHaveBeenLastCalledWith({
+      runId: CHOSEN, locale: locale === "en" ? "en" : "zh-Hant", format: "html",
+      includeRawEvidence: true, redactSensitiveValues: false,
+    }));
+    const save = container.querySelector<HTMLButtonElement>(".button--primary")!;
+    await waitFor(() => expect(save.disabled).toBe(false));
+    fireEvent.click(save);
+    expect(onExport).toHaveBeenCalledWith({
+      runId: CHOSEN, locale: locale === "en" ? "en" : "zh-Hant", format: "html",
+      includeRawEvidence: true, redactSensitiveValues: false,
+    });
+    expect(container.querySelector(".export-privacy-status--danger")).not.toBeNull();
+    expect(toggleDetail(container, attachment)).toContain("ZIP");
+    expect(toggleDetail(container, attachment)).toContain("PDF");
+    fireEvent.click(container.querySelector<HTMLInputElement>('input[value="json"]')!);
+    await waitFor(() => expect(onPreview).toHaveBeenLastCalledWith(expect.objectContaining({
+      format: "json", includeRawEvidence: false,
+    })));
+    fireEvent.click(container.querySelector<HTMLInputElement>('input[value="html"]')!);
+    expect(toggle(container, attachment).checked).toBe(false);
+    fireEvent.click(toggle(container, attachment));
+    fireEvent.click(toggle(container, masking));
+    expect(toggle(container, attachment).checked).toBe(false);
+    expect(toggle(container, attachment).disabled).toBe(true);
+  });
+}

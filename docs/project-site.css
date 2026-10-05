@@ -204,6 +204,10 @@ h1 {
   white-space: nowrap;
 }
 
+.hero h1 .lang-zh .accent-word {
+  display: inline-block;
+}
+
 .accent-word::after {
   position: absolute;
   z-index: -1;

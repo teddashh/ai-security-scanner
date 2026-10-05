@@ -8,19 +8,19 @@ SWOT is the project team’s assessment. Enabled features describe this product 
 
 ## CloudQuery
 
-AWS IAM inventory: establish which identities and policies exist.
+Lists selected AWS identities and permission policies. This inventory is kept separate from security findings.
 
 [Upstream](https://github.com/cloudquery/cloudquery) · [README @ e27e4ab](https://github.com/cloudquery/cloudquery/blob/e27e4ab61ad85479a5d53dae9b08440bc63e72b3/README.md) · [Integration and update notes](https://github.com/teddashh/ai-security-scanner/blob/335d0666bdc63eb86e6c8c4cddeae110db893397/docs/engines/cloudquery.md)
 
-### What upstream does
+### What the original tool does
 
 CloudQuery moves structured API data into destinations that can be queried and compared. Its CLI, source plugin and destination plugin are independently versioned; recording only the CLI version does not identify the data collection behavior.
 
-### Enabled in this project
+### What this app checks
 
 CLI 2.0.31, AWS source 9.2.0 and file destination 1.0.4 run from embedded local binaries. One approved AWS account uses the fixed us-east-1 IAM profile: accounts, credential reports, groups, password policies, policies, roles and users. Child-table output remains evidence. Per-table NDJSON becomes attributed inventory observations.
 
-### Outside this profile
+### What it does not check
 
 This integration does not collect all AWS services, download plugins at scan time, or turn inventory rows into vulnerability findings. The old public plugin closure is deliberately frozen; it is not a claim to ship the newest CloudQuery platform.
 
@@ -32,7 +32,7 @@ We selected it for explicit table-level collection and inspectable machine outpu
 
 Use it when an AWS owner wants to enumerate IAM users, roles and policies before reviewing their security posture, or to understand why an identity appears in another scanner result. Select the exact account and read-only inventory access.
 
-### What reaches your report
+### What you see in the report
 
 The sample contributes a cloud-resource observation with a native identifier and table provenance. It adds inventory coverage, not a finding or a successful security verdict.
 
@@ -72,19 +72,19 @@ Image identity: `ghcr.io/teddashh/ai-security-scanner-engine-cloudquery:2.0.31-a
 
 ## Steampipe
 
-Query AWS IAM resources as SQL-shaped inventory.
+Lists AWS users and selected account settings so you can review who has access.
 
 [Upstream](https://github.com/turbot/steampipe) · [README @ 71fa72f](https://github.com/turbot/steampipe/blob/71fa72fc9ce33897bcb0bd0c9ebf09b867b881cf/README.md) · [Integration and update notes](https://github.com/teddashh/ai-security-scanner/blob/335d0666bdc63eb86e6c8c4cddeae110db893397/docs/engines/steampipe.md)
 
-### What upstream does
+### What the original tool does
 
 Steampipe exposes APIs through SQL tables using provider plugins. That makes cloud metadata available in a familiar relational model, while the plugin determines which services and columns can be queried.
 
-### Enabled in this project
+### What this app checks
 
 Steampipe 2.4.5 uses the preseeded AWS plugin 1.32.0. The product runs its fixed AWS IAM inventory subset for one approved account, through the cloud launcher and managed egress. JSON rows are normalized as cloud-resource observations, with query/source attribution retained.
 
-### Outside this profile
+### What it does not check
 
 There is no arbitrary user-supplied SQL, runtime plugin installation, all-service cloud inventory or bundled security Mod execution in this profile. SQL output alone is not a failed security control.
 
@@ -96,7 +96,7 @@ The SQL table model provides a second inspectable IAM inventory representation a
 
 Choose it for an approved AWS IAM review when structured resource rows help explain which users, roles or policies were present. It is useful for comparing inventory with a security scanner result, especially when tracing an identity back to provider data.
 
-### What reaches your report
+### What you see in the report
 
 The sample retains IAM resource observations and their Steampipe provenance. The report keeps the observations in the inventory section; they do not increase the vulnerability count.
 
@@ -136,19 +136,19 @@ Image identity: `ghcr.io/teddashh/ai-security-scanner-engine-steampipe:2.4.5-6@s
 
 ## Prowler
 
-Evaluate identity and access configuration in AWS, Azure or GCP.
+Checks selected identity and permission settings in an approved AWS account, Azure subscription or GCP project.
 
 [Upstream](https://github.com/prowler-cloud/prowler) · [README @ 40ecbd0](https://github.com/prowler-cloud/prowler/blob/40ecbd035e5541bf099917c5033cceb8959c4737/README.md) · [Integration and update notes](https://github.com/teddashh/ai-security-scanner/blob/335d0666bdc63eb86e6c8c4cddeae110db893397/docs/engines/prowler.md)
 
-### What upstream does
+### What the original tool does
 
 Prowler is a cloud security assessment project with provider-specific checks and remediation guidance. Its upstream platform is broader than the narrow provider profiles selected by this desktop integration.
 
-### Enabled in this project
+### What this app checks
 
 Prowler 5.39.1 evaluates the selected IAM configuration for exactly one AWS account, Azure subscription or GCP project. Native OCSF records retain the check identifier, FAIL/PASS status, resource, severity, failure explanation and remediation. The report leads with the failed condition when the upstream check title is phrased as a desired secure state.
 
-### Outside this profile
+### What it does not check
 
 This is not an all-services or all-accounts Prowler deployment. We do not claim every upstream compliance pack ran, and passing individual checks does not establish certification or an authorization to change cloud resources.
 
@@ -160,7 +160,7 @@ We selected Prowler because its native checks provide resource-level evidence an
 
 Use it during an IAM posture review, after a cloud identity-policy change, or before handing an account/subscription/project to another team. Review the exact provider scope and complete the provider read-only authorization first.
 
-### What reaches your report
+### What you see in the report
 
 The sample includes an AWS managed policy with administrative wildcard permissions. It shows the failed condition, policy ARN, native check and remediation; a PASS row in the same input is not converted into a problem.
 
@@ -200,19 +200,19 @@ Image identity: `ghcr.io/teddashh/ai-security-scanner-engine-prowler:5.39.1-7@sh
 
 ## ScoutSuite
 
-Review the AWS IAM configuration snapshot with ScoutSuite rules.
+Checks selected AWS identity and access settings. This app uses a limited part of ScoutSuite.
 
 [Upstream](https://github.com/nccgroup/ScoutSuite) · [README @ 7909f2f](https://github.com/nccgroup/ScoutSuite/blob/7909f2fc6186063e5c9e7ddef8c4d7d1072c8f3d/README.md) · [Integration and update notes](https://github.com/teddashh/ai-security-scanner/blob/335d0666bdc63eb86e6c8c4cddeae110db893397/docs/engines/scoutsuite.md)
 
-### What upstream does
+### What the original tool does
 
 ScoutSuite collects cloud configuration through provider APIs and identifies risky configurations for review. Upstream supports a wider multi-cloud assessment workflow and its own presentation.
 
-### Enabled in this project
+### What this app checks
 
 ScoutSuite 5.14.0 runs the bounded AWS IAM-only profile for one approved account. A retained JSON-output exception produces machine-readable results without relying on the upstream HTML viewer. The adapter preserves rule identity, affected IAM items and supplied severity/evidence.
 
-### Outside this profile
+### What it does not check
 
 Other ScoutSuite cloud providers and AWS service families are outside this profile. The product does not copy ScoutSuite detection rules into a wrapper or treat every collected configuration item as a vulnerability.
 
@@ -224,7 +224,7 @@ It provides a distinct upstream view of AWS IAM configuration that can complemen
 
 Use it for a second IAM configuration review or an evidence-rich account handover. It is especially useful when the operator wants the risky configuration itself, not only an inventory of which resources exist.
 
-### What reaches your report
+### What you see in the report
 
 The sample includes several IAM rule findings from the native JSON structure. Each retains ScoutSuite attribution and the affected resource context in the technical evidence.
 
@@ -264,19 +264,19 @@ Image identity: `ghcr.io/teddashh/ai-security-scanner-engine-scoutsuite:5.14.0-6
 
 ## Cloudsplaining
 
-Explain excessive AWS IAM policy permissions and least-privilege risks.
+Reviews collected AWS permission policies for access that may be broader than needed.
 
 [Upstream](https://github.com/salesforce/cloudsplaining) · [README @ 75a67ea](https://github.com/salesforce/cloudsplaining/blob/75a67ea9cb6d0fdf35ff185d08dad0d45587e6f7/README.md) · [Integration and update notes](https://github.com/teddashh/ai-security-scanner/blob/335d0666bdc63eb86e6c8c4cddeae110db893397/docs/engines/cloudsplaining.md)
 
-### What upstream does
+### What the original tool does
 
 Cloudsplaining specializes in AWS IAM policy analysis. It examines authorization data and classifies risky permissions such as privilege escalation, data access or infrastructure-changing capabilities.
 
-### Enabled in this project
+### What this app checks
 
 Version 0.9.1 downloads authorization details for one approved AWS account and applies the upstream policy analysis. Native actions, policy identities, exclusions and attached-resource context feed the shared report. Related findings may share a remediation while their individual evidence remains available.
 
-### Outside this profile
+### What it does not check
 
 It does not simulate every effective AWS authorization decision, validate business necessity or modify policies. An action classified as risky is evidence for review, not proof that a reachable attacker can use it in the current environment.
 
@@ -288,7 +288,7 @@ General posture checks often identify a broad IAM problem; Cloudsplaining adds p
 
 Use it before granting a role to an application, during a least-privilege review, or after an overprivileged policy is reported. Interpret the actions together with trust policies, organization controls and application requirements.
 
-### What reaches your report
+### What you see in the report
 
 The sample shows policy/action findings with native Cloudsplaining categories and provenance. Multiple action records can describe the same policy; the report preserves that relationship rather than implying eighteen unrelated assets.
 
@@ -328,19 +328,19 @@ Image identity: `ghcr.io/teddashh/ai-security-scanner-engine-cloudsplaining:0.9.
 
 ## ScubaGear
 
-Assess Microsoft Entra ID against the selected CISA SCuBA baseline.
+Compares supported Microsoft 365 settings with CISA security guidance.
 
 [Upstream](https://github.com/cisagov/ScubaGear) · [README @ 4d34e9a](https://github.com/cisagov/ScubaGear/blob/4d34e9a48e38ce5c2e14c0fdfbaee53e57594ae2/README.md) · [Integration and update notes](https://github.com/teddashh/ai-security-scanner/blob/335d0666bdc63eb86e6c8c4cddeae110db893397/docs/engines/scubagear.md)
 
-### What upstream does
+### What the original tool does
 
 CISA ScubaGear evaluates Microsoft 365 tenant configuration against published SCuBA secure configuration baselines. Upstream has separate product assessments; a baseline result must identify which product was actually assessed.
 
-### Enabled in this project
+### What this app checks
 
 ScubaGear 1.8.0 runs the pinned AAD/Entra ID profile through Microsoft Graph for one authorized tenant. The managed image includes the reviewed PowerShell modules and baseline inputs. Native policy/control identities, verdicts and evidence are retained; failed tests become findings and missing evaluation remains visible.
 
-### Outside this profile
+### What it does not check
 
 This profile does not assess every Microsoft 365 workload, run Exchange or SharePoint assessments, or provide a compliance certification. These simulated examples do not establish the outcome of a live tenant assessment.
 
@@ -352,7 +352,7 @@ CISA publishes concrete baseline expectations, which makes the reason for a conf
 
 Use it for an Entra configuration review, tenant handover or verification after an identity-policy change. Complete the documented read-only Microsoft consent and review the exact tenant before starting.
 
-### What reaches your report
+### What you see in the report
 
 The sample carries a failed SCuBA control with its native identity and tenant attribution. It demonstrates report presentation using a representative input, not a new scan of a real Microsoft tenant.
 
@@ -392,19 +392,19 @@ Image identity: `ghcr.io/teddashh/ai-security-scanner-engine-scubagear:1.8.0-8@s
 
 ## Maester
 
-Run repeatable Microsoft Entra security-configuration tests.
+Tests supported Microsoft 365 security settings and explains which checks need attention.
 
 [Upstream](https://github.com/maester365/maester) · [README @ 6bf1d98](https://github.com/maester365/maester/blob/6bf1d98f094fc7a68e449d2f40f73ef820b72ee3/README.md) · [Integration and update notes](https://github.com/teddashh/ai-security-scanner/blob/335d0666bdc63eb86e6c8c4cddeae110db893397/docs/engines/maester.md)
 
-### What upstream does
+### What the original tool does
 
 Maester is a PowerShell-based test framework for Microsoft 365 security configuration. Tests express expected settings and retain a verdict that can be reviewed over time.
 
-### Enabled in this project
+### What this app checks
 
 Maester 2.0.0 runs the pinned Graph-only Entra test profile for one authorized tenant. The image freezes required modules and tests, and the adapter preserves native test identifiers, failed-test details and completion information. The M365 setup documents the required read permissions, including selected PIM reads.
 
-### Outside this profile
+### What it does not check
 
 The product does not run every Maester workload, Exchange Online test or arbitrary tenant script. A skipped or unavailable check is not converted into a pass. The sample illustrates output, not a live tenant assessment.
 
@@ -416,7 +416,7 @@ Its test-oriented output gives an administrator a concrete item to investigate a
 
 Use it after Entra policy changes, during a tenant security review, or when a team wants repeatable evidence for configuration regression. The selected tenant and Graph permissions must match the approved profile.
 
-### What reaches your report
+### What you see in the report
 
 The sample includes a failed native test with its title and supporting details. The report attributes it to Maester and retains the test identity rather than inventing a new product-owned control.
 
@@ -456,19 +456,19 @@ Image identity: `ghcr.io/teddashh/ai-security-scanner-engine-maester:2.0.0-9@sha
 
 ## Naabu
 
-Discover open TCP ports on exact approved targets.
+Shows which approved ports accept connections. An open port is information to investigate, not proof of a vulnerability.
 
 [Upstream](https://github.com/projectdiscovery/naabu) · [README @ 5a0ca8b](https://github.com/projectdiscovery/naabu/blob/5a0ca8bde91b5bb16213e9e8b5c6871eac954bd8/README.md) · [Integration and update notes](https://github.com/teddashh/ai-security-scanner/blob/335d0666bdc63eb86e6c8c4cddeae110db893397/docs/engines/naabu.md)
 
-### What upstream does
+### What the original tool does
 
 Naabu is a network port-discovery tool. Upstream offers several scan methods and discovery options; this product binds its invocation to a frozen work plan instead of exposing an unrestricted port-scanning command.
 
-### Enabled in this project
+### What this app checks
 
 Naabu 2.6.1 runs the approved TCP connect discovery profile. Exact targets and ports become bounded work units with an attempt journal. Native JSONL service observations retain host/IP and port context; the journal determines which requested units actually completed.
 
-### Outside this profile
+### What it does not check
 
 An open port is not a vulnerability or a successful security scan by itself. This path does not authorize adjacent hosts, CIDR expansion, UDP coverage or every upstream discovery mode.
 
@@ -480,7 +480,7 @@ It gives the report an explicit service inventory that can prepare applicable se
 
 Use it when an owner needs to identify which approved TCP services answer before selecting protocol-aware checks. For the primary internal-system security path, discovery supports the security assessment; it does not replace Greenbone findings.
 
-### What reaches your report
+### What you see in the report
 
 The sample shows two service observations with Naabu provenance and completed work-unit accounting. They appear in inventory and do not increase the finding count.
 
@@ -520,19 +520,19 @@ Image identity: `ghcr.io/teddashh/ai-security-scanner-engine-naabu:2.6.1-7@sha25
 
 ## httpx
 
-Collect HTTP reachability and response metadata.
+Checks whether a selected web service responds and records basic response information. It does not assess vulnerabilities.
 
 [Upstream](https://github.com/projectdiscovery/httpx) · [README @ 13037dd](https://github.com/projectdiscovery/httpx/blob/13037dd08b9715cfbd960a70ae1edfef6686a857/README.md) · [Integration and update notes](https://github.com/teddashh/ai-security-scanner/blob/335d0666bdc63eb86e6c8c4cddeae110db893397/docs/engines/httpx.md)
 
-### What upstream does
+### What the original tool does
 
 ProjectDiscovery httpx is an HTTP probing toolkit, distinct from the Python HTTPX client library. Its probes help characterize responding web services; a response alone does not diagnose a vulnerability.
 
-### Enabled in this project
+### What this app checks
 
 httpx 1.10.0 uses the bounded read-only HTTP profile for exact approved services. JSONL response records supply URL/status and retained service metadata to typed inventory, with upstream and asset provenance. The managed network path enforces the approved destination scope.
 
-### Outside this profile
+### What it does not check
 
 This integration does not claim a web vulnerability finding from an HTTP status, crawl every application route, authenticate into an application or enable every upstream probe.
 
@@ -544,7 +544,7 @@ It supplies a lightweight, inspectable description of an approved web service be
 
 Use it to confirm that the selected HTTP service responded and to retain basic response context during exposure inventory. Use a security scanner when the question is whether the service has a security problem.
 
-### What reaches your report
+### What you see in the report
 
 The sample includes HTTP service observations with URL/status metadata and source references. The report preserves them as observations even when an upstream record contains a risk-sounding field.
 
@@ -584,19 +584,19 @@ Image identity: `ghcr.io/teddashh/ai-security-scanner-engine-httpx:1.10.0-7@sha2
 
 ## Nuclei
 
-Run technology-aware vulnerability and exposure templates against a website.
+Identifies website technologies, then runs suitable read-only checks within the approved address and limits.
 
 [Upstream](https://github.com/projectdiscovery/nuclei) · [README @ a8c88fe](https://github.com/projectdiscovery/nuclei/blob/a8c88feb4a1c8e961b7902534ce3af97e9d524a4/README.md) · [Integration and update notes](https://github.com/teddashh/ai-security-scanner/blob/335d0666bdc63eb86e6c8c4cddeae110db893397/docs/engines/nuclei.md)
 
-### What upstream does
+### What the original tool does
 
 Nuclei evaluates targets using upstream YAML templates. The template repository supplies detector logic and evolves independently of the engine, so the engine and template revisions must both be identified.
 
-### Enabled in this project
+### What this app checks
 
 Nuclei 3.11.1 uses the pinned nuclei-templates snapshot and the reviewed read-only HTTP profile. Native automatic scan performs upstream technology detection and selects applicable eligible templates on one approved scheme://host:port origin. Template identity, severity, evidence and remediation are retained.
 
-### Outside this profile
+### What it does not check
 
 The quick profile excludes authentication, redirects to other origins, form/request bodies, out-of-band callbacks, headless flows, fuzzing and exploit-oriented actions. Entering a URL path does not restrict upstream templates to that path; authorization is origin-wide.
 
@@ -608,7 +608,7 @@ The upstream template ecosystem provides technology-specific checks without main
 
 Use it for an owned website or API origin, after an application deployment, or while reviewing exposed administration surfaces. Confirm authority for the entire displayed origin before running.
 
-### What reaches your report
+### What you see in the report
 
 The sample includes native template matches, including an exposed administration-panel observation classified by the scanner. Each result retains its template ID and original severity; the report does not upgrade an informational match into a critical exploit.
 
@@ -648,19 +648,19 @@ Image identity: `ghcr.io/teddashh/ai-security-scanner-engine-nuclei:3.11.1-7@sha
 
 ## Greenbone Community Edition
 
-Perform service-aware remote checks on approved internal hosts and ports.
+Identifies services on approved hosts and ports, then runs the security checks that apply.
 
 [Upstream](https://github.com/greenbone/openvas-scanner) · [README @ 26465a1](https://github.com/greenbone/openvas-scanner/blob/26465a11ff0e6a98d60a253265fab5974fc757b6/README.md) · [Integration and update notes](https://github.com/teddashh/ai-security-scanner/blob/335d0666bdc63eb86e6c8c4cddeae110db893397/docs/engines/greenbone.md)
 
-### What upstream does
+### What the original tool does
 
 Greenbone OpenVAS Scanner executes vulnerability tests from its feed, using service detection and test dependencies to determine applicability. The engine and feed are separate inputs; a current engine with an old feed has different knowledge from a refreshed assessment.
 
-### Enabled in this project
+### What this app checks
 
 OpenVAS Scanner 23.50.24 uses the pinned Community Feed snapshot identified by feed202610010558. The remote-safe profile admits non-deprecated, unauthenticated gather_info tests and lets upstream prerequisites select applicable work. Each task binds one exact host/port grant; original OID, family, severity, evidence and solution survive normalization and resume.
 
-### Outside this profile
+### What it does not check
 
 No credentials, local security checks, brute-force/default-account checks, destructive/denial-of-service categories or alternate port scanners are enabled. A scheduled feed profile is not proof every VT executed; the current upstream result API does not provide a complete per-VT execution ledger.
 
@@ -672,7 +672,7 @@ It supplies meaningful protocol- and service-aware security checks for internal 
 
 Use it for an authorized server, workstation or network appliance with exact TCP ports selected. The beginner profile proposes common ports; an owner may review a different bounded list for the same host.
 
-### What reaches your report
+### What you see in the report
 
 The sample preserves a native XML vulnerability-test result, including its OID and remote evidence. Host/error/inventory records are not automatically converted into vulnerabilities.
 
@@ -712,19 +712,19 @@ Image identity: `ghcr.io/teddashh/ai-security-scanner-engine-greenbone:23.50.24-
 
 ## ZAP
 
-Crawl one website origin and inspect observed responses with passive rules.
+Visits pages on one approved website and checks the responses. It does not submit forms or send attack payloads.
 
 [Upstream](https://github.com/zaproxy/zaproxy) · [README @ 2665d97](https://github.com/zaproxy/zaproxy/blob/2665d972f6d587ba4773a95053ac39af3fdf8df9/README.md) · [Integration and update notes](https://github.com/teddashh/ai-security-scanner/blob/335d0666bdc63eb86e6c8c4cddeae110db893397/docs/engines/zap.md)
 
-### What upstream does
+### What the original tool does
 
 ZAP is a web application security testing project with proxy, crawling, passive and active capabilities. Passive scanning analyzes messages it observes; it is a specific part of the much broader upstream tool.
 
-### Enabled in this project
+### What this app checks
 
 The official 2.17.0 image supplies passive rules pscanrules 75.0.0. The optional zap_passive_v1 automation plan crawls one approved origin, uses upstream per-request pacing at 5 requests/second, five spider threads and a 10-second request timeout, with two-minute crawl and passive-processing bounds, depth five and 100 children per page. Alerts retain all native instances.
 
-### Outside this profile
+### What it does not check
 
 The profile does not authenticate, submit forms, send active attack payloads or follow another origin. It is an explicit Advanced choice; Nuclei remains the quick default. The pacing is the upstream rate control, not a guarantee of a strict rolling one-second window.
 
@@ -736,7 +736,7 @@ ZAP adds response-level inspection and bounded link discovery that complement te
 
 Choose it when you want to review headers, cookies and other passive response indicators across reachable pages of one owned origin. It is useful after a web server or response-policy change.
 
-### What reaches your report
+### What you see in the report
 
 The sample retains native ZAP alert IDs, risk/confidence values and per-URL instances. An alert with several instances remains one upstream alert with inspectable occurrences.
 
@@ -776,19 +776,19 @@ Image identity: `ghcr.io/zaproxy/zaproxy:2.17.0@sha256:781a2bdaea47324e7bab583e2
 
 ## Semgrep
 
-Find security-relevant code patterns in a saved project.
+Finds risky patterns in code, using the rule set included with this version.
 
 [Upstream](https://github.com/semgrep/semgrep) · [README @ a0c13f3](https://github.com/semgrep/semgrep/blob/a0c13f304151e531c7e7c00838076211a07a790c/README.md) · [Integration and update notes](https://github.com/teddashh/ai-security-scanner/blob/335d0666bdc63eb86e6c8c4cddeae110db893397/docs/engines/semgrep.md)
 
-### What upstream does
+### What the original tool does
 
 Semgrep analyzes source code with declarative rules. Language support, rule selection and Community Edition capabilities determine what can be observed without compiling or executing the target project.
 
-### Enabled in this project
+### What this app checks
 
 The pinned CE source is built as 1.174.0-4 with 1,493 selected legacy upstream security rules plus four product rules. The pack has 1,497 unique IDs, is embedded offline and retains rule-source provenance. JSON results preserve rule ID, file/line, upstream severity, message, confidence and available fix/CWE details.
 
-### Outside this profile
+### What it does not check
 
 This is not the current complete Semgrep registry or a Semgrep Pro deployment. Proprietary/unavailable parser dependencies and unselected rule families are excluded. The project snapshot is not executed, and parse errors or unsupported files are coverage gaps rather than clean results.
 
@@ -800,7 +800,7 @@ It adds code-level security evidence that dependency and secret scanners cannot 
 
 Use it for a repository or AI application code snapshot, before review or after a risky implementation change. It is particularly useful for unsafe process invocation, input handling and other patterns represented in the pinned pack.
 
-### What reaches your report
+### What you see in the report
 
 The sample shows a shell-based subprocess call with a native rule ID, file location, CWE and scanner-provided correction. It demonstrates an actual adapter-supported Semgrep JSON result shape with simulated source context.
 
@@ -840,19 +840,19 @@ Image identity: `ghcr.io/teddashh/ai-security-scanner-engine-semgrep:1.174.0-4@s
 
 ## Gitleaks
 
-Detect credential-like strings and hardcoded secrets in local files.
+Looks for passwords and keys left in project files. Values are hidden in the report.
 
 [Upstream](https://github.com/gitleaks/gitleaks) · [README @ 83d9cd6](https://github.com/gitleaks/gitleaks/blob/83d9cd684c87d95d656c1458ef04895a7f1cbd8e/README.md) · [Integration and update notes](https://github.com/teddashh/ai-security-scanner/blob/335d0666bdc63eb86e6c8c4cddeae110db893397/docs/engines/gitleaks.md)
 
-### What upstream does
+### What the original tool does
 
 Gitleaks detects secrets using its scanner-owned rules and pattern context. It supports workflows beyond the file snapshot used here; the scan mode matters when interpreting what was searched.
 
-### Enabled in this project
+### What this app checks
 
 Native 8.30.1 is packaged as 8.30.1-2, using the pinned default configuration over a read-only repository snapshot. The adapter keeps the rule, file, line, fingerprint and redacted evidence.
 
-### Outside this profile
+### What it does not check
 
 This path does not search deleted Git history, verify whether a credential is live, revoke a key or upload files. Even the full sample report retains the adapter’s secret-value masking; full disclosure refers to asset and context fields.
 
@@ -864,7 +864,7 @@ Secret exposure is a high-value first check that works without running project c
 
 Use it before sharing source code, after adding environment/configuration files, or during an AI project review. A reported secret pattern calls for owner verification and, if real, the organization’s rotation process.
 
-### What reaches your report
+### What you see in the report
 
 The sample contains a synthetic API-key-like value. The finding shows Gitleaks attribution and its location while the value stays hidden in both report variants.
 
@@ -904,19 +904,19 @@ Image identity: `ghcr.io/teddashh/ai-security-scanner-engine-gitleaks:8.30.1-2@s
 
 ## TruffleHog
 
-Find exposed credential patterns using TruffleHog’s native detectors.
+Looks for exposed secrets in local files. It does not try the credentials against a live service.
 
 [Upstream](https://github.com/trufflesecurity/trufflehog) · [README @ 3ab759f](https://github.com/trufflesecurity/trufflehog/blob/3ab759fef4bb5935d4fe9ac68b503d05346b8364/README.md) · [Integration and update notes](https://github.com/teddashh/ai-security-scanner/blob/335d0666bdc63eb86e6c8c4cddeae110db893397/docs/engines/trufflehog.md)
 
-### What upstream does
+### What the original tool does
 
 TruffleHog provides detector families for many credential types and supports multiple source and verification workflows. The available upstream online verification feature is deliberately disabled in this product’s local scan.
 
-### Enabled in this project
+### What this app checks
 
 The pinned source is packaged in 3.97.0-3 and runs the filesystem profile on one immutable repository working-tree snapshot with networking disabled. JSONL findings preserve detector identity, location and available verification state, while raw secret material is excluded from normal evidence.
 
-### Outside this profile
+### What it does not check
 
 No online key verification, provider login, Git-history walk, remote source connector or credential remediation is part of this profile. An unverified match is not relabeled as a confirmed live credential.
 
@@ -928,7 +928,7 @@ Its detector set provides a complementary view of secret exposure alongside Gitl
 
 Use it for a repository snapshot containing application configuration, integration code or AI service clients. It is appropriate before code distribution or when reviewing accidental credential inclusion.
 
-### What reaches your report
+### What you see in the report
 
 The sample contains detector matches in filesystem context. Both the native detector name and verification state are retained, while secret content remains protected.
 
@@ -968,19 +968,19 @@ Image identity: `ghcr.io/teddashh/ai-security-scanner-engine-trufflehog:3.97.0-3
 
 ## Checkov
 
-Find risky infrastructure and deployment configuration before it is applied.
+Checks supported deployment and infrastructure files for unsafe settings.
 
 [Upstream](https://github.com/bridgecrewio/checkov) · [README @ 0604e97](https://github.com/bridgecrewio/checkov/blob/0604e97b0f77c89a8c6c1fe2219c3d251cbb9789/README.md) · [Integration and update notes](https://github.com/teddashh/ai-security-scanner/blob/335d0666bdc63eb86e6c8c4cddeae110db893397/docs/engines/checkov.md)
 
-### What upstream does
+### What the original tool does
 
 Checkov provides policy checks for infrastructure as code, container configuration and delivery pipelines. It understands resources and relationships rather than treating every file as plain text.
 
-### Enabled in this project
+### What this app checks
 
 The selected repository or IaC working tree is mounted read-only. The bundled Checkov 3.3.13 checks select applicable frameworks automatically, including Terraform, CloudFormation and Dockerfile. The product requests quiet JSON failed-check output with framework detection enabled and metadata downloads disabled.
 
-### Outside this profile
+### What it does not check
 
 This profile does not connect to a cloud account, apply Terraform, download platform policy metadata or provide the upstream commercial platform. Unavailable offline severity stays Unknown. Parse failures and source-level skip comments require particular care: this adapter does not currently translate Checkov summary counters into complete coverage accounting.
 
@@ -992,7 +992,7 @@ We selected Checkov for policy evaluation across common deployment formats, with
 
 Use it when a selected project contains infrastructure or build configuration, before deployment and again after a configuration change. It is especially useful when the cloud environment is not available for a live posture check.
 
-### What reaches your report
+### What you see in the report
 
 Each failed check retains its check_id, name, file, starting line and resource. The sample includes two failed checks. Native code blocks remain in the underlying evidence; the readable report presents location, next action and upstream links without assigning a severity the scanner did not provide.
 
@@ -1032,19 +1032,19 @@ Image identity: `ghcr.io/teddashh/ai-security-scanner-engine-checkov:3.3.13-1@sh
 
 ## KICS
 
-Detect insecure settings in infrastructure-as-code files.
+Looks for unsafe settings in files that describe how your systems are deployed.
 
 [Upstream](https://github.com/Checkmarx/kics) · [README @ e1f23ca](https://github.com/Checkmarx/kics/blob/e1f23cad9640f55b963f22a116b04906b8c16ac6/README.md) · [Integration and update notes](https://github.com/teddashh/ai-security-scanner/blob/335d0666bdc63eb86e6c8c4cddeae110db893397/docs/engines/kics.md)
 
-### What upstream does
+### What the original tool does
 
 KICS evaluates infrastructure definitions with a library of security queries across formats such as Terraform, CloudFormation, Kubernetes and Dockerfile. Its results connect a query to individual file locations.
 
-### Enabled in this project
+### What this app checks
 
 The product runs the unchanged, digest-pinned KICS 2.1.20 upstream image against one read-only repository or IaC snapshot. Bundled queries, including secret queries, run without a severity exclusion. JSON output supplies query-level descriptions and file-level evidence.
 
-### Outside this profile
+### What it does not check
 
 No cloud deployment, live account inspection or external query download is included. Optional upstream BOM queries are not enabled. Networking is disabled, so external description or version lookups cannot extend the bundled data.
 
@@ -1056,7 +1056,7 @@ KICS adds a query-based view of infrastructure risk while preserving native quer
 
 Use it before applying infrastructure changes or reviewing a repository containing deployment definitions. Running it alongside Checkov is useful when different query libraries cover different configuration mistakes.
 
-### What reaches your report
+### What you see in the report
 
 The sample has one configuration finding. Each result retains the query ID, name, native severity, file and line, description and available CWE or query URL. Failed-file or failed-query counters keep the run incomplete while valid sibling findings remain available.
 
@@ -1096,19 +1096,19 @@ Image identity: `checkmarx/kics:v2.1.20@sha256:3e5a268eb8adda2e5a483c9359ddfc4cd
 
 ## Trivy
 
-Match installed or declared software versions against vulnerability advisories.
+Checks supported project and container packages against the included vulnerability database.
 
 [Upstream](https://github.com/aquasecurity/trivy) · [README @ e1fd17a](https://github.com/aquasecurity/trivy/blob/e1fd17a0ea4a8cf24bc4b4dd7e2cfbf4bb31b994/README.md) · [Integration and update notes](https://github.com/teddashh/ai-security-scanner/blob/335d0666bdc63eb86e6c8c4cddeae110db893397/docs/engines/trivy.md)
 
-### What upstream does
+### What the original tool does
 
 Trivy has capabilities for vulnerability, misconfiguration, secret and other security checks across multiple target types. This integration deliberately selects its vulnerability scanner and fixed offline databases.
 
-### Enabled in this project
+### What this app checks
 
 Repository and IaC snapshots receive two upstream passes: filesystem analysis for language manifests and lockfiles, then rootfs analysis for individual packages such as JARs. A selected OCI image layout receives OS-package vulnerability checks. The immutable vulnerability and Java databases are bundled into the managed image. The vulnerability database was updated on 2026-08-24; the separate Java identification index on 2026-09-09. The newer Java index does not make the vulnerability advisory database newer.
 
-### Outside this profile
+### What it does not check
 
 The invocation uses only --scanners vuln. Trivy secret, configuration and license scanning are not enabled. Language packages inside OCI images are covered by the separate Grype profile, not this Trivy OCI invocation. Databases do not refresh during a scan.
 
@@ -1120,7 +1120,7 @@ Trivy supplies advisory IDs, installed and fixed versions, vendor scores and pac
 
 Use it for a project with dependency metadata, a directory containing supported packaged libraries, or a selected container image. Repeat after dependency changes and after the product receives a refreshed vulnerability database.
 
-### What reaches your report
+### What you see in the report
 
 The sample contains four findings. Native vulnerability IDs, severity, affected package/version, fixed version, advisory references and available CVSS/CWE data remain attributable to Trivy. A fixed version is displayed when upstream supplies one; absence is not replaced with a guessed upgrade.
 
@@ -1160,19 +1160,19 @@ Image identity: `ghcr.io/teddashh/ai-security-scanner-engine-trivy:0.74.0-4@sha2
 
 ## Grype
 
-Identify known vulnerabilities in software packages and container contents.
+Finds known vulnerabilities in supported project and container packages using the included database.
 
 [Upstream](https://github.com/anchore/grype) · [README @ b5fa92b](https://github.com/anchore/grype/blob/b5fa92bbcbef655497e3be840a2f718380e2cdd3/README.md) · [Integration and update notes](https://github.com/teddashh/ai-security-scanner/blob/335d0666bdc63eb86e6c8c4cddeae110db893397/docs/engines/grype.md)
 
-### What upstream does
+### What the original tool does
 
 Grype matches software components to vulnerability data and reports the affected package, advisory and available fix. It works with package catalogs, directories and container-related inputs.
 
-### Enabled in this project
+### What this app checks
 
 The managed profile scans selected repository snapshots and single-image OCI layouts using its pinned offline database. The OCI profile includes both OS and language packages, including supported JAR contents, complementing Trivy’s OS-only OCI profile. Output is native Grype JSON. The bundled database uses schema 6.1.9 and was built on 2026-08-24.
 
-### Outside this profile
+### What it does not check
 
 This profile does not pull arbitrary registries, run the container, update the database during execution or prove exploitability. It does not apply package upgrades. Registry acquisition and selecting an approved OCI snapshot are separate from vulnerability matching.
 
@@ -1184,7 +1184,7 @@ Grype offers an independent advisory-matching perspective and a useful package/f
 
 Use it for dependency review in a selected project or container image, especially images containing application libraries as well as OS packages. Rerun after upgrades or a new bundled advisory snapshot.
 
-### What reaches your report
+### What you see in the report
 
 The sample includes four findings with vulnerability ID, native severity, package and installed version, fix versions where provided, and advisory evidence. Similar Trivy matches remain separately attributable; a shared finding view must not imply independent matches are extra affected assets.
 
@@ -1224,19 +1224,19 @@ Image identity: `ghcr.io/teddashh/ai-security-scanner-engine-grype:0.117.0-4@sha
 
 ## Syft
 
-List the software components present in a selected project or container image.
+Lists the software components in your project or container. The list helps you track what is installed.
 
 [Upstream](https://github.com/anchore/syft) · [README @ 2293641](https://github.com/anchore/syft/blob/2293641e3bd628a01bb37639318d62c0ebe89b39/README.md) · [Integration and update notes](https://github.com/teddashh/ai-security-scanner/blob/335d0666bdc63eb86e6c8c4cddeae110db893397/docs/engines/syft.md)
 
-### What upstream does
+### What the original tool does
 
 Syft generates software bills of materials by identifying packages in directories and container images. Its component inventory can be used by vulnerability tools and supply-chain workflows.
 
-### Enabled in this project
+### What this app checks
 
 The product runs Syft 1.51.0 offline against a read-only repository directory or a selected single-image OCI layout. The adapter records component name, version, type and package URL from native syft-json. The upstream binary is unchanged; the managed image sets a non-root runtime and temporary cache.
 
-### Outside this profile
+### What it does not check
 
 Syft does not produce vulnerability findings in this product. Native license, CPE and location detail stays in the raw evidence rather than becoming a license-compliance assessment. Arbitrary remote registries and automatic remediation are not part of this selected-snapshot profile.
 
@@ -1248,7 +1248,7 @@ We need to distinguish “what software is here” from “which software has a 
 
 Use it with repository or container assessments when the component population matters, including cases where vulnerability tools return no matches. Pair it with Grype or Trivy for actual advisory checks.
 
-### What reaches your report
+### What you see in the report
 
 The sample has two component observations and zero security findings. Components appear in the inventory section with Syft attribution. A component being present, or an inventory task completing, never becomes a vulnerability or a statement that the asset is secure.
 
@@ -1288,19 +1288,19 @@ Image identity: `ghcr.io/teddashh/ai-security-scanner-engine-syft:1.51.0-1@sha25
 
 ## Kubescape
 
-Check saved Kubernetes resource definitions for insecure configuration.
+Checks the Kubernetes configuration files you select, without connecting to a running cluster.
 
 [Upstream](https://github.com/kubescape/kubescape) · [README @ 469969f](https://github.com/kubescape/kubescape/blob/469969f6bebf46bef5e808b91a4bb46fb2bbf4ed/README.md) · [Integration and update notes](https://github.com/teddashh/ai-security-scanner/blob/335d0666bdc63eb86e6c8c4cddeae110db893397/docs/engines/kubescape.md)
 
-### What upstream does
+### What the original tool does
 
 Kubescape offers Kubernetes posture and security capabilities spanning configuration assessment and broader cluster workflows. This product selects its offline manifest assessment with a pinned framework and policy library.
 
-### Enabled in this project
+### What this app checks
 
 A selected Kubernetes YAML/JSON snapshot is evaluated with the pinned NSA framework and embedded Rego policy data. Networking is disabled. The native JSON resource/control results enter the adapter with their upstream IDs, severity and evidence.
 
-### Outside this profile
+### What it does not check
 
 This profile does not connect to a live cluster, install an operator, inspect runtime traffic or scan container packages. It cannot establish whether the saved manifests match deployed state. Container vulnerability matching belongs to Trivy and Grype.
 
@@ -1312,7 +1312,7 @@ Kubernetes-specific resource and control semantics are better handled by an upst
 
 Use it for Kubernetes deployment manifests before deployment or when reviewing an exported configuration snapshot. Pair it with kube-bench node evidence when both workload configuration and node hardening matter.
 
-### What reaches your report
+### What you see in the report
 
 The sample contains three native control findings. Valid failed controls remain visible even if other results are malformed, skipped or errored; incomplete evidence does not become a clean assessment. The report retains the affected resource and original control identity.
 
@@ -1352,19 +1352,19 @@ Image identity: `ghcr.io/teddashh/ai-security-scanner-engine-kubescape:4.0.12-3@
 
 ## kube-bench
 
-Evaluate Kubernetes node hardening against the selected CIS node benchmark.
+Checks a saved copy of node settings against CIS guidance. It does not inspect a live host with administrator access.
 
 [Upstream](https://github.com/aquasecurity/kube-bench) · [README @ 9f133cb](https://github.com/aquasecurity/kube-bench/blob/9f133cb7509ce1dbedfc860e94474588000e25ac/README.md) · [Integration and update notes](https://github.com/teddashh/ai-security-scanner/blob/335d0666bdc63eb86e6c8c4cddeae110db893397/docs/engines/kube-bench.md)
 
-### What upstream does
+### What the original tool does
 
 kube-bench runs benchmark checks against Kubernetes configuration and process facts. Its native outcomes include PASS, FAIL and WARN; some checks require information or judgment that automation cannot supply.
 
-### Enabled in this project
+### What this app checks
 
 The product replays an explicitly selected exported node-facts snapshot into the unchanged CIS 1.11 node profile. The current typed snapshot carries five required files and two process-fact records. Bounded adapters supply the saved file metadata and process facts expected by the native checks.
 
-### Outside this profile
+### What it does not check
 
 No privileged host mount, live node connection, cluster-wide collection or control-plane benchmark is included. The binary is built from the pinned source revision with a 0.16.0 version stamp; that stamp is not a claim that an upstream release archive was used.
 
@@ -1376,7 +1376,7 @@ The upstream benchmark already defines node checks and their verdicts. Replaying
 
 Use it when an approved node-facts export is available and node configuration matters. Use Kubescape separately for workload manifests; neither result substitutes for the other.
 
-### What reaches your report
+### What you see in the report
 
 The native sample contains 26 checks: 15 PASS, six FAIL and five WARN. Six failures become findings with Unknown severity because upstream does not rate them. The five warnings preserve incomplete coverage instead of being counted as passed checks.
 
@@ -1416,19 +1416,19 @@ Image identity: `ghcr.io/teddashh/ai-security-scanner-engine-kube-bench:0.16.0-4
 
 ## garak
 
-Probe an approved model endpoint for selected undesirable response behaviors.
+Sends 54 fixed test prompts to one approved model service. Review the request limits and provider charges before starting.
 
 [Upstream](https://github.com/NVIDIA/garak) · [README @ 93aa9cd](https://github.com/NVIDIA/garak/blob/93aa9cdec309ec4170559676f1826ea2a679920c/README.md) · [Integration and update notes](https://github.com/teddashh/ai-security-scanner/blob/335d0666bdc63eb86e6c8c4cddeae110db893397/docs/engines/garak.md)
 
-### What upstream does
+### What the original tool does
 
 NVIDIA garak is an LLM vulnerability scanner with probe, generator and detector plugins. The full upstream project supports many research workflows; this product exposes one deliberately bounded native probe profile.
 
-### Enabled in this project
+### What this app checks
 
 Garak 0.17.0 sends 54 native prompts from dan.Dan_11_0, dan.Dan_10_0, dan.Dan_9_0 and ansiescape.AnsiEscaped to one approved HTTPS chat-completions URL and model. Native DAN and escaped-ANSI detectors evaluate responses. Requests are serial, paced at one per second, with a 64-attempt ceiling including retries and a 600-second run deadline.
 
-### Outside this profile
+### What it does not check
 
 This is not the entire Garak plugin catalog, adaptive red teaming, local-model execution or a guarantee of model safety. The profile has no arbitrary prompt editor or auxiliary model service. Provider usage may incur charges; only the exact selected endpoint and model are approved.
 
@@ -1440,7 +1440,7 @@ We selected Garak to use established upstream probes and detectors rather than i
 
 Use this optional check for a model API you are authorized to assess, after confirming the exact URL, model and provider charges. It is useful after model or guardrail changes. A fresh local API key is consumed once and is not stored in saved cases or reports.
 
-### What reaches your report
+### What you see in the report
 
 The sample includes four probe/detector findings from a native-format JSONL evaluation. Each retains failure and evaluation counts and the original pair identity. Severity stays Unknown. Missing evaluations, unjudged attempts or a truncated run leave coverage incomplete; raw model replies are not copied into findings.
 
@@ -1480,19 +1480,19 @@ Image identity: `ghcr.io/teddashh/ai-security-scanner-engine-garak:0.17.0-1@sha2
 
 ## Agentic Radar
 
-Map the static structure of an agentic application: agents, tools and their connections.
+Maps agents, tools and connections in supported AI workflows without running them.
 
 [Upstream](https://github.com/splx-ai/agentic-radar) · [README @ 65a7e4b](https://github.com/splx-ai/agentic-radar/blob/65a7e4bd01e2034c7cb52e9620eeed287688cc53/README.md) · [Integration and update notes](https://github.com/teddashh/ai-security-scanner/blob/335d0666bdc63eb86e6c8c4cddeae110db893397/docs/engines/agentic-radar.md)
 
-### What upstream does
+### What the original tool does
 
 Agentic Radar analyzes agentic workflows and provides architecture and security-oriented analysis capabilities. Our integration selects its framework parsers and graph inventory, not the complete upstream analysis workflow.
 
-### Enabled in this project
+### What this app checks
 
 An explicitly selected framework—LangGraph, CrewAI, n8n, OpenAI Agents or AutoGen—is parsed from one immutable repository snapshot. Offline output records workflow components and edges. A narrow machine-readable JSON patch exposes native parser data; the product does not execute the application or load its .env file.
 
-### Outside this profile
+### What it does not check
 
 No live agent invocation, prompt attack, model download or network access is included. Upstream warnings and graph structure are not converted into invented security findings. The broader upstream risk-analysis features are not claimed as enabled.
 
@@ -1504,7 +1504,7 @@ A useful AI assessment first needs to understand the components selected for rev
 
 Use it when reviewing a supported agent framework project and you want an inventory of agents, tools and workflow connections before deeper testing. Choose the actual framework explicitly; unsupported or dynamic construction may remain outside the parsed graph.
 
-### What reaches your report
+### What you see in the report
 
 The sample contains 33 inventory observations and zero vulnerabilities from Agentic Radar. Parser diagnostics remain coverage information; known incomplete CrewAI parsing is not shown as a complete architecture. Every observation keeps its upstream source identity.
 
@@ -1544,19 +1544,19 @@ Image identity: `ghcr.io/teddashh/ai-security-scanner-engine-agentic-radar:0.14.
 
 ## MCP Armor
 
-Check a selected MCP configuration for hardcoded secrets and excessive tool permissions.
+Checks a selected MCP configuration for exposed keys and overly broad tool permissions. It does not start or contact MCP servers.
 
 [Upstream](https://github.com/aira-security/mcp-armor) · [README @ 6af4cee](https://github.com/aira-security/mcp-armor/blob/6af4cee4665ab6242f02a88952f9127b6a04922a/README.md) · [Integration and update notes](https://github.com/teddashh/ai-security-scanner/blob/335d0666bdc63eb86e6c8c4cddeae110db893397/docs/engines/mcp-armor.md)
 
-### What upstream does
+### What the original tool does
 
 MCP Armor provides security checks for Model Context Protocol configurations and related workflows. The product isolates two existing native static checks in a configuration-only mode.
 
-### Enabled in this project
+### What this app checks
 
 MCP Armor 1.0.2 evaluates one explicitly selected JSON/YAML configuration from a read-only repository snapshot. The native hardcoded_secrets and excessive_tool_permissions checks keep their original patterns, severity and decisions. A maintained patch adds a configuration-only entry point and a structured completeness ledger.
 
-### Outside this profile
+### What it does not check
 
 No MCP server is started or contacted. No tools are invoked, no prompt-injection model is loaded, and no runtime permissions are tested. This integration does not claim the complete upstream dynamic-testing feature set.
 
@@ -1568,7 +1568,7 @@ The two native checks address concrete configuration mistakes with useful eviden
 
 Use it when the selected repository includes a recognized MCP configuration and you want to review secrets or tool permissions before running its servers. A project without an applicable configuration does not gain an artificial failed check.
 
-### What reaches your report
+### What you see in the report
 
 The sample includes both native finding types. Check ID, severity, configuration path and server or line coordinates remain visible, while matched secret material is excluded. The JSON envelope records whether each of the two checks completed; parse or check failures retain incomplete coverage.
 

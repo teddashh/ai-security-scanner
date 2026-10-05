@@ -181,6 +181,11 @@ const copy = {
     zhTW: "OCSF 與 OSCAL 的涵蓋說明檔需要一筆已保存掃描。目前可用：HTML、JSON、框架報告與案件包。",
   },
   includeRaw: { en: "Include original scanner files", zhTW: "附上掃描工具原始檔" },
+  includeRawHtml: { en: "Attach original reports at the end", zhTW: "在報告最後附上原始報告" },
+  includeRawHtmlDetail: {
+    en: "Embeds downloadable ZIP attachments in the HTML, including supporting files and logs. May contain secrets. Attachments are not carried into printed PDFs.",
+    zhTW: "將可下載的 ZIP 附件存入 HTML，包含配套檔案與紀錄，可能含機密。列印的 PDF 不會帶出附件。",
+  },
   // Every artifact the desktop app captures is marked sensitive
   // (artifact_store.rs sets it unconditionally), and standard redaction drops
   // every sensitive artifact. So with private details hidden this option
@@ -461,14 +466,12 @@ export function ExportPage({ workspace, selectedRunId, runningScanResultsPending
   const currentFormat = formatCopy[format];
   // Read from the controls rather than from `preview`, which lags a toggle by a
   // debounce -- the sentence below must never describe settings the user has
-  // already changed. Only the case bundle carries artifacts, and only when
+  // already changed. HTML and case bundles can carry original files when
   // redaction is off; see the copy note on `includeRawBundle`.
-  const rawSourcesAttached = format === "case_bundle" && includeRawEvidence && !redactSensitiveValues;
-  // Named separately from `rawSourcesAttached` even though all three currently
-  // reduce to the case bundle: they are three different backend facts -- who
-  // signs, who serializes `asset_relations`, who carries artifacts -- and
-  // collapsing them into one flag is how the summary came to state one format's
-  // properties for all six.
+  const formatSupportsAttachments = format === "case_bundle" || format === "html";
+  const rawSourcesAttached = formatSupportsAttachments && includeRawEvidence && !redactSensitiveValues;
+  // Signing and case-wide asset relations remain specific to case bundles.
+  // HTML attachments do not change either of those contracts.
   const formatIsSigned = !demoMode && format === "case_bundle";
   const formatCarriesAssetRelations = format === "case_bundle";
   const sharingConsequence = redactSensitiveValues
@@ -509,7 +512,7 @@ export function ExportPage({ workspace, selectedRunId, runningScanResultsPending
           disabled={unavailable}
           onChange={() => {
             setFormat(id);
-            if (id !== "case_bundle") setIncludeRawEvidence(false);
+            if (id !== "case_bundle" && id !== "html") setIncludeRawEvidence(false);
           }}
         />
         <span className="format-card__icon"><Icon name={id === "case_bundle" ? "cases" : "file"} size={20} /></span>
@@ -588,7 +591,7 @@ export function ExportPage({ workspace, selectedRunId, runningScanResultsPending
               />
               <span><strong>{text(copy.redact)}</strong><small>{text(copy.redactDetail)}</small></span>
             </label>
-            {format === "case_bundle" && (
+            {formatSupportsAttachments && (
               <label className="toggle-row">
                 <input
                   type="checkbox"
@@ -597,8 +600,8 @@ export function ExportPage({ workspace, selectedRunId, runningScanResultsPending
                   onChange={(event) => setIncludeRawEvidence(event.target.checked)}
                 />
                 <span>
-                  <strong>{text(copy.includeRaw)}</strong>
-                  <small>{text(redactSensitiveValues ? copy.includeRawNeedsUnredacted : copy.includeRawBundle)}</small>
+                  <strong>{text(format === "html" ? copy.includeRawHtml : copy.includeRaw)}</strong>
+                  <small>{text(redactSensitiveValues ? copy.includeRawNeedsUnredacted : format === "html" ? copy.includeRawHtmlDetail : copy.includeRawBundle)}</small>
                 </span>
               </label>
             )}

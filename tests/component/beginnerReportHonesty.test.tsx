@@ -365,7 +365,7 @@ test("a partial run is distinguished from a complete one", () => {
   const partialPill = statePill(partial);
   const completePill = statePill(complete);
 
-  expect(partialPill.textContent).toContain("Completed with gaps");
+  expect(partialPill.textContent).toContain("Some checks are incomplete");
   expect(partialPill.className).not.toContain("status-pill--positive");
   expect(completePill.textContent).toContain("Requested checks complete");
   expect(partialPill.textContent).not.toEqual(completePill.textContent);
@@ -1167,7 +1167,7 @@ test("zero findings with a completed check and a failed sibling leads with incom
   expect(container.querySelector(".empty-state")).toBeNull();
   expect(container.querySelector("[data-asset-result='no_problems_completed']")?.textContent).toContain("contoso.example");
   expect(container.querySelector("[data-asset-result='incomplete_failed']")?.textContent).toContain("second-project");
-  expect(statePill(container).textContent).toContain("Completed with gaps");
+  expect(statePill(container).textContent).toContain("Some checks are incomplete");
 
   unmount();
   window.localStorage.setItem(localeStorageKey, "zh-TW");
@@ -1605,7 +1605,7 @@ test("completed inventory with a failed security check does not claim a clean co
     "The completed work records inventory or connectivity only. Choose an applicable security check to look for weaknesses.",
   );
   const pill = statePill(container);
-  expect(pill.textContent).toContain("Completed with gaps");
+  expect(pill.textContent).toContain("Some checks are incomplete");
   expect(pill.className).not.toContain("status-pill--positive");
 
   cleanup();
@@ -4907,7 +4907,7 @@ test("a completed Maester review item is visible without being labelled untested
   }));
   const rendered = container.textContent ?? "";
 
-  expect(rendered).toContain("Coverage gaps and checks without verdicts");
+  expect(rendered).toContain("Unfinished checks and results to review");
   expect(rendered).toContain("What needs attention");
   expect(rendered).toContain("No automated verdict");
   expect(rendered).toContain("Confirm the tenant exception");

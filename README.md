@@ -1,92 +1,68 @@
 # ai-security-scanner
 
-[Project website](https://teddashh.github.io/ai-security-scanner/) · [繁體中文](README.zh-TW.md) · [Documentation](docs/README.md) · [Releases](https://github.com/teddashh/ai-security-scanner/releases)
+[Project website](https://teddashh.github.io/ai-security-scanner/) · [繁體中文](README.zh-TW.md) · [Documentation](docs/README.md) · [Downloads](https://github.com/teddashh/ai-security-scanner/releases)
 
-Security checks across repositories, websites, and internal systems, through a desktop app or an Agent Skill for Claude Code and Codex. Select the targets, confirm authorization for network checks, and start one scan. Established upstream scanners provide the detection; thin adapters and output converters bring their results into one standardized, prioritized report.
+Find security problems in your code, websites and company systems. Get one report that explains what needs attention, why it matters and what to do next.
 
-## Start here
+Choose what to check in the desktop app. It selects suitable security tools and brings their results together. You can start with one folder or website, or check several parts of your IT environment at once.
 
-Download the **v0.4.0 stable release** for your computer:
+## Run your first scan
 
-| Computer | Installer | First launch |
-| --- | --- | --- |
-| macOS, Apple silicon or Intel | [ai-security-scanner_0.4.0_universal.dmg](https://github.com/teddashh/ai-security-scanner/releases/download/v0.4.0/ai-security-scanner_0.4.0_universal.dmg) | Drag the app into **Applications**. It is not notarized, so run `xattr -dr com.apple.quarantine /Applications/ai-security-scanner.app` once in Terminal before opening it. |
-| Windows x86-64 | [ai-security-scanner_0.4.0_x64-setup.exe](https://github.com/teddashh/ai-security-scanner/releases/download/v0.4.0/ai-security-scanner_0.4.0_x64-setup.exe) or the [MSI](https://github.com/teddashh/ai-security-scanner/releases/download/v0.4.0/ai-security-scanner_0.4.0_x64_en-US.msi) | The installer is unsigned. If SmartScreen warns, select **More info → Run anyway**. If Windows asks to install or update WSL, allow it. |
-| Debian or Ubuntu x86-64 | [ai-security-scanner_0.4.0_amd64.deb](https://github.com/teddashh/ai-security-scanner/releases/download/v0.4.0/ai-security-scanner_0.4.0_amd64.deb) | Install with `sudo apt install ./ai-security-scanner_0.4.0_amd64.deb`. |
+1. [Download v0.4.0](https://github.com/teddashh/ai-security-scanner/releases/tag/v0.4.0) for Windows, macOS or Linux and [follow the install steps](docs/getting-started.md#install). The app prepares its scanning tools; you do not need to install Docker.
+2. Open the app and choose **Scan my environment**, **Check a website**, or **Check code or an AI project**. Add the folders, URLs or internal systems you want to check.
+3. Review the listed targets and checks. Confirm that you may scan any network targets, then start the scan in the app window.
+4. When the scan ends, open **Results**. Choose **Save or share report**, then **Save HTML report** to save a report you can open in a browser.
 
-The app prepares its own scanning runtime the first time a scan needs it; Docker is not required. Checksums and the tested limits of this release are on the [v0.4.0 release page](https://github.com/teddashh/ai-security-scanner/releases/tag/v0.4.0).
+The first scan may take longer while tools download. Later scans can use those tools again. The [walkthrough](docs/getting-started.md#from-new-scan-to-an-html-report) shows each screen.
 
-Open the app and choose one path:
+## What can it check?
 
-- **Scan my environment** combines multiple project folders, websites, and approved internal systems in one run.
-- **Check a website** scans one exact web origin with a reviewed Nuclei profile.
-- **Check code or an AI project** scans a read-only local snapshot for secrets, vulnerable dependencies, risky code, and unsafe configuration.
-
-Follow **New scan → Review and start → Scan progress → Results**. From Results, select **Save or share report** to open **Share results**, then **Save HTML report**. See the [step-by-step path to an HTML report](docs/getting-started.md#from-new-scan-to-an-html-report), including how to reopen a scan from **My scans**.
-
-## Use with Claude Code or Codex
-
-Scans run in the desktop app on your own computer, and **Start** is a button in the app window. An agent on the same computer can install the app from the table above, check that the computer is ready to scan, guide you through the app, explain the results, and save the HTML report. It does not need to build this repository. Both agents use the same skill:
-
-| Agent | Repository skill |
+| What you choose | What you learn |
 | --- | --- |
-| Claude Code | [ai-security-scanner](.claude/skills/ai-security-scanner/SKILL.md) |
-| Codex | [ai-security-scanner](.codex/skills/ai-security-scanner/SKILL.md) |
+| Project folders, including AI projects | Whether supported files contain exposed passwords or keys, risky code, vulnerable software packages or unsafe settings. Your project is copied for inspection, not run or changed. |
+| Websites and APIs | Whether the approved website has known vulnerabilities or exposed information. Checks stay within the address and limits shown before you start. |
+| Internal systems | Which services are available on the approved hosts and ports, and which security problems the applicable checks find. An open port alone is not a vulnerability. |
+| Cloud accounts and Microsoft 365 | What the supported account and access checks find. AWS, Azure and GCP currently cover selected identity and permission settings; they do not provide a complete cloud audit. |
+| Deployment files, containers and Kubernetes | Whether supported files or container contents have known package vulnerabilities or unsafe settings. Available checks depend on the input you provide. |
 
-Open this checkout in either agent and ask:
+Optional AI checks can map supported workflows, inspect MCP configuration, or test one approved model endpoint. The model test sends 54 fixed prompts and may incur provider charges; you review those limits before starting. See [what each scan covers](docs/scanning-scope.md).
 
-> Use the ai-security-scanner skill to install the app on this computer, check that it can scan, guide me through a scan, and save the final HTML report.
+## A report you can act on
 
-When the agent's sandbox blocks a download or the app, it asks you to allow that one command. A cloud agent cannot install anything on your computer, so it gives you the installer link instead. You choose the scope; the product selects applicable upstream checks. See [what the agent needs](docs/getting-started.md#use-with-an-agent-skill).
+Start with the problems that need attention first. Each includes the affected system or file, why the problem matters and a practical next step. Technical details retain the scanner's original evidence, rating and recommendation for whoever will investigate or make the fix.
 
-## One report for every selected asset
+The report also tells you what was checked and what was not. If one check fails, completed results remain available. “No problems found” applies to the completed checks, not every possible risk. The app suggests fixes; it does not make them for you.
 
-The report leads with:
+You can reopen reports, compare compatible scans and share an English or Traditional Chinese HTML copy. Unredacted exports can include the original scanner reports as ZIP attachments at the end. See [how to read and share results](docs/results-and-exports.md).
 
-- assets with confirmed problems;
-- the highest-priority findings and their impact;
-- the smallest practical next action and a way to verify the fix;
-- completed checks and untested work for each asset;
-- original scanner identifiers, severity, evidence, and remediation in technical details.
+### See an example
 
-Completed results remain available when an independent check fails. Reports can be reopened, compared with later runs, and exported as readable HTML or structured data.
+[Open the example report](https://teddashh.github.io/ai-security-scanner/samples/v0.4.0/sample-report-redacted-en.html), or [choose another language or disclosure level](https://teddashh.github.io/ai-security-scanner/sample-reports.html).
 
-## Read a standard report
+These examples use simulated data: 62 findings and 42 inventory observations across all 25 tools. They show the report format, not the security of a real company. Inventory is listed separately from security problems. [How the examples were made](docs/samples/v0.4.0/README.md).
 
-**v0.4.0 · 2026-10-04**: simulated assessment data in the real supported formats of all 25 adapters, processed through the production report pipeline. See 62 original findings and 42 inventory observations, with scanner sources and purposes. Inventory is not counted as vulnerabilities.
+## Get help from Claude Code or Codex
 
-- [Redacted HTML](https://teddashh.github.io/ai-security-scanner/samples/v0.4.0/sample-report-redacted-en.html) · [Direct GitHub download](https://raw.githubusercontent.com/teddashh/ai-security-scanner/main/docs/samples/v0.4.0/sample-report-redacted-en.html)
-- [Fully disclosed HTML](https://teddashh.github.io/ai-security-scanner/samples/v0.4.0/sample-report-full-en.html) · [Direct GitHub download](https://raw.githubusercontent.com/teddashh/ai-security-scanner/main/docs/samples/v0.4.0/sample-report-full-en.html)
-- [All four bilingual examples and generation method](docs/samples/v0.4.0/README.md) · [Website downloads](https://teddashh.github.io/ai-security-scanner/sample-reports.html)
-- [Detailed guide to all 25 scanners](https://teddashh.github.io/ai-security-scanner/scanner-guide.html): SWOT, selection reasons, use cases, enabled features, versions and source dates ([GitHub edition](docs/scanner-guide.md)).
+An assistant running on your computer can help install the app, check setup, explain findings and save the report. You select the targets and start, pause or resume scans in the desktop app.
 
-Both disclosure levels use the same simulated facts. Full disclosure keeps fictional asset and account context; secret values stay masked in both. The standard product export is preserved, with a sample label and source appendix added.
+Open this repository in your assistant and ask:
 
-## What is new in v0.4.0
+> Use the ai-security-scanner skill to install the app, guide me through my first scan and save the final HTML report.
 
-- **ZAP:** optional passive website checks for one approved origin.
-- **Agentic Radar:** offline workflow inventory for five selected frameworks.
-- **Garak:** 54 fixed native prompts across four model probes with exact HTTPS/model consent, a one-shot local key and explicit request limits/provider charges.
-- More reliable coverage, exact-grant Greenbone recovery, readable HTML at tablet widths, corrected M365 platform matching, and reproducible engine build/update notes.
+Use the [Claude Code skill](.claude/skills/ai-security-scanner/SKILL.md) or the [Codex skill](.codex/skills/ai-security-scanner/SKILL.md). An assistant running elsewhere can provide instructions and download links. It cannot install the app on your computer. [Assistant setup](docs/getting-started.md#use-with-an-agent-skill).
 
-See the [v0.4.0 release record](docs/release/v0.4.0.md).
+## Your data and access
 
-## Earlier changes in v0.3.1
+Projects, findings and evidence are stored on your computer. Local code checks do not upload or execute your project. Website and cloud checks contact the services you approve. Saving an HTML report creates a local file; you decide whether to share it.
 
-- Cloud findings explain the failed condition; related AWS findings share a practical action while keeping the original evidence.
-- Expired read-only connections offer reconnect-and-rescan directly.
-- Semgrep includes 1,493 pinned legacy upstream rules and four product rules.
-- Manual kube-bench checks and KICS execution failures remain visible as incomplete coverage.
+Cloud sign-in and cloud permissions are separate. A login can expire while the permissions created during setup remain. Microsoft 365 has an optional [cleanup script](cloud-setup/README.md#english-quick-reference) that waits for a selected scan, saves its report, and removes the recorded setup changes. AWS also has a [temporary-access mode and matching cleanup](cloud-setup/README.md#aws-專用存取與清理). Keep the cleanup window open; an expired administrator sign-in may need renewing. These are optional workflows, not yet the desktop default, and do not remove older, unrecorded AWS or Azure permissions.
 
-See the [release record](docs/release/v0.3.1.md) for exact installer verification and the pending owner-run Microsoft 365 rerun.
+## The tools behind the report
 
-## Integrated tools
+The app brings together 25 open-source tools. Each keeps its own detection rules; the app organizes their results and explains what to do next. [Read the tool guide](https://teddashh.github.io/ai-security-scanner/scanner-guide.html) for uses, limits and versions.
 
-The v0.4.0 release integrates 25 upstream projects, including optional ZAP passive website checks, Agentic Radar offline workflow inventory and bounded Garak model checks. Garak requires an exact HTTPS endpoint/model, fresh local key and explicit approval of its 54 fixed native prompts and provider charges. Research-only candidates are not current scan capabilities. See [Development status](docs/development-status.md). The product runs only the tools that apply to each selected asset, keeps their original identifiers, severity, evidence, and remediation, then organizes every completed result in the same report.
-
-**Selected assets and authorization → thin adapters → upstream scanners → output converters → one standardized report organized by asset**
-
-Detection rules remain upstream. Product-owned prioritization, deduplication, and plain-language guidance live in the shared report layer.
+<details>
+<summary>Tool-by-tool technical reference</summary>
 
 ### Repositories, dependencies, and infrastructure as code
 
@@ -144,22 +120,19 @@ Discovery, inventory, SBOM generation, and the localhost TCP utility remain clea
 
 Exact scan boundaries and profile behavior are documented in [Scanning scope](docs/scanning-scope.md).
 
-## Data and authorization
+Tools still under evaluation are tracked separately and are not available for scans.
 
-Cases, findings, and evidence stay on the device until an external source is connected or a report is exported. Local folders are copied into bounded read-only snapshots. Network scanners contact only the targets and ports confirmed on Review.
 
-Use network scanning only for assets you own or are authorized to assess. The app does not apply remediation automatically.
+</details>
 
-## Documentation
+## More information
 
 - [Getting started](docs/getting-started.md)
-- [Scanning scope](docs/scanning-scope.md)
-- [Results and exports](docs/results-and-exports.md)
-- [Documentation index](docs/README.md)
-- [Development status](docs/development-status.md)
-- [Contributing](CONTRIBUTING.md)
-- [Contributors](CONTRIBUTORS.md)
-- [Security policy](SECURITY.md)
+- [Scan coverage](docs/scanning-scope.md)
+- [Reading and sharing results](docs/results-and-exports.md)
+- [Current development status](docs/development-status.md)
+- [Changes in v0.4.0](docs/release/v0.4.0.md) · [Earlier changes in v0.3.1](docs/release/v0.3.1.md)
+- [Contributing](CONTRIBUTING.md) · [Contributors](CONTRIBUTORS.md) · [Security policy](SECURITY.md)
 
 ## Development
 

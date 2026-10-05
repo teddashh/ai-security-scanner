@@ -6942,9 +6942,14 @@ impl<'a> CaseService<'a> {
         format: CaseExportFormat,
         options: &ExportOptions,
     ) -> AppResult<ExportPreview> {
-        if options.include_raw_artifacts && format != CaseExportFormat::CaseBundle {
+        if options.include_raw_artifacts
+            && !matches!(
+                format,
+                CaseExportFormat::CaseBundle | CaseExportFormat::Html
+            )
+        {
             return Err(AppError::InvalidRequest(
-                "raw artifacts can only be included in the signed case bundle format".into(),
+                "original files can only be included in HTML reports or signed case bundles".into(),
             ));
         }
         let case = self.storage.get_case(case_id)?;
@@ -6988,35 +6993,41 @@ impl<'a> CaseService<'a> {
         }
         let evidence_index_count = evidence_ids.len();
         let selected_run_evidence_count = selected_run_evidence_ids.len();
-        let include_raw_bytes =
-            format == CaseExportFormat::CaseBundle && options.include_raw_artifacts;
-        let raw_artifacts_included = case
+        let raw_artifacts = case
             .raw_artifacts
             .iter()
-            .filter(|artifact| {
-                include_raw_bytes
-                    && !(options.redaction == crate::export::RedactionProfile::Standard
-                        && artifact.contains_sensitive_data)
-            })
-            .count();
-        let raw_artifact_count = case.raw_artifacts.len();
+            .filter(|artifact| format != CaseExportFormat::Html || artifact.run_id == run_id)
+            .collect::<Vec<_>>();
+        let included_ids = if format == CaseExportFormat::Html {
+            crate::report_attachments::selected_artifacts(&case, run_id, options)?
+                .into_iter()
+                .map(|artifact| artifact.id.as_str())
+                .collect::<BTreeSet<_>>()
+        } else {
+            raw_artifacts
+                .iter()
+                .filter(|artifact| {
+                    format == CaseExportFormat::CaseBundle
+                        && options.include_raw_artifacts
+                        && !(options.redaction == crate::export::RedactionProfile::Standard
+                            && artifact.contains_sensitive_data)
+                })
+                .map(|artifact| artifact.id.as_str())
+                .collect::<BTreeSet<_>>()
+        };
+        let raw_artifact_count = raw_artifacts.len();
+        let raw_artifacts_included = included_ids.len();
         let raw_artifacts_omitted = raw_artifact_count.saturating_sub(raw_artifacts_included);
-        let sensitive_raw_artifacts_omitted = case
-            .raw_artifacts
+        let sensitive_raw_artifacts_omitted = raw_artifacts
             .iter()
             .filter(|artifact| {
-                artifact.contains_sensitive_data
-                    && !(include_raw_bytes
-                        && options.redaction != crate::export::RedactionProfile::Standard)
+                artifact.contains_sensitive_data && !included_ids.contains(artifact.id.as_str())
             })
             .count();
-        let sensitive_raw_artifacts_included = case
-            .raw_artifacts
+        let sensitive_raw_artifacts_included = raw_artifacts
             .iter()
             .filter(|artifact| {
-                artifact.contains_sensitive_data
-                    && include_raw_bytes
-                    && options.redaction != crate::export::RedactionProfile::Standard
+                artifact.contains_sensitive_data && included_ids.contains(artifact.id.as_str())
             })
             .count();
         let sensitive_data_warning = if options.redaction
@@ -7122,9 +7133,14 @@ impl<'a> CaseService<'a> {
         destination: impl AsRef<Path>,
         options: ExportOptions,
     ) -> AppResult<CaseExport> {
-        if options.include_raw_artifacts && format != CaseExportFormat::CaseBundle {
+        if options.include_raw_artifacts
+            && !matches!(
+                format,
+                CaseExportFormat::CaseBundle | CaseExportFormat::Html
+            )
+        {
             return Err(AppError::InvalidRequest(
-                "raw artifacts can only be included in the signed case bundle format".into(),
+                "original files can only be included in HTML reports or signed case bundles".into(),
             ));
         }
         match format {
@@ -7159,8 +7175,32 @@ impl<'a> CaseService<'a> {
         destination: impl AsRef<Path>,
         options: ExportOptions,
     ) -> AppResult<CaseExport> {
+        if options.include_raw_artifacts && format != CaseExportFormat::Html {
+            return Err(AppError::InvalidRequest(
+                "original files can only be included in HTML reports or signed case bundles".into(),
+            ));
+        }
         let mut case = self.storage.get_case(case_id)?;
         terminal_export_run(&case, run_id)?;
+        let attachments = if format == CaseExportFormat::Html {
+            crate::report_attachments::build_attachments(
+                &case,
+                run_id,
+                &options,
+                &self.artifact_root,
+            )?
+        } else {
+            Vec::new()
+        };
+        let raw_artifacts_included = attachments
+            .iter()
+            .map(|attachment| attachment.file_names.len())
+            .sum::<usize>();
+        let raw_artifact_count = case
+            .raw_artifacts
+            .iter()
+            .filter(|artifact| format != CaseExportFormat::Html || artifact.run_id == run_id)
+            .count();
         let document_case = case_for_document_export(&case, &options);
         let bytes = match format {
             CaseExportFormat::CanonicalJson => canonical_json_bytes(&case, run_id, &options)?,
@@ -7171,7 +7211,13 @@ impl<'a> CaseService<'a> {
             CaseExportFormat::OscalJson => {
                 export_oscal_assessment_results_bytes(&document_case, run_id)?
             }
-            CaseExportFormat::Html => html_report_bytes(&case, run_id, &options)?,
+            CaseExportFormat::Html => {
+                if options.include_raw_artifacts {
+                    html_report_bytes_with_attachments(&case, run_id, &options, &attachments)?
+                } else {
+                    html_report_bytes(&case, run_id, &options)?
+                }
+            }
             CaseExportFormat::CaseBundle => {
                 return Err(AppError::InvalidRequest(
                     "case bundles must be created through export_case or export_bundle".into(),
@@ -7243,8 +7289,8 @@ impl<'a> CaseService<'a> {
             signature: None,
             public_key: None,
             redaction_profile: options.redaction.as_str().into(),
-            raw_artifacts_included: Some(0),
-            raw_artifacts_omitted: Some(case.raw_artifacts.len()),
+            raw_artifacts_included: Some(raw_artifacts_included),
+            raw_artifacts_omitted: Some(raw_artifact_count.saturating_sub(raw_artifacts_included)),
             integrity_only_notice: UNSIGNED_SCHEMA_NOTICE.into(),
         };
         case.exports.push(export.clone());
@@ -15313,12 +15359,12 @@ fn named_coverage_items(gaps: usize, no_verdict: usize, catalog: HtmlReportCatal
             format!("{counted} 項未回傳判定的檢查")
         }
         crate::export::ReportLocale::ZhHant if no_verdict > 0 => {
-            format!("{counted} 項涵蓋缺口與未回傳判定的檢查")
+            format!("{counted} 項未完成的檢查與待判讀結果")
         }
         crate::export::ReportLocale::ZhHant => format!("{counted} 項覆蓋缺口"),
         _ if only_no_verdict && gaps == 1 => "1 check without a verdict".to_owned(),
         _ if only_no_verdict => format!("{counted} checks without verdicts"),
-        _ if no_verdict > 0 => format!("{counted} coverage gaps and checks without verdicts"),
+        _ if no_verdict > 0 => format!("{counted} unfinished checks and results to review"),
         _ if gaps == 1 => "1 coverage gap".to_owned(),
         _ => format!("{counted} coverage gaps"),
     }
@@ -15343,8 +15389,8 @@ fn coverage_kpi_entries(
     let (coverage_item_count, record_note_count) = classified_coverage_item_counts(report);
     let coverage_items_label = if report.coverage_counts.manual_review > 0 {
         catalog.text(
-            "Coverage gaps and checks without verdicts",
-            "涵蓋缺口與未回傳判定的檢查",
+            "Unfinished checks and results to review",
+            "未完成的檢查與待判讀結果",
         )
     } else {
         catalog.text("Coverage gaps", "涵蓋缺口")
@@ -15398,13 +15444,13 @@ fn html_executive_summary(
         .count();
     let scanned = match catalog.locale {
         crate::export::ReportLocale::ZhHant if completed_assets > 0 => format!(
-            "本輪包含 {} 項資產；其中 {} 項資產有已完成的檢查，共 {} 項。",
+            "這次選了 {} 個檢查對象，其中 {} 個已有完成的檢查，共完成 {} 項。",
             catalog.format_number(report.requested.targets.len()),
             catalog.format_number(completed_assets),
             catalog.format_number(completed_asset_checks),
         ),
         crate::export::ReportLocale::ZhHant => format!(
-            "本輪包含 {} 項資產，完成 {} 項檢查。",
+            "這次選了 {} 個檢查對象，完成 {} 項檢查。",
             catalog.format_number(report.requested.targets.len()),
             catalog.format_number(completed_asset_checks),
         ),
@@ -15479,11 +15525,9 @@ fn html_executive_summary(
             security_checks(CoverageDimensionStatus::TestedPartial),
         ) {
             (_, false, false) => None,
-            (crate::export::ReportLocale::ZhHant, true, _) => {
-                Some("已完成的檢查沒有回報任何問題。")
-            }
+            (crate::export::ReportLocale::ZhHant, true, _) => Some("已完成的檢查沒有發現問題。"),
             (crate::export::ReportLocale::ZhHant, false, true) => {
-                Some("部分完成的檢查沒有回報任何問題。")
+                Some("目前完成的部分沒有發現問題，其餘仍未完成。")
             }
             (_, true, _) if completed_security_asset_checks.max(counts.tested_complete) == 1 => {
                 Some("The check that completed reported no problems.")
@@ -15498,21 +15542,21 @@ fn html_executive_summary(
     } else {
         Some(match (catalog.locale, problem_count, urgent) {
             (crate::export::ReportLocale::ZhHant, 1, 0) => {
-                "共發現 1 個問題，不屬於嚴重或高嚴重程度。".to_owned()
+                "發現 1 個問題，未被評為「嚴重」或「高」等級。".to_owned()
             }
             (crate::export::ReportLocale::ZhHant, 1, _) => {
-                "共發現 1 個問題，屬於嚴重或高嚴重程度。".to_owned()
+                "發現 1 個問題，被評為「嚴重」或「高」等級，請優先查看。".to_owned()
             }
             (crate::export::ReportLocale::ZhHant, total, 0) => format!(
-                "共發現 {} 個問題，其中沒有嚴重或高嚴重程度的項目。",
+                "發現 {} 個問題，沒有被評為「嚴重」或「高」等級的項目。",
                 catalog.format_number(total)
             ),
             (crate::export::ReportLocale::ZhHant, total, urgent) if urgent == total => format!(
-                "共發現 {} 個問題，全部都是嚴重或高嚴重程度。",
+                "發現 {} 個問題，全部被評為「嚴重」或「高」等級，請優先查看。",
                 catalog.format_number(total)
             ),
             (crate::export::ReportLocale::ZhHant, total, urgent) => format!(
-                "共發現 {} 個問題，其中 {} 個是嚴重或高嚴重程度。",
+                "發現 {} 個問題，其中 {} 個被評為「嚴重」或「高」等級，請先查看這些項目。",
                 catalog.format_number(total),
                 catalog.format_number(urgent),
             ),
@@ -18262,10 +18306,64 @@ fn html_grouped_problem_cards(
     (cards, rows, count)
 }
 
+fn html_original_report_attachments(
+    attachments: &[crate::report_attachments::ReportAttachment],
+    catalog: HtmlReportCatalog,
+) -> String {
+    use base64::Engine as _;
+    use base64::engine::general_purpose::STANDARD as BASE64;
+    let mut html = format!(
+        "<section id=\"original-report-attachments\"><h2>{}</h2>",
+        catalog.text("Original report attachments", "原始報告附件")
+    );
+    if attachments.is_empty() {
+        html.push_str(&format!("<p>{}</p></section>", catalog.text(
+            "No original files are attached. None were saved for this run, or the redaction setting excluded them.",
+            "沒有附上原始檔：這輪沒有保存原始檔，或檔案已依遮蔽設定排除。")));
+        return html;
+    }
+    html.push_str(&format!("<p>{}</p><p>{}</p>",
+        catalog.text(
+            "Download and extract a ZIP to open the original reports. Each attachment keeps this run’s scanner output, supporting files, and logs in their original folders. Some tools provide JSON or logs instead of an HTML report.",
+            "下載 ZIP 並完整解壓縮後，即可開啟原始報告。每份附件保留本輪工具的輸出、配套檔案與紀錄，以及原本的目錄結構；部分工具提供 JSON 或紀錄檔，而非 HTML 報告。"),
+        catalog.text("Keep this HTML file to retain the attachments; printing to PDF does not carry them over.",
+            "請保留這份 HTML 以保存附件；列印成 PDF 不會帶出附件。")));
+    html.push_str(&format!("<table class=\"attachments-table\"><thead><tr><th>{}</th><th>{}</th><th>{}</th></tr></thead><tbody>",
+        catalog.text("Scanner", "掃描工具"), catalog.text("Files", "檔案"), catalog.text("Attachment", "附件")));
+    for (index, attachment) in attachments.iter().enumerate() {
+        let file_names = attachment
+            .file_names
+            .iter()
+            .map(|name| format!("<li><code>{}</code></li>", html_escape(name)))
+            .collect::<String>();
+        html.push_str(&format!(concat!(
+            "<tr><th scope=\"row\">{}</th><td class=\"numeric\">{}</td><td>",
+            "<a class=\"attachment-download\" download=\"original-scanner-files-{:02}.zip\" href=\"data:application/zip;base64,{}\">{}</a>",
+            "<span> · {} {}</span><details><summary>{}</summary>",
+            "<p>{}: <code>{}</code></p><p>SHA-256: <code>{}</code></p><ul>{}</ul></details></td></tr>"),
+            html_escape(&engine_named(&attachment.engine_id)), catalog.format_number(attachment.file_names.len()),
+            index + 1, BASE64.encode(&attachment.bytes), catalog.text("Download ZIP", "下載 ZIP"),
+            catalog.format_number(attachment.bytes.len()), catalog.text("bytes", "位元組"),
+            catalog.text("File list and integrity", "檔案清單與完整性"),
+            catalog.text("Check ID", "檢查 ID"), html_escape(&attachment.engine_run_id), attachment.sha256, file_names));
+    }
+    html.push_str("</tbody></table></section>");
+    html
+}
+
 fn html_report_bytes(
     case: &AssessmentCase,
     run_id: &str,
     options: &ExportOptions,
+) -> AppResult<Vec<u8>> {
+    html_report_bytes_with_attachments(case, run_id, options, &[])
+}
+
+fn html_report_bytes_with_attachments(
+    case: &AssessmentCase,
+    run_id: &str,
+    options: &ExportOptions,
+    attachments: &[crate::report_attachments::ReportAttachment],
 ) -> AppResult<Vec<u8>> {
     let exported = case_for_document_export(case, options);
     let report = beginner_report_for_export(case, run_id, options.redaction)?;
@@ -18296,7 +18394,7 @@ fn html_report_bytes(
         match report.state.summary {
             BeginnerReportSummary::Complete => catalog.text("Complete", "完整"),
             BeginnerReportSummary::Partial => {
-                catalog.text("Completed with gaps", "已完成，但有涵蓋缺口")
+                catalog.text("Some checks are incomplete", "部分檢查未完成")
             }
             BeginnerReportSummary::NoChecksCompleted => {
                 catalog.text("No checks completed", "沒有已完成的檢查")
@@ -20045,6 +20143,11 @@ fn html_report_bytes(
         ".finding-index td:nth-child(4),.finding-index td:nth-child(5){color:var(--muted)}",
         ".finding-index .pill{font-size:.75rem;padding:.02rem .45rem}",
         ".finding-index a{color:var(--accent)}",
+        ".attachments-table{table-layout:fixed}.attachments-table th:first-child{width:7rem}",
+        ".attachments-table th:nth-child(2){width:4.5rem}.attachments-table td{overflow-wrap:anywhere}",
+        ".attachment-download{display:inline-flex;align-items:center;min-height:44px;color:var(--accent)}",
+        ".attachment-download:focus-visible{outline:2px solid var(--accent);outline-offset:2px}",
+        ".attachments-table summary{cursor:pointer}.attachments-table ul{padding-left:1.2rem}",
         // An engine's own rating is two or three words. Given a row of its
         // own it broke the identifier line into three.
         ".finding-meta__note{font-size:.8rem;line-height:1.35}",
@@ -20199,8 +20302,8 @@ fn html_report_bytes(
             "<section class=\"kpi-row\">{}</section>"
         ),
         catalog.text(
-            "ai-security-scanner / local case export",
-            "ai-security-scanner／本機案件匯出"
+            "ai-security-scanner / security report",
+            "ai-security-scanner／安全檢查報告"
         ),
         html_escape(html_case_title(&report, catalog)),
         catalog.text("Selected run", "選定的掃描輪次"),
@@ -20285,7 +20388,7 @@ fn html_report_bytes(
         catalog.text("Limits", "限制"),
         requested_limits,
         catalog.text("What was actually tested", "實際測試的內容"),
-        catalog.strong_label(catalog.text("Observed window", "觀察時間範圍")),
+        catalog.strong_label(catalog.text("Scan period", "檢查時間")),
         html_escape(&actual_window),
         catalog.text(
             "Every check this run started, with the targets it reached and when",
@@ -20368,6 +20471,9 @@ fn html_report_bytes(
         catalog.text("Actor", "操作者"),
         grouping_history_rows,
     ));
+    if options.include_raw_artifacts {
+        document.push_str(&html_original_report_attachments(attachments, catalog));
+    }
     // Where the coordinates came from, once, at the end. It is a formal term
     // about this report rather than anything to do next, and it used to be
     // repeated beside every coordinate in every card.
@@ -20431,10 +20537,17 @@ fn html_report_bytes(
             "完整性：未簽章的 HTML；SHA-256 保留在本機案件中。",
         ),
         catalog.text(" ", ""),
-        catalog.text(
-            "Raw evidence is excluded. No scripts, forms, remote resources, scanner messages, or executable remediation are included.",
-            "不包含原始證據，也不包含指令碼、表單、遠端資源、掃描工具訊息或可執行的修復動作。",
-        ),
+        if attachments.is_empty() {
+            catalog.text(
+                "Raw evidence is excluded. No scripts, forms, remote resources, scanner messages, or executable remediation are included.",
+                "不包含原始證據，也不包含指令碼、表單、遠端資源、掃描工具訊息或可執行的修復動作。",
+            )
+        } else {
+            catalog.text(
+                "Original scanner files are embedded as downloadable ZIP attachments. They may contain sensitive data and active HTML; this report does not execute them. Attachments remain in the saved HTML only and are not embedded in printed or PDF copies.",
+                "掃描工具原始檔以可下載的 ZIP 附件內嵌，可能含敏感資料及互動式 HTML；本報告不會執行附件。附件只保留於儲存的 HTML，不會嵌入列印或另存的 PDF。",
+            )
+        },
         catalog.text(" ", ""),
         untrusted_evidence_terms,
         // The inventory prints regardless of its disclosure state; the
@@ -20493,6 +20606,7 @@ fn html_escape(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    include!("case_service_attachment_tests.rs");
     use crate::beginner_report::build_beginner_master_report;
     use crate::bootstrap::{
         CreatedBootstrapResources, create_cleanup_ledger, write_cleanup_ledger,
@@ -39373,11 +39487,11 @@ mod tests {
         // Part of the list did: named the way the tile labels it.
         assert_eq!(
             named_coverage_items(10, 1, en),
-            "10 coverage gaps and checks without verdicts"
+            "10 unfinished checks and results to review"
         );
         assert_eq!(
             named_coverage_items(10, 1, zh),
-            "10 項涵蓋缺口與未回傳判定的檢查"
+            "10 項未完成的檢查與待判讀結果"
         );
 
         // All of it did: nothing here is a coverage gap, so it is not called one.
@@ -39557,7 +39671,7 @@ mod tests {
         assert!(!en_summary.contains("1 assets"));
         assert!(!en_summary.contains("1 checks"));
         assert!(!en_summary.contains("1 problems"));
-        assert!(zh_summary.contains("共發現 1 個問題，不屬於嚴重或高嚴重程度。"));
+        assert!(zh_summary.contains("發現 1 個問題，未被評為「嚴重」或「高」等級。"));
 
         let en_labels = readable_target_labels(&report, en);
         let zh_labels = readable_target_labels(&report, zh);
@@ -39677,7 +39791,7 @@ mod tests {
         let en_summary = html_executive_summary(&report, &report.coverage_counts, 1, en);
         let zh_summary = html_executive_summary(&report, &report.coverage_counts, 1, zh);
         assert!(en_summary.contains("1 problem was found, and it is Critical or High severity."));
-        assert!(zh_summary.contains("共發現 1 個問題，屬於嚴重或高嚴重程度。"));
+        assert!(zh_summary.contains("發現 1 個問題，被評為「嚴重」或「高」等級，請優先查看。"));
 
         let mut second = report.findings[0].clone();
         second.finding_id = "finding-one-asset-second-problem".into();
@@ -39692,7 +39806,7 @@ mod tests {
         );
         assert!(!en_summary.contains("2 of them"), "{en_summary}");
         assert!(
-            zh_summary.contains("共發現 2 個問題，全部都是嚴重或高嚴重程度。"),
+            zh_summary.contains("發現 2 個問題，全部被評為「嚴重」或「高」等級，請優先查看。"),
             "{zh_summary}"
         );
     }
@@ -39847,7 +39961,7 @@ mod tests {
             "{en_summary}"
         );
         assert!(
-            zh_summary.contains("<p>已完成的檢查沒有回報任何問題。</p>"),
+            zh_summary.contains("<p>已完成的檢查沒有發現問題。</p>"),
             "{zh_summary}"
         );
 
@@ -39952,7 +40066,7 @@ mod tests {
         );
         assert!(!en_summary.contains("reported no problems"), "{en_summary}");
         assert!(
-            zh_summary.contains("<p>本輪包含 1 項資產，完成 0 項檢查。</p>"),
+            zh_summary.contains("<p>這次選了 1 個檢查對象，完成 0 項檢查。</p>"),
             "{zh_summary}"
         );
         assert!(!zh_summary.contains("沒有回報任何問題"), "{zh_summary}");
@@ -39978,7 +40092,7 @@ mod tests {
             "{en_summary}"
         );
         assert!(
-            zh_summary.contains("<p>部分完成的檢查沒有回報任何問題。</p>"),
+            zh_summary.contains("<p>目前完成的部分沒有發現問題，其餘仍未完成。</p>"),
             "{zh_summary}"
         );
         assert!(en.contains("No completed dimension was retained."));
@@ -40824,7 +40938,7 @@ mod tests {
             &zh_html,
             &html_escape_breakable_identity(&zh_labels[&failed_id]),
         );
-        assert!(zh_html.contains("本輪包含 3 項資產；其中 1 項資產有已完成的檢查，共 1 項。"));
+        assert!(zh_html.contains("這次選了 3 個檢查對象，其中 1 個已有完成的檢查，共完成 1 項。"));
         assert!(zh_checked_row.starts_with("no-problems-completed"));
         assert!(zh_checked_row.contains("1 項已完成檢查未發現問題"));
         assert!(zh_failed_row.starts_with("incomplete-failed"));
@@ -40984,7 +41098,7 @@ mod tests {
             .unwrap(),
         )
         .unwrap();
-        assert!(zh_html.contains("本輪包含 4 項資產；其中 1 項資產有已完成的檢查，共 1 項。"));
+        assert!(zh_html.contains("這次選了 4 個檢查對象，其中 1 個已有完成的檢查，共完成 1 項。"));
     }
 
     #[test]

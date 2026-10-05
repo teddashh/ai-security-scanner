@@ -271,18 +271,18 @@ test("beginner documentation leads with the three scan paths and one report", as
     assert.match(content, /Nuclei/u);
     assert.match(content, /read-only|唯讀/u);
     assert.match(content, /internal system|內部系統/iu);
-    assert.match(content, /Review and start|確認後開始/u);
+    assert.match(content, /Review and start|Review the listed targets and checks|確認後開始|確認畫面列出的目標與檢查內容/u);
     assert.match(content, /scanning-scope(?:\.zh-TW)?\.md/u);
   }
-  assert.match(english, /One report for every selected asset/u);
-  assert.match(chinese, /所有資產集中在一份報告/u);
-  assert.match(english, new RegExp(`integrates ${runnableCount} upstream projects`, "iu"));
-  assert.match(chinese, new RegExp(`整合 ${runnableCount} 個上游專案`, "u"));
-  assert.match(website, new RegExp(`${runnableCount} upstream projects`, "iu"));
-  assert.match(website, new RegExp(`${runnableCount} 個上游專案`, "u"));
+  assert.match(english, /One report for every selected asset|code, websites and company systems\. Get one report/u);
+  assert.match(chinese, /所有資產集中在一份報告|程式碼、網站與公司系統，把需要注意的安全問題整理成一份報告/u);
+  assert.match(english, new RegExp(`integrates ${runnableCount} upstream projects|brings together ${runnableCount} open-source tools`, "iu"));
+  assert.match(chinese, new RegExp(`整合 ${runnableCount} 個上游專案|整合了 ${runnableCount} 個開源工具`, "u"));
+  assert.match(website, new RegExp(`${runnableCount} (?:upstream projects|tools)`, "iu"));
+  assert.match(website, new RegExp(`${runnableCount} 個(?:上游專案|工具)`, "u"));
   for (const content of [english, chinese, website]) {
-    assert.match(content, /research-only candidates|研究用候選|experimental, non-dispatchable|實驗性、不可派送/iu);
-    assert.match(content, /not (?:current |counted as )?scan capabilities|不(?:計為|是目前的)掃描能力/u);
+    assert.match(content, /research-only candidates|研究用候選|experimental, non-dispatchable|實驗性、不可派送|Tools still under evaluation|仍在評估中的工具/iu);
+    assert.match(content, /not (?:current |counted as )?scan capabilities|不(?:計為|是目前的)掃描能力|not available for scans|還不能用來掃描/u);
   }
 });
 

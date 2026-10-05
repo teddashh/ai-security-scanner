@@ -14,11 +14,18 @@ Microsoft Graph delegated sign-in and read permissions the scan uses, and has
 admin consent for them. It then prints the two IDs for step 2 of the app's
 connection guide and saves them as a setup file the app can import.
 
+Each run also saves a separate cleanup record without passwords or tokens.
+Keep it to revoke this setup with microsoft365-cleanup.ps1 after the scan.
+
 Running it again adds only what is missing. It never removes or replaces
 anything; when something is in the way, it stops and says what to change.
 
 .PARAMETER TenantId
 The tenant to prepare. Leave it out to use the tenant you sign in to.
+
+.PARAMETER Temporary
+Create a separate application for this scan so cleanup cannot interrupt another
+scan using the usual shared application. Recommended for automatic cleanup.
 
 .PARAMETER UseDeviceCode
 Sign in with a code on another device, for a shell that cannot open a browser.
@@ -29,7 +36,9 @@ let the organization manage the computer.
 param(
     [ValidatePattern('^$|^[0-9a-fA-F]{8}-([0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}$')]
     [string] $TenantId = '',
-    [switch] $UseDeviceCode
+    [switch] $UseDeviceCode,
+    [switch] $FunctionsOnly,
+    [switch] $Temporary
 )
 
 $ErrorActionPreference = 'Stop'
@@ -82,13 +91,169 @@ function Test-WritePermission([string] $Name) {
         $lower.EndsWith('.write.all') -or $lower.Contains('accessasuser')
 }
 
-function Invoke-Graph([string] $Method, [string] $Uri, $Body = $null) {
+$script:CleanupReceipt = $null
+$script:CleanupReceiptPath = $null
+$script:AllowCleanupRefresh = $false
+$script:CleanupRefreshToken = $null
+$script:CleanupAccessExpiresAt = $null
+$script:CleanupRefreshDeadline = $null
+
+function Save-CleanupReceipt {
+    # Replace atomically, so an interrupted write does not erase the previous journal.
+    $temporary = "$script:CleanupReceiptPath.$([guid]::NewGuid()).tmp"
+    try {
+        $bytes = [Text.Encoding]::UTF8.GetBytes((ConvertTo-Json -InputObject $script:CleanupReceipt -Depth 30))
+        $file = [IO.File]::Open($temporary, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None)
+        try { $file.Write($bytes, 0, $bytes.Length); $file.Flush($true) } finally { $file.Dispose() }
+        if ([IO.File]::Exists($script:CleanupReceiptPath)) {
+            [IO.File]::Replace($temporary, $script:CleanupReceiptPath, [NullString]::Value)
+        } else { [IO.File]::Move($temporary, $script:CleanupReceiptPath) }
+    } finally {
+        if ([IO.File]::Exists($temporary)) { [IO.File]::Delete($temporary) }
+    }
+}
+
+function ConvertTo-ReceiptMap($Value) {
+    if ($null -eq $Value) { return $null }
+    if ($Value -is [Management.Automation.PSCustomObject]) {
+        $map = @{}
+        foreach ($property in $Value.PSObject.Properties) { $map[$property.Name] = ConvertTo-ReceiptMap $property.Value }
+        return $map
+    }
+    if ($Value -is [array]) { return , @($Value | ForEach-Object { ConvertTo-ReceiptMap $_ }) }
+    return $Value
+}
+
+function Get-GraphErrorStatus($Record) {
+    $exception = $Record.Exception
+    for ($depth = 0; $exception -and $depth -lt 8; $depth++) {
+        $response = $exception.PSObject.Properties['Response']
+        $status = $exception.PSObject.Properties['ResponseStatusCode']
+        if ($status) { return [int] $status.Value }
+        if ($response -and $response.Value) { return [int] $response.Value.StatusCode }
+        $exception = $exception.InnerException
+    }
+    return 0
+}
+
+function Clear-CleanupSignIn {
+    if ($script:CleanupRefreshToken) { $script:CleanupRefreshToken.Dispose() }
+    $script:CleanupRefreshToken = $null
+    $script:CleanupAccessExpiresAt = $null
+}
+
+function Save-CleanupSignIn($Answer) {
+    if (-not $script:AllowCleanupRefresh) { return }
+    if ($Answer.PSObject.Properties['refresh_token'] -and $Answer.refresh_token) {
+        if ($script:CleanupRefreshToken) { $script:CleanupRefreshToken.Dispose() }
+        $script:CleanupRefreshToken = ConvertTo-SecureString -String $Answer.refresh_token -AsPlainText -Force
+    }
+    $script:CleanupAccessExpiresAt = (Get-Date).AddSeconds([int] $Answer.expires_in)
+}
+
+function Update-CleanupSignIn([switch] $Force) {
+    if (-not $script:CleanupRefreshToken) { return }
+    if (-not $Force -and (Get-Date).AddSeconds(60) -lt $script:CleanupAccessExpiresAt) { return }
+    if ((Get-Date) -ge $script:CleanupRefreshDeadline) { throw 'The cleanup sign-in window ended. Keep the receipt and sign in again to finish.' }
+    $plain = $null
+    $answer = $null
+    try {
+        $plain = (New-Object -TypeName Net.NetworkCredential -ArgumentList @('', $script:CleanupRefreshToken)).Password
+        $answer = Invoke-RestMethod -Method Post -Uri "https://login.microsoftonline.com/$TenantId/oauth2/v2.0/token" -Body @{
+            grant_type = 'refresh_token'; client_id = $GraphPowerShellClientId; refresh_token = $plain
+            scope = ((@($SetupScopes | ForEach-Object { "https://graph.microsoft.com/$_" }) + @('offline_access')) -join ' ')
+        }
+        Connect-MgGraph -AccessToken (ConvertTo-SecureString -String $answer.access_token -AsPlainText -Force) -NoWelcome | Out-Null
+        if ((Get-MgContext).TenantId -ne $TenantId) { throw 'The refreshed sign-in returned a different tenant.' }
+        Save-CleanupSignIn $answer
+    } catch {
+        throw 'Microsoft could not renew this cleanup sign-in. Keep the receipt and sign in again; no completion is assumed.'
+    } finally { $plain = $null; $answer = $null }
+}
+
+function Send-GraphRequest([string] $Method, [string] $Uri, $Body = $null) {
+    if ($Uri -notmatch '^(/v1\.0/|https://graph\.microsoft\.com/v1\.0/)') {
+        throw 'Refusing a Graph URL outside the Microsoft Graph v1.0 endpoint.'
+    }
     $request = @{ Method = $Method; Uri = $Uri; OutputType = 'HashTable' }
     if ($null -ne $Body) {
         $request['Body'] = ConvertTo-Json -InputObject $Body -Depth 10 -Compress
         $request['ContentType'] = 'application/json'
     }
-    Invoke-MgGraphRequest @request
+    Update-CleanupSignIn
+    try { Invoke-MgGraphRequest @request } catch {
+        if ((Get-GraphErrorStatus $_) -ne 401 -or -not $script:CleanupRefreshToken) { throw }
+        # Only a definite authentication rejection is retried here. Never
+        # repeat a mutation after a timeout or an uncertain server response.
+        Update-CleanupSignIn -Force
+        Invoke-MgGraphRequest @request
+    }
+}
+
+function Get-SetupPropertyValues($Object, [string] $Name) {
+    if ($Name -eq 'requiredResourceAccess') {
+        return @($Object[$Name] | ForEach-Object {
+            $resource = $_
+            foreach ($permission in @($resource['resourceAccess'])) {
+                "$($resource['resourceAppId'])/$($permission['type'])/$($permission['id'])"
+            }
+        } | Sort-Object -Unique)
+    }
+    if ($Name -eq 'scope') { return @(Split-Scope $Object[$Name] | Sort-Object -Unique) }
+    return , $Object[$Name]
+}
+
+function Assert-SetupSnapshot($Current, $Expected, $Properties) {
+    if (-not $Expected -or $Current['id'] -ne $Expected['id']) { throw 'The setup resource changed while it was being read. Retry setup.' }
+    foreach ($key in @('appId', 'clientId', 'resourceId', 'consentType', 'principalId') + @($Properties)) {
+        $left = ConvertTo-Json -InputObject @(Get-SetupPropertyValues $Current $key) -Depth 10 -Compress
+        $right = ConvertTo-Json -InputObject @(Get-SetupPropertyValues $Expected $key) -Depth 10 -Compress
+        if ($left -cne $right) { throw 'The setup resource changed while it was being read. No stale update was sent; retry setup.' }
+    }
+}
+
+function Invoke-Graph([string] $Method, [string] $Uri, $Body = $null, $Expected = $null) {
+    $action = $null
+    if ($script:CleanupReceipt -and $Method -in @('POST', 'PATCH')) {
+        if ($Uri -notmatch '^/v1\.0/(applications|servicePrincipals|oauth2PermissionGrants)(/[^/?]+)?$') {
+            throw 'This setup mutation has no cleanup journal support.'
+        }
+        $kind = $Matches[1]
+        $before = if ($Method -eq 'PATCH') { Send-GraphRequest GET $Uri } else { $null }
+        if ($Method -eq 'PATCH') { Assert-SetupSnapshot $before $Expected $Body.Keys }
+        $action = @{
+            method = $Method; kind = $kind; id = if ($before) { $before['id'] } else { $null }
+            before = if ($before) {
+                # Only retain fields changed by setup, plus the object's identity. No tokens or credentials.
+                $snapshot = @{ id = $before['id'] }
+                foreach ($key in @('appId', 'clientId', 'resourceId', 'consentType', 'principalId') + @($Body.Keys)) {
+                    $snapshot[$key] = $before[$key]
+                }
+                $snapshot
+            } else { $null }
+            after = $Body; state = 'pending'
+        }
+        $script:CleanupReceipt['actions'] += , $action
+        Save-CleanupReceipt
+    }
+    try { $answer = Send-GraphRequest $Method $Uri $Body } catch {
+        # A definite rejection needs no undo. A lost response remains pending
+        # until cleanup can identify the resource; do not infer absence from it.
+        if ($action -and (Get-GraphErrorStatus $_) -in @(400, 401, 403, 404, 405, 422)) {
+            $action['state'] = 'not_applied'
+            Save-CleanupReceipt
+        }
+        throw
+    }
+    if ($action) {
+        if ($Method -eq 'POST') {
+            $action['id'] = $answer['id']
+            if ($kind -eq 'applications') { $action['after']['appId'] = $answer['appId'] }
+        }
+        $action['state'] = 'ready'
+        Save-CleanupReceipt
+    }
+    return $answer
 }
 
 function Get-GraphList([string] $Uri) {
@@ -132,6 +297,7 @@ function Get-SignInToken {
     $tenant = if ($TenantId) { $TenantId } else { 'organizations' }
     $endpoint = "https://login.microsoftonline.com/$tenant/oauth2/v2.0"
     $scope = @($SetupScopes | ForEach-Object { "https://graph.microsoft.com/$_" }) -join ' '
+    if ($script:AllowCleanupRefresh) { $scope += ' offline_access' }
     $code = Invoke-RestMethod -Method Post -Uri "$endpoint/devicecode" -Body @{ client_id = $GraphPowerShellClientId; scope = $scope }
     Write-Host $code.message
     $interval = [Math]::Max(1, [int] $code.interval)
@@ -144,6 +310,7 @@ function Get-SignInToken {
                 client_id   = $GraphPowerShellClientId
                 device_code = $code.device_code
             }
+            Save-CleanupSignIn $answer
             return [string] $answer.access_token
         } catch {
             $refusal = Get-SignInRefusal $_
@@ -207,6 +374,7 @@ function Set-ReadOnlyApp {
     if ($apps.Count -eq 0) {
         $app = Invoke-Graph POST '/v1.0/applications' @{
             displayName            = $AppName
+            description            = "ai-security-scanner setup $($script:CleanupReceipt['operation_id'])"
             signInAudience         = 'AzureADMyOrg'
             isFallbackPublicClient = $true
             requiredResourceAccess = @(@{
@@ -228,7 +396,7 @@ function Set-ReadOnlyApp {
             Stop-Setup "the app $AppName also asks for $($writes -join ', '), which can change your tenant, so the scanner would refuse to sign in. In the Microsoft Entra admin center, open App registrations, then $AppName, then API permissions, and remove them. Then run this script again."
         }
         if (-not $app['isFallbackPublicClient']) {
-            Invoke-Graph PATCH "/v1.0/applications/$($app['id'])" @{ isFallbackPublicClient = $true } | Out-Null
+            Invoke-Graph PATCH "/v1.0/applications/$($app['id'])" @{ isFallbackPublicClient = $true } $app | Out-Null
             Write-Host "Turned on public client flows for $AppName."
             $changed = $true
         }
@@ -238,7 +406,7 @@ function Set-ReadOnlyApp {
                 @($missing | ForEach-Object { @{ id = $scopeIds[$_]; type = 'Scope' } })
             $updated = @($resources | Where-Object { $_['resourceAppId'] -ne $GraphAppId }) +
                 @(@{ resourceAppId = $GraphAppId; resourceAccess = $access })
-            Invoke-Graph PATCH "/v1.0/applications/$($app['id'])" @{ requiredResourceAccess = $updated } | Out-Null
+            Invoke-Graph PATCH "/v1.0/applications/$($app['id'])" @{ requiredResourceAccess = $updated } $app | Out-Null
             Write-Host "Added $($missing -join ', ') to $AppName."
             $changed = $true
         }
@@ -250,11 +418,27 @@ function Set-ReadOnlyApp {
     # seconds to reach every Microsoft Entra replica, so creating it may retry.
     $principal = @(Get-GraphList ("/v1.0/servicePrincipals?" + (Get-Filter "appId eq '$appId'") + '&$select=id,appId')) |
         Select-Object -First 1
-    for ($attempt = 1; -not $principal; $attempt++) {
+    for ($attempt = 1; -not $principal -and $attempt -le 10; $attempt++) {
         try {
-            $principal = Invoke-Graph POST '/v1.0/servicePrincipals' @{ appId = $appId }
+            $principal = Invoke-Graph POST '/v1.0/servicePrincipals' @{ appId = $appId; tags = @("ai-security-scanner-setup:$($script:CleanupReceipt['operation_id'])") }
         } catch {
-            if ($attempt -ge 10) { throw }
+            $status = Get-GraphErrorStatus $_
+            if ($status -in @(401, 403)) { throw }
+            $visible = @(Get-GraphList ("/v1.0/servicePrincipals?" + (Get-Filter "appId eq '$appId'")))
+            if ($visible.Count) {
+                if ($visible.Count -ne 1 -or @($visible[0]['tags']) -notcontains "ai-security-scanner-setup:$($script:CleanupReceipt['operation_id'])") {
+                    throw 'Another setup created this service principal. Keep the partial receipt and review it before continuing.'
+                }
+                # A lost response (or a failed ready-save) is recoverable from
+                # the operation's server-side marker, never from appId alone.
+                $principal = $visible[0]
+                $intent = @($script:CleanupReceipt['actions'] | Where-Object { $_['kind'] -eq 'servicePrincipals' -and $_['after']['appId'] -eq $appId }) | Select-Object -Last 1
+                $intent['id'] = $principal['id']; $intent['state'] = 'ready'
+                Save-CleanupReceipt
+                break
+            }
+            # Only a definite replication rejection is safe to retry as POST.
+            if ($status -ne 400 -or $attempt -ge 10) { throw }
             Start-Sleep -Seconds 3
         }
     }
@@ -280,7 +464,7 @@ function Set-ReadOnlyApp {
         $granted = Split-Scope $tenantGrant['scope']
         $missing = @($AppPermissions | Where-Object { $granted -notcontains $_ })
         if ($missing.Count) {
-            Invoke-Graph PATCH "/v1.0/oauth2PermissionGrants/$($tenantGrant['id'])" @{ scope = (@($granted) + $missing) -join ' ' } | Out-Null
+            Invoke-Graph PATCH "/v1.0/oauth2PermissionGrants/$($tenantGrant['id'])" @{ scope = (@($granted) + $missing) -join ' ' } $tenantGrant | Out-Null
             Write-Host "Granted admin consent for $($missing -join ', ')."
         } else {
             Write-Host 'Admin consent is already in place.'
@@ -289,9 +473,29 @@ function Set-ReadOnlyApp {
     return $appId
 }
 
+if ($FunctionsOnly) { return }
+
 $failed = $false
+$setupLock = $null
+$connectedToTenant = $false
+$receiptLock = $null
 try {
+    # Serialize setups that share an import file, and prevent cleanup from
+    # consuming an in-flight journal. Lock files remain to avoid Unix inode races.
+    $setupLock = [IO.File]::Open((Join-Path (Get-Location).Path '.ai-security-scanner-microsoft365-setup.lock'), [IO.FileMode]::OpenOrCreate, [IO.FileAccess]::ReadWrite, [IO.FileShare]::None)
+    $connectedToTenant = $true
     $tenant = Connect-Tenant
+    if ($TenantId -and $tenant -ne $TenantId) { throw 'Signed in to a different tenant; no setup changes were made.' }
+    $operation = [guid]::NewGuid().ToString()
+    if ($Temporary) { $AppName = "ai-security-scanner-$operation" }
+    $script:CleanupReceiptPath = Join-Path (Get-Location).Path "ai-security-scanner-microsoft365-cleanup-$operation.json"
+    $receiptLock = [IO.File]::Open("$script:CleanupReceiptPath.lock", [IO.FileMode]::OpenOrCreate, [IO.FileAccess]::ReadWrite, [IO.FileShare]::None)
+    $script:CleanupReceipt = @{
+        schema_version = '1.0.0'; provider = 'microsoft365'; tenant_id = $tenant
+        operation_id = $operation; state = 'setup_in_progress'; actions = @()
+        graph_powershell = 'not_tracked_before_sign_in'; graph_powershell_grant_ids = @(); report = $null; setup_file = $null; watch = $null
+    }
+    Save-CleanupReceipt
     $appId = Set-ReadOnlyApp
 
     $setup = [ordered]@{
@@ -303,6 +507,13 @@ try {
     $path = Join-Path (Get-Location).Path $SetupFile
     [IO.File]::WriteAllText($path, (ConvertTo-Json -InputObject $setup -Depth 5), (New-Object Text.UTF8Encoding $false))
 
+    $script:CleanupReceipt['setup_file'] = @{ path = $path; sha256 = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash }
+    $script:CleanupReceipt['state'] = 'ready'
+    Save-CleanupReceipt
+    Write-Host "Cleanup record: $script:CleanupReceiptPath"
+    if (@($script:CleanupReceipt['actions'] | Where-Object { $_['state'] -ne 'not_applied' }).Count) {
+        Write-Host 'Keep this record. microsoft365-cleanup.ps1 uses it to undo only this setup.'
+    } else { Write-Host 'This run changed nothing. This record revokes nothing; keep the receipt from the setup that originally created access.' }
     Write-Host ''
     Write-Host "Read-only Microsoft 365 access is ready. Enter these values in step 2 of the app's connection guide:"
     Write-Host ''
@@ -316,10 +527,14 @@ try {
     if ($_.ErrorDetails -and $_.ErrorDetails.Message) { $reason = "$reason $($_.ErrorDetails.Message)" }
     Write-Host ''
     Write-Host "Stopped: $reason" -ForegroundColor Red
+    if ($script:CleanupReceiptPath) { Write-Host "Keep the partial cleanup record: $script:CleanupReceiptPath" }
     $failed = $true
 } finally {
-    if (Get-Command Disconnect-MgGraph -ErrorAction SilentlyContinue) {
+    if ($connectedToTenant -and (Get-Command Disconnect-MgGraph -ErrorAction SilentlyContinue)) {
         Disconnect-MgGraph -ErrorAction SilentlyContinue | Out-Null
     }
+    Clear-CleanupSignIn
+    if ($receiptLock) { $receiptLock.Dispose() }
+    if ($setupLock) { $setupLock.Dispose() }
 }
 if ($failed) { exit 1 }

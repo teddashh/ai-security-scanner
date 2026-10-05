@@ -40,6 +40,7 @@ pub mod prioritization;
 pub mod process_lease;
 pub mod product_uninstall;
 pub mod registry;
+mod report_attachments;
 mod report_problem_groups;
 pub mod runtime;
 pub mod runtime_health_monitor;

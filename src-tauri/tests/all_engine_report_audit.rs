@@ -3387,10 +3387,12 @@ fn every_integrated_engine_lands_in_one_terminal_report() {
                             &label[..label.find("</span>").expect("a tile label closes")],
                         )
                     })
-                    .find(|(_, label)| label.contains("verdict") || label.contains("判定"))
+                    .find(|(_, label)| {
+                        label.contains("Unfinished checks") || label.contains("未完成的檢查")
+                    })
                     .expect("a coverage tile");
                 assert!(
-                    tile.contains("verdict") || tile.contains("判定"),
+                    tile.contains("Unfinished checks") || tile.contains("未完成的檢查"),
                     "the audit lost the no-verdict tile: {tile}"
                 );
                 let summary = &html[html

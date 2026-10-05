@@ -53,6 +53,7 @@ const permissionSet = () => {
 };
 
 const key = `${service} ${operation}`;
+if (state.failOperation === operation) refuse("AccessDeniedException", "Fixture refusal");
 switch (key) {
   case "sts get-caller-identity":
     answer(state.caller);
@@ -88,6 +89,7 @@ switch (key) {
         Description: found.description,
         CreatedDate: "2026-10-01T12:00:00+00:00",
         SessionDuration: found.sessionDuration,
+        RelayState: found.relayState,
       },
     });
     break;
@@ -106,8 +108,10 @@ switch (key) {
       customer: [],
       inline: "",
       provisionedAccounts: [],
+      tags: JSON.parse(options.tags ?? "[]"),
     };
     state.permissionSets.push(created);
+    if (state.loseReply === operation) refuse("InternalServerException", "Fixture lost reply");
     answer({
       PermissionSet: {
         Name: created.name,
@@ -136,6 +140,17 @@ switch (key) {
   case "sso-admin get-inline-policy-for-permission-set": {
     const found = permissionSet();
     answer(found.inline ? { InlinePolicy: found.inline } : {});
+    break;
+  }
+  case "sso-admin get-permissions-boundary-for-permission-set":
+    if (state.boundaryNotFound && !permissionSet().boundary) refuse("ResourceNotFoundException", "No boundary attached");
+    answer(permissionSet().boundary ? { PermissionsBoundary: permissionSet().boundary } : {});
+    break;
+  case "sso-admin list-tags-for-resource": {
+    instance();
+    const found = state.permissionSets.find((item) => item.arn === options["resource-arn"]);
+    if (!found) refuse("ResourceNotFoundException", "PermissionSet not found");
+    answer({ Tags: found.tags ?? [] });
     break;
   }
   case "sso-admin list-accounts-for-provisioned-permission-set":
@@ -196,6 +211,7 @@ switch (key) {
     if (!found.provisionedAccounts.includes(assignment.AccountId)) found.provisionedAccounts.push(assignment.AccountId);
     const requestId = randomUUID();
     state.requests[requestId] = "SUCCEEDED";
+    if (state.loseReply === operation) refuse("InternalServerException", "Fixture lost reply");
     answer({
       AccountAssignmentCreationStatus: {
         Status: "IN_PROGRESS",
@@ -219,6 +235,38 @@ switch (key) {
       },
     });
     break;
+  case "sso-admin delete-account-assignment": {
+    const found = permissionSet();
+    if (options["target-type"] !== "AWS_ACCOUNT" || options["principal-type"] !== "USER") {
+      refuse("ValidationException", "unexpected assignment target");
+    }
+    const requestId = randomUUID();
+    state.requests[requestId] = state.deleteStatus ?? "SUCCEEDED";
+    if (state.requests[requestId] === "SUCCEEDED" && !state.ignoreDelete) {
+      state.assignments = state.assignments.filter((a) => !(a.AccountId === options["target-id"] &&
+        a.PermissionSetArn === found.arn && a.PrincipalId === options["principal-id"] && a.PrincipalType === "USER"));
+      found.provisionedAccounts = found.provisionedAccounts.filter((account) => state.assignments.some((a) =>
+        a.AccountId === account && a.PermissionSetArn === found.arn));
+    }
+    if (state.loseReply === operation) refuse("InternalServerException", "Fixture lost reply");
+    answer({ AccountAssignmentDeletionStatus: { RequestId: requestId, Status: "IN_PROGRESS" } });
+    break;
+  }
+  case "sso-admin describe-account-assignment-deletion-status":
+    instance();
+    answer({ AccountAssignmentDeletionStatus: {
+      RequestId: options["account-assignment-deletion-request-id"],
+      Status: state.requests[options["account-assignment-deletion-request-id"]] ?? "FAILED",
+    } });
+    break;
+  case "sso-admin delete-permission-set": {
+    const found = permissionSet();
+    if (state.assignments.some((a) => a.PermissionSetArn === found.arn)) refuse("ConflictException", "Still assigned");
+    if (!state.ignorePermissionSetDelete) state.permissionSets = state.permissionSets.filter((p) => p.arn !== found.arn);
+    if (state.loseReply === operation) refuse("InternalServerException", "Fixture lost reply");
+    answer();
+    break;
+  }
   default:
     refuse("InvalidAction", `the fake does not answer ${key}`);
 }

@@ -1,0 +1,32 @@
+[
+  {
+    "model": "grok-4.7",
+    "exit_code": 0,
+    "seconds": 379,
+    "characters": 38657,
+    "cli": "grok",
+    "requestedModel": "grok-4.7",
+    "promptSha256": "f939507b3df09f57f48ba68d5d8c5d86303e59284888a8cb5d5c738b3062344e",
+    "outputSha256": "8069d690fdeaeb4b610d1a3d9c0831dc0bb9606ab720b3a51ae8c842642d5d21"
+  },
+  {
+    "model": "opus-5.5",
+    "exit_code": 0,
+    "seconds": 229,
+    "characters": 34581,
+    "cli": "agy",
+    "requestedModel": "claude-opus-5-5-high",
+    "promptSha256": "f939507b3df09f57f48ba68d5d8c5d86303e59284888a8cb5d5c738b3062344e",
+    "outputSha256": "8e810dd13fe61f23b163c0c3fb7cd30c9d2f77d12084b16b2e6f99e41113dd54"
+  },
+  {
+    "model": "gemini-3.8-flash",
+    "exit_code": 0,
+    "seconds": 54,
+    "characters": 30591,
+    "cli": "agy",
+    "requestedModel": "gemini-3.8-flash-high",
+    "promptSha256": "f939507b3df09f57f48ba68d5d8c5d86303e59284888a8cb5d5c738b3062344e",
+    "outputSha256": "7b6d37d7c73af6c1b130f8fd2245b8654f8b5730d96c869c65b79ed15ddb552a"
+  }
+]

@@ -8,19 +8,19 @@ SWOT 為專案團隊評估。啟用功能描述本產品設定，不代表完整
 
 ## CloudQuery
 
-AWS IAM 身分與政策盤點：先掌握帳號裡有哪些資源。
+整理部分 AWS 身分與權限政策，作為盤點資料，和安全問題分開列出。
 
 [Upstream](https://github.com/cloudquery/cloudquery) · [README @ e27e4ab](https://github.com/cloudquery/cloudquery/blob/e27e4ab61ad85479a5d53dae9b08440bc63e72b3/README.md) · [整合與更新筆記](https://github.com/teddashh/ai-security-scanner/blob/335d0666bdc63eb86e6c8c4cddeae110db893397/docs/engines/cloudquery.md)
 
-### 上游工具的用途
+### 原本的工具能做什麼
 
 CloudQuery 把 API 資料轉成可查詢、比較的結構化資料。CLI、來源 plugin 與目的地 plugin 各有版本，只記 CLI 版本不足以辨識實際收集行為。
 
-### 本專案啟用的功能
+### 這個程式會檢查什麼
 
 內嵌 CLI 2.0.31、AWS source 9.2.0 與 file destination 1.0.4，以本機 plugin 執行。對一個核准 AWS 帳號使用固定 us-east-1 IAM profile，包含帳號、憑證報表、群組、密碼政策、政策、角色與使用者七張表；子表保留為證據。各表 NDJSON 轉成附來源的盤點觀察。
 
-### 此設定未涵蓋的功能
+### 哪些不在檢查範圍內
 
 這項整合不盤點全部 AWS 服務、不在掃描時下載 plugin，也不把資源列當成弱點。專案刻意固定早期公開 plugin 組合，不宣稱提供最新 CloudQuery 平台。
 
@@ -72,19 +72,19 @@ AWS API 變更、分頁失敗或唯讀權限不足都可能遺漏資源。舊依
 
 ## Steampipe
 
-以 SQL 形式查詢 AWS IAM 資源底冊。
+列出 AWS 使用者與部分帳號設定，方便了解哪些人可以存取。
 
 [Upstream](https://github.com/turbot/steampipe) · [README @ 71fa72f](https://github.com/turbot/steampipe/blob/71fa72fc9ce33897bcb0bd0c9ebf09b867b881cf/README.md) · [整合與更新筆記](https://github.com/teddashh/ai-security-scanner/blob/335d0666bdc63eb86e6c8c4cddeae110db893397/docs/engines/steampipe.md)
 
-### 上游工具的用途
+### 原本的工具能做什麼
 
 Steampipe 透過 provider plugin 將 API 變成 SQL 資料表。雲端中繼資料因此能以熟悉的關聯模型查詢，實際可用服務與欄位則由 plugin 決定。
 
-### 本專案啟用的功能
+### 這個程式會檢查什麼
 
 Steampipe 2.4.5 使用預先放入映像的 AWS plugin 1.32.0。產品透過 cloud launcher 與受控網路出口，對一個核准帳號執行固定 AWS IAM 盤點子集。JSON 資料列轉成雲端資源觀察，保留查詢與來源歸屬。
 
-### 此設定未涵蓋的功能
+### 哪些不在檢查範圍內
 
 此 profile 不執行使用者任意 SQL、不在執行期安裝 plugin、不涵蓋所有雲端服務，也不啟用整套 security Mod。SQL 輸出本身不是安全控制失敗。
 
@@ -136,19 +136,19 @@ Provider 限流、欄位或結構變更，以及 API 權限拒絕，都可能造
 
 ## Prowler
 
-評估 AWS、Azure 或 GCP 的身分與存取設定。
+檢查核准的 AWS 帳號、Azure 訂用帳戶或 GCP 專案中的部分身分與權限設定。
 
 [Upstream](https://github.com/prowler-cloud/prowler) · [README @ 40ecbd0](https://github.com/prowler-cloud/prowler/blob/40ecbd035e5541bf099917c5033cceb8959c4737/README.md) · [整合與更新筆記](https://github.com/teddashh/ai-security-scanner/blob/335d0666bdc63eb86e6c8c4cddeae110db893397/docs/engines/prowler.md)
 
-### 上游工具的用途
+### 原本的工具能做什麼
 
 Prowler 是雲端安全評估專案，提供依 provider 區分的檢查與修正指引。上游完整平台的能力，比本桌面整合選用的受限 provider profile 更廣。
 
-### 本專案啟用的功能
+### 這個程式會檢查什麼
 
 Prowler 5.39.1 針對一個精確 AWS 帳號、Azure subscription 或 GCP project，評估選定的 IAM 設定。原生 OCSF 保留 check ID、FAIL／PASS、資源、嚴重度、失敗原因與修正建議。上游標題若描述理想安全狀態，報告會優先呈現實際失敗條件。
 
-### 此設定未涵蓋的功能
+### 哪些不在檢查範圍內
 
 此整合不是涵蓋所有服務、所有帳號的 Prowler 部署。不宣稱執行所有上游合規套件；個別檢查通過也不代表取得認證或獲准更動雲端資源。
 
@@ -200,19 +200,19 @@ Prowler 5.39.1 針對一個精確 AWS 帳號、Azure subscription 或 GCP projec
 
 ## ScoutSuite
 
-以上游 ScoutSuite 規則檢視 AWS IAM 設定快照。
+檢查部分 AWS 身分與存取設定。本程式使用的是 ScoutSuite 的部分功能。
 
 [Upstream](https://github.com/nccgroup/ScoutSuite) · [README @ 7909f2f](https://github.com/nccgroup/ScoutSuite/blob/7909f2fc6186063e5c9e7ddef8c4d7d1072c8f3d/README.md) · [整合與更新筆記](https://github.com/teddashh/ai-security-scanner/blob/335d0666bdc63eb86e6c8c4cddeae110db893397/docs/engines/scoutsuite.md)
 
-### 上游工具的用途
+### 原本的工具能做什麼
 
 ScoutSuite 透過 provider API 收集雲端設定，標出需要檢視的風險設定。上游支援更廣的多雲評估流程，也有自己的呈現介面。
 
-### 本專案啟用的功能
+### 這個程式會檢查什麼
 
 ScoutSuite 5.14.0 對一個核准 AWS 帳號執行受限的 IAM-only profile。保留的 JSON 輸出修補提供機器可讀結果，不需依賴上游 HTML viewer；adapter 保留規則識別、受影響 IAM 項目與上游嚴重度、證據。
 
-### 此設定未涵蓋的功能
+### 哪些不在檢查範圍內
 
 此 profile 不包含 ScoutSuite 其他雲端 provider 或 AWS 服務類別。產品不把偵測規則搬進 wrapper，也不把每個收集到的設定項目視為弱點。
 
@@ -264,19 +264,19 @@ AWS 回應變化可能超出固定 parser 的理解範圍；上游報告結構�
 
 ## Cloudsplaining
 
-解釋 AWS IAM 政策的過度權限與最小權限風險。
+分析收集到的 AWS 權限政策，找出可能給得太多的權限。
 
 [Upstream](https://github.com/salesforce/cloudsplaining) · [README @ 75a67ea](https://github.com/salesforce/cloudsplaining/blob/75a67ea9cb6d0fdf35ff185d08dad0d45587e6f7/README.md) · [整合與更新筆記](https://github.com/teddashh/ai-security-scanner/blob/335d0666bdc63eb86e6c8c4cddeae110db893397/docs/engines/cloudsplaining.md)
 
-### 上游工具的用途
+### 原本的工具能做什麼
 
 Cloudsplaining 專注 AWS IAM 政策分析，檢視授權資料，將高風險權限分類，例如權限提升、資料存取或更動基礎設施的能力。
 
-### 本專案啟用的功能
+### 這個程式會檢查什麼
 
 0.9.1 會下載一個核准 AWS 帳號的授權細節，執行上游政策分析。原生 action、政策識別、排除資訊與附加資源背景會進入共用報告；相關發現可共用修正動作，每筆證據仍可查閱。
 
-### 此設定未涵蓋的功能
+### 哪些不在檢查範圍內
 
 它不模擬每一個實際 AWS 授權判定、不替使用者判斷業務必要性，也不修改政策。被分類為高風險的 action 是審閱證據，不能直接證明攻擊者目前可利用。
 
@@ -328,19 +328,19 @@ Cloudsplaining 專注 AWS IAM 政策分析，檢視授權資料，將高風險�
 
 ## ScubaGear
 
-依選定的 CISA SCuBA 基準評估 Microsoft Entra ID。
+依照美國 CISA 的安全建議，檢查支援的 Microsoft 365 設定。
 
 [Upstream](https://github.com/cisagov/ScubaGear) · [README @ 4d34e9a](https://github.com/cisagov/ScubaGear/blob/4d34e9a48e38ce5c2e14c0fdfbaee53e57594ae2/README.md) · [整合與更新筆記](https://github.com/teddashh/ai-security-scanner/blob/335d0666bdc63eb86e6c8c4cddeae110db893397/docs/engines/scubagear.md)
 
-### 上游工具的用途
+### 原本的工具能做什麼
 
 CISA ScubaGear 依公開 SCuBA 安全設定基準評估 Microsoft 365 租戶設定。上游有不同產品的評估，因此每份基準結果都需要說明實際評估了哪個產品。
 
-### 本專案啟用的功能
+### 這個程式會檢查什麼
 
 ScubaGear 1.8.0 透過 Microsoft Graph，對一個已授權租戶執行固定 AAD／Entra ID profile。受控映像包含經檢視的 PowerShell 模組與基準輸入；保留原生政策／控制識別、判定與證據，失敗項目形成發現，未評估部分仍可見。
 
-### 此設定未涵蓋的功能
+### 哪些不在檢查範圍內
 
 此設定不評估所有 Microsoft 365 工作負載，不執行 Exchange 或 SharePoint 評估，也不提供合規認證。這些模擬範例不代表即時租用戶評估的結果。
 
@@ -392,19 +392,19 @@ Microsoft Graph 變更、條件式存取限制與同意權限缺漏可能中斷�
 
 ## Maester
 
-執行可重複的 Microsoft Entra 安全設定測試。
+檢查支援的 Microsoft 365 安全設定，列出需要注意的項目。
 
 [Upstream](https://github.com/maester365/maester) · [README @ 6bf1d98](https://github.com/maester365/maester/blob/6bf1d98f094fc7a68e449d2f40f73ef820b72ee3/README.md) · [整合與更新筆記](https://github.com/teddashh/ai-security-scanner/blob/335d0666bdc63eb86e6c8c4cddeae110db893397/docs/engines/maester.md)
 
-### 上游工具的用途
+### 原本的工具能做什麼
 
 Maester 是以 PowerShell 為基礎的 Microsoft 365 安全設定測試框架。測試把預期設定寫成明確條件，保留判定以便長期追蹤。
 
-### 本專案啟用的功能
+### 這個程式會檢查什麼
 
 Maester 2.0.0 對一個已授權租戶執行固定、只使用 Graph 的 Entra 測試 profile。映像固定必要模組與測試，adapter 保留原生測試識別、失敗細節及完成資訊；M365 設定文件列出必要讀取權限，包含選定的 PIM 讀取。
 
-### 此設定未涵蓋的功能
+### 哪些不在檢查範圍內
 
 產品不執行所有 Maester 工作負載、Exchange Online 測試或任意租用戶腳本。略過或無法使用的檢查不會轉成通過。範例展示輸出，不代表即時租用戶評估。
 
@@ -456,19 +456,19 @@ Graph 與 PowerShell 依賴改版可能破壞原本有效的收集路徑；即�
 
 ## Naabu
 
-在精確核准目標上探索開放 TCP 連接埠。
+查看核准的連接埠是否接受連線。連接埠開著值得了解，但不代表有漏洞。
 
 [Upstream](https://github.com/projectdiscovery/naabu) · [README @ 5a0ca8b](https://github.com/projectdiscovery/naabu/blob/5a0ca8bde91b5bb16213e9e8b5c6871eac954bd8/README.md) · [整合與更新筆記](https://github.com/teddashh/ai-security-scanner/blob/335d0666bdc63eb86e6c8c4cddeae110db893397/docs/engines/naabu.md)
 
-### 上游工具的用途
+### 原本的工具能做什麼
 
 Naabu 是網路連接埠探索工具。上游提供多種掃描方式與探索選項；本產品將執行綁定至固定工作計畫。
 
-### 本專案啟用的功能
+### 這個程式會檢查什麼
 
 Naabu 2.6.1 執行核准的 TCP connect 探索 profile。精確目標與連接埠形成有界工作單元及嘗試紀錄；原生 JSONL 服務觀察保留主機／IP、連接埠背景，並由紀錄判定哪些要求的單元確實完成。
 
-### 此設定未涵蓋的功能
+### 哪些不在檢查範圍內
 
 開放連接埠本身不是弱點，也不代表已完成安全掃描。此路徑不授權相鄰主機、擴展 CIDR、UDP 涵蓋範圍或所有上游探索模式。
 
@@ -520,19 +520,19 @@ TCP 連線無法充分說明服務身分、修補狀態或存取控制；防火�
 
 ## httpx
 
-收集 HTTP 可達性與回應中繼資料。
+確認選定的網站服務是否回應，並記錄基本資訊；這不是漏洞檢查。
 
 [Upstream](https://github.com/projectdiscovery/httpx) · [README @ 13037dd](https://github.com/projectdiscovery/httpx/blob/13037dd08b9715cfbd960a70ae1edfef6686a857/README.md) · [整合與更新筆記](https://github.com/teddashh/ai-security-scanner/blob/335d0666bdc63eb86e6c8c4cddeae110db893397/docs/engines/httpx.md)
 
-### 上游工具的用途
+### 原本的工具能做什麼
 
 ProjectDiscovery httpx 是 HTTP 探測工具，與 Python HTTPX client library 不同。它的探測協助描述會回應的網站服務；一次回應本身不構成弱點判斷。
 
-### 本專案啟用的功能
+### 這個程式會檢查什麼
 
 httpx 1.10.0 對精確核准服務使用受限的唯讀 HTTP profile。JSONL 回應紀錄提供 URL／狀態及保留的服務中繼資料，轉成附上游與資產來源的類型化盤點；受控網路路徑限制核准目的地。
 
-### 此設定未涵蓋的功能
+### 哪些不在檢查範圍內
 
 此整合不因 HTTP 狀態就宣稱弱點，不爬取全部應用路由、不登入應用程式，也不啟用所有上游探測功能。
 
@@ -584,19 +584,19 @@ CDN、WAF、短暫錯誤與改變的重新導向會讓不同輪觀察不同；�
 
 ## Nuclei
 
-對網站執行依技術選擇的弱點與曝露範本。
+先辨識網站使用的技術，再於核准的網址與限制內執行適用的唯讀檢查。
 
 [Upstream](https://github.com/projectdiscovery/nuclei) · [README @ a8c88fe](https://github.com/projectdiscovery/nuclei/blob/a8c88feb4a1c8e961b7902534ce3af97e9d524a4/README.md) · [整合與更新筆記](https://github.com/teddashh/ai-security-scanner/blob/335d0666bdc63eb86e6c8c4cddeae110db893397/docs/engines/nuclei.md)
 
-### 上游工具的用途
+### 原本的工具能做什麼
 
 Nuclei 以上游 YAML 範本評估目標。範本 repository 提供偵測邏輯，且與引擎各自更新，因此需要同時識別引擎與範本 revision。
 
-### 本專案啟用的功能
+### 這個程式會檢查什麼
 
 Nuclei 3.11.1 使用固定 nuclei-templates 快照及經檢視的唯讀 HTTP profile。原生 automatic scan 執行上游技術辨識，在一個核准 scheme://host:port 來源上選擇適用且符合限制的範本；保留範本識別、嚴重度、證據與修正建議。
 
-### 此設定未涵蓋的功能
+### 哪些不在檢查範圍內
 
 快速 profile 排除驗證登入、跨來源重新導向、表單／請求主體、帶外回呼、headless 流程、fuzzing 與利用型操作。輸入 URL 路徑不會把上游範本限制在該路徑，授權範圍是整個來源。
 
@@ -648,19 +648,19 @@ Nuclei 3.11.1 使用固定 nuclei-templates 快照及經檢視的唯讀 HTTP pro
 
 ## Greenbone Community Edition
 
-對核准內部主機與連接埠執行依服務適用的遠端檢查。
+辨識核准主機與連接埠上的服務，再執行適合的安全檢查。
 
 [Upstream](https://github.com/greenbone/openvas-scanner) · [README @ 26465a1](https://github.com/greenbone/openvas-scanner/blob/26465a11ff0e6a98d60a253265fab5974fc757b6/README.md) · [整合與更新筆記](https://github.com/teddashh/ai-security-scanner/blob/335d0666bdc63eb86e6c8c4cddeae110db893397/docs/engines/greenbone.md)
 
-### 上游工具的用途
+### 原本的工具能做什麼
 
 Greenbone OpenVAS Scanner 執行 feed 中的弱點測試，透過服務辨識與測試依賴判斷適用性。引擎與 feed 是分開的輸入；相同引擎搭配不同日期的 feed，具備的偵測知識也不同。
 
-### 本專案啟用的功能
+### 這個程式會檢查什麼
 
 OpenVAS Scanner 23.50.24 使用以 feed202610010558 識別的固定 Community Feed 快照。remote-safe profile 納入未棄用、無需驗證的 gather_info 測試，再由上游前置條件選擇適用工作。每個工作綁定一份精確主機／連接埠授權；原始 OID、family、嚴重度、證據與解法在標準化及復原後仍保留。
 
-### 此設定未涵蓋的功能
+### 哪些不在檢查範圍內
 
 不啟用憑證、本機安全檢查、暴力／預設帳號檢查、破壞／阻斷服務類別或其他連接埠掃描器。排程了 feed profile 不代表每個 VT 都執行；目前上游結果 API 沒有完整逐 VT 執行帳本。
 
@@ -712,19 +712,19 @@ Feed 時效、服務指紋變化與被過濾的網路回應都會影響適用性
 
 ## ZAP
 
-爬取單一網站來源，以上游被動規則檢查觀察到的回應。
+瀏覽一個核准網站的頁面並檢查回應，不會送出表單或攻擊內容。
 
 [Upstream](https://github.com/zaproxy/zaproxy) · [README @ 2665d97](https://github.com/zaproxy/zaproxy/blob/2665d972f6d587ba4773a95053ac39af3fdf8df9/README.md) · [整合與更新筆記](https://github.com/teddashh/ai-security-scanner/blob/335d0666bdc63eb86e6c8c4cddeae110db893397/docs/engines/zap.md)
 
-### 上游工具的用途
+### 原本的工具能做什麼
 
 ZAP 是網站應用安全測試專案，具有代理、爬取、被動及主動測試功能。被動掃描分析觀察到的訊息，是完整上游工具中的一部分。
 
-### 本專案啟用的功能
+### 這個程式會檢查什麼
 
 官方 2.17.0 映像提供 pscanrules 75.0.0 被動規則。可選 zap_passive_v1 automation plan 爬取一個核准來源，使用上游每秒 5 次請求節奏、5 個 spider thread、10 秒請求逾時，爬取與被動處理各有 2 分鐘上限、深度 5、每頁最多 100 個子項目；警示保留全部原生實例。
 
-### 此設定未涵蓋的功能
+### 哪些不在檢查範圍內
 
 此 profile 不登入、不送出表單、不傳主動攻擊內容，也不進入其他來源。它是進階選項中的明確選擇，快速預設仍為 Nuclei。限速沿用上游節奏控制，不宣稱嚴格滾動一秒視窗保證。
 
@@ -776,19 +776,19 @@ ZAP 補上回應層檢查與有界連結探索，與範本驅動的 Nuclei 互�
 
 ## Semgrep
 
-在保存的專案中尋找與安全相關的程式碼模式。
+依照本版提供的規則，找出程式碼中可能不安全的寫法。
 
 [Upstream](https://github.com/semgrep/semgrep) · [README @ a0c13f3](https://github.com/semgrep/semgrep/blob/a0c13f304151e531c7e7c00838076211a07a790c/README.md) · [整合與更新筆記](https://github.com/teddashh/ai-security-scanner/blob/335d0666bdc63eb86e6c8c4cddeae110db893397/docs/engines/semgrep.md)
 
-### 上游工具的用途
+### 原本的工具能做什麼
 
 Semgrep 以宣告式規則分析原始碼。語言支援、規則選擇與 Community Edition 能力，決定能在不編譯、不執行目標專案的情況下觀察什麼。
 
-### 本專案啟用的功能
+### 這個程式會檢查什麼
 
 固定 CE 來源建成 1.174.0-4，包含 1,493 個選定的早期上游安全規則與 4 個產品規則，共 1,497 個唯一 ID。規則包離線內嵌並保留來源追溯；JSON 結果保留規則 ID、檔案／行號、上游嚴重度、訊息、信心及可用修正／CWE 細節。
 
-### 此設定未涵蓋的功能
+### 哪些不在檢查範圍內
 
 這不是目前完整 Semgrep registry，也不是 Semgrep Pro 部署。不納入不可用或專有 parser 依賴及未選規則類別；不執行專案快照。解析錯誤或不支援檔案會形成涵蓋缺口。
 
@@ -840,19 +840,19 @@ Semgrep 以宣告式規則分析原始碼。語言支援、規則選擇與 Commu
 
 ## Gitleaks
 
-偵測本機檔案中的憑證樣式字串與硬編碼祕密。
+找出專案檔案裡可能留下的密碼與金鑰，報告會隱藏它們的內容。
 
 [Upstream](https://github.com/gitleaks/gitleaks) · [README @ 83d9cd6](https://github.com/gitleaks/gitleaks/blob/83d9cd684c87d95d656c1458ef04895a7f1cbd8e/README.md) · [整合與更新筆記](https://github.com/teddashh/ai-security-scanner/blob/335d0666bdc63eb86e6c8c4cddeae110db893397/docs/engines/gitleaks.md)
 
-### 上游工具的用途
+### 原本的工具能做什麼
 
 Gitleaks 透過掃描器自有規則與模式背景偵測祕密。上游支援比此處檔案快照更廣的工作流程，因此判讀搜尋範圍時需要知道掃描模式。
 
-### 本專案啟用的功能
+### 這個程式會檢查什麼
 
 原生 8.30.1 封裝為 8.30.1-2，使用固定預設設定掃描唯讀儲存庫快照。Adapter 保留規則、檔案、行號、fingerprint 與遮蔽證據。-2 映像修正建置流程的測試資料複製，沒有替換原生偵測邏輯。
 
-### 此設定未涵蓋的功能
+### 哪些不在檢查範圍內
 
 此路徑不搜尋已刪除 Git 歷史、不驗證憑證是否有效、不撤銷金鑰，也不上傳檔案。完整範例仍保留 adapter 對祕密值的隱藏；完整揭露指資產與背景欄位。
 
@@ -904,19 +904,19 @@ Gitleaks 透過掃描器自有規則與模式背景偵測祕密。上游支援�
 
 ## TruffleHog
 
-以 TruffleHog 原生偵測器尋找曝露憑證模式。
+在本機檔案裡找出可能外洩的密碼與金鑰，不會拿它們登入服務。
 
 [Upstream](https://github.com/trufflesecurity/trufflehog) · [README @ 3ab759f](https://github.com/trufflesecurity/trufflehog/blob/3ab759fef4bb5935d4fe9ac68b503d05346b8364/README.md) · [整合與更新筆記](https://github.com/teddashh/ai-security-scanner/blob/335d0666bdc63eb86e6c8c4cddeae110db893397/docs/engines/trufflehog.md)
 
-### 上游工具的用途
+### 原本的工具能做什麼
 
 TruffleHog 為多種憑證類型提供偵測器，並支援多種來源與驗證流程。本產品的本機掃描刻意關閉上游線上有效性驗證。
 
-### 本專案啟用的功能
+### 這個程式會檢查什麼
 
 固定來源封裝於 3.97.0-3，在停用網路下，對一份不可變儲存庫工作目錄快照執行 filesystem profile。JSONL 發現保留偵測器識別、位置與可用驗證狀態，原始祕密不進入一般證據內容。
 
-### 此設定未涵蓋的功能
+### 哪些不在檢查範圍內
 
 此 profile 不進行線上金鑰驗證、provider 登入、Git 歷史遍歷、遠端來源連接或憑證修復；未驗證命中不會被改標為已確認有效憑證。
 
@@ -968,19 +968,19 @@ TruffleHog 為多種憑證類型提供偵測器，並支援多種來源與驗證
 
 ## Checkov
 
-在基礎設施與部署設定套用前找出風險。
+檢查支援的部署與基礎設施設定檔，找出不安全的設定。
 
 [Upstream](https://github.com/bridgecrewio/checkov) · [README @ 0604e97](https://github.com/bridgecrewio/checkov/blob/0604e97b0f77c89a8c6c1fe2219c3d251cbb9789/README.md) · [整合與更新筆記](https://github.com/teddashh/ai-security-scanner/blob/335d0666bdc63eb86e6c8c4cddeae110db893397/docs/engines/checkov.md)
 
-### 上游工具的用途
+### 原本的工具能做什麼
 
 Checkov 對基礎設施即程式碼、容器設定與交付流程提供政策檢查，理解資源及其關聯，而非只把檔案當成文字。
 
-### 本專案啟用的功能
+### 這個程式會檢查什麼
 
 唯讀掛載所選儲存庫或 IaC 工作目錄。Checkov 3.3.13 內附檢查會自動選擇適用框架，包括 Terraform、CloudFormation 與 Dockerfile。產品啟用框架辨識，取得精簡 JSON 失敗結果，並停用平台中繼資料下載。
 
-### 此設定未涵蓋的功能
+### 哪些不在檢查範圍內
 
 此設定不連接雲端帳號、不套用 Terraform、不下載平台政策資料，也不包含上游商業平台。離線缺少嚴重程度時保留 Unknown。解析失敗與原始碼內的略過註解需要特別留意：目前 adapter 尚未把 Checkov 摘要計數完整轉換成涵蓋範圍紀錄。
 
@@ -1032,19 +1032,19 @@ Checkov 對基礎設施即程式碼、容器設定與交付流程提供政策檢
 
 ## KICS
 
-偵測基礎設施即程式碼檔案中的不安全設定。
+檢查用來部署系統的設定檔，找出可能造成風險的設定。
 
 [Upstream](https://github.com/Checkmarx/kics) · [README @ e1f23ca](https://github.com/Checkmarx/kics/blob/e1f23cad9640f55b963f22a116b04906b8c16ac6/README.md) · [整合與更新筆記](https://github.com/teddashh/ai-security-scanner/blob/335d0666bdc63eb86e6c8c4cddeae110db893397/docs/engines/kics.md)
 
-### 上游工具的用途
+### 原本的工具能做什麼
 
 KICS 透過安全查詢庫評估 Terraform、CloudFormation、Kubernetes、Dockerfile 等格式的基礎設施定義，將每個查詢結果連到個別檔案位置。
 
-### 本專案啟用的功能
+### 這個程式會檢查什麼
 
 產品使用未修改、固定 digest 的 KICS 2.1.20 上游映像，掃描單一唯讀儲存庫或 IaC 快照。執行內附查詢，包括機密資料查詢，且不排除任何嚴重程度。JSON 輸出提供查詢說明與檔案層級證據。
 
-### 此設定未涵蓋的功能
+### 哪些不在檢查範圍內
 
 不部署雲端資源、不檢查即時帳號，也不下載外部查詢。未啟用上游可選的 BOM 查詢。停用網路，因此外部說明或版本查詢不會擴充內附資料。
 
@@ -1096,19 +1096,19 @@ KICS 提供以查詢為基礎的基礎設施風險觀點，同時保留原生查
 
 ## Trivy
 
-將已安裝或宣告的軟體版本與漏洞公告比對。
+用內附的漏洞資料庫，檢查支援的專案與容器套件。
 
 [Upstream](https://github.com/aquasecurity/trivy) · [README @ e1fd17a](https://github.com/aquasecurity/trivy/blob/e1fd17a0ea4a8cf24bc4b4dd7e2cfbf4bb31b994/README.md) · [整合與更新筆記](https://github.com/teddashh/ai-security-scanner/blob/335d0666bdc63eb86e6c8c4cddeae110db893397/docs/engines/trivy.md)
 
-### 上游工具的用途
+### 原本的工具能做什麼
 
 Trivy 對多種目標提供漏洞、錯誤設定、機密資料等安全檢查。本整合明確選用其中的漏洞掃描器及固定離線資料庫。
 
-### 本專案啟用的功能
+### 這個程式會檢查什麼
 
 儲存庫及 IaC 快照執行兩個上游步驟：filesystem 分析語言套件清單與鎖定檔，再由 rootfs 分析 JAR 等獨立套件。所選 OCI 映像配置接受作業系統套件漏洞檢查。不可變更的漏洞與 Java 資料庫內附於受管映像。 漏洞資料庫更新日為 2026-08-24，獨立 Java 辨識索引為 2026-09-09。較新的 Java 索引不代表漏洞公告資料庫也較新。
 
-### 此設定未涵蓋的功能
+### 哪些不在檢查範圍內
 
 呼叫僅使用 --scanners vuln，未啟用 Trivy 的機密資料、設定及授權掃描。OCI 映像內的語言套件由獨立的 Grype 設定涵蓋，不屬於此 Trivy OCI 呼叫。掃描期間不更新資料庫。
 
@@ -1160,19 +1160,19 @@ Trivy 提供公告 ID、已安裝與修正版、供應商評分及套件位置�
 
 ## Grype
 
-辨識軟體套件及容器內容中的已知漏洞。
+使用內附資料庫，找出支援的專案與容器套件是否有已知漏洞。
 
 [Upstream](https://github.com/anchore/grype) · [README @ b5fa92b](https://github.com/anchore/grype/blob/b5fa92bbcbef655497e3be840a2f718380e2cdd3/README.md) · [整合與更新筆記](https://github.com/teddashh/ai-security-scanner/blob/335d0666bdc63eb86e6c8c4cddeae110db893397/docs/engines/grype.md)
 
-### 上游工具的用途
+### 原本的工具能做什麼
 
 Grype 將軟體元件與漏洞資料比對，回報受影響套件、公告及可用修正，支援套件目錄、檔案目錄與容器相關輸入。
 
-### 本專案啟用的功能
+### 這個程式會檢查什麼
 
 受管設定以固定離線資料庫掃描所選儲存庫快照及單一映像 OCI 配置。OCI 設定包含作業系統與語言套件，也包含受支援的 JAR 內容，補足 Trivy 僅檢查 OCI 作業系統套件的設定。輸出採原生 Grype JSON。 內附資料庫採用 schema 6.1.9，建置日為 2026-08-24。
 
-### 此設定未涵蓋的功能
+### 哪些不在檢查範圍內
 
 此設定不任意拉取登錄站、不執行容器、不在執行中更新資料庫，也不證明可利用性。不會直接升級套件。取得登錄站內容及選擇已核准 OCI 快照，與漏洞比對是分開的步驟。
 
@@ -1224,19 +1224,19 @@ Grype 提供獨立的公告比對觀點與實用的套件修正模型。與 Triv
 
 ## Syft
 
-列出所選專案或容器映像內的軟體元件。
+列出專案或容器裡的軟體元件，幫你掌握用了哪些東西；清單本身不是漏洞報告。
 
 [Upstream](https://github.com/anchore/syft) · [README @ 2293641](https://github.com/anchore/syft/blob/2293641e3bd628a01bb37639318d62c0ebe89b39/README.md) · [整合與更新筆記](https://github.com/teddashh/ai-security-scanner/blob/335d0666bdc63eb86e6c8c4cddeae110db893397/docs/engines/syft.md)
 
-### 上游工具的用途
+### 原本的工具能做什麼
 
 Syft 辨識目錄與容器映像中的套件，產生軟體物料清單。元件盤點可供漏洞工具及供應鏈工作流程使用。
 
-### 本專案啟用的功能
+### 這個程式會檢查什麼
 
 產品以 Syft 1.51.0 離線掃描唯讀儲存庫目錄或所選單一映像 OCI 配置。adapter 從原生 syft-json 記錄元件名稱、版本、類型及套件 URL。上游執行檔未修改；受管映像設定非 root 執行與暫存快取。
 
-### 此設定未涵蓋的功能
+### 哪些不在檢查範圍內
 
 Syft 在本產品中不產生漏洞發現。原生授權、CPE 及位置細節保留在原始證據，不轉成授權合規判定。任意遠端登錄站與自動修正不屬於此所選快照設定。
 
@@ -1288,19 +1288,19 @@ Syft 在本產品中不產生漏洞發現。原生授權、CPE 及位置細節�
 
 ## Kubescape
 
-檢查已儲存的 Kubernetes 資源定義是否含不安全設定。
+檢查你選好的 Kubernetes 設定檔，不會連到正在運作的叢集。
 
 [Upstream](https://github.com/kubescape/kubescape) · [README @ 469969f](https://github.com/kubescape/kubescape/blob/469969f6bebf46bef5e808b91a4bb46fb2bbf4ed/README.md) · [整合與更新筆記](https://github.com/teddashh/ai-security-scanner/blob/335d0666bdc63eb86e6c8c4cddeae110db893397/docs/engines/kubescape.md)
 
-### 上游工具的用途
+### 原本的工具能做什麼
 
 Kubescape 提供 Kubernetes 設定評估及更廣泛叢集工作流程的安全能力。本產品選用離線資源清單評估，搭配固定的框架與政策庫。
 
-### 本專案啟用的功能
+### 這個程式會檢查什麼
 
 以固定 NSA 框架及內附 Rego 政策資料，評估所選 Kubernetes YAML/JSON 快照。網路停用。原生 JSON 資源與控制項結果，連同上游 ID、嚴重程度及證據送入 adapter。
 
-### 此設定未涵蓋的功能
+### 哪些不在檢查範圍內
 
 此設定不連接即時叢集、不安裝 operator、不檢查執行時流量，也不掃描容器套件。它不能確認已儲存清單與部署狀態是否一致。容器漏洞比對由 Trivy 與 Grype 負責。
 
@@ -1352,19 +1352,19 @@ Kubernetes API 演進及政策庫變更，可能讓舊檢查不完整或不適�
 
 ## kube-bench
 
-依所選 CIS 節點基準評估 Kubernetes 節點強化設定。
+依照 CIS 建議檢查節點設定的副本，不會取得管理員權限來檢查運作中的主機。
 
 [Upstream](https://github.com/aquasecurity/kube-bench) · [README @ 9f133cb](https://github.com/aquasecurity/kube-bench/blob/9f133cb7509ce1dbedfc860e94474588000e25ac/README.md) · [整合與更新筆記](https://github.com/teddashh/ai-security-scanner/blob/335d0666bdc63eb86e6c8c4cddeae110db893397/docs/engines/kube-bench.md)
 
-### 上游工具的用途
+### 原本的工具能做什麼
 
 kube-bench 依 Kubernetes 設定及程序資訊執行基準檢查。原生結果包括 PASS、FAIL 與 WARN；部分檢查需要自動化無法提供的資訊或判斷。
 
-### 本專案啟用的功能
+### 這個程式會檢查什麼
 
 產品將明確選取的匯出節點資訊快照，提供給未修改的 CIS 1.11 節點設定。現行型別化快照包含五個必要檔案與兩筆程序資訊。受限的轉接層提供原生檢查所需的已儲存檔案中繼資料及程序資訊。
 
-### 此設定未涵蓋的功能
+### 哪些不在檢查範圍內
 
 不包含特權主機掛載、即時節點連線、全叢集蒐集或控制平面基準。執行檔由固定原始碼版本建置並標記 0.16.0；此標記不代表採用了上游發布封存檔。
 
@@ -1416,19 +1416,19 @@ kube-bench 依 Kubernetes 設定及程序資訊執行基準檢查。原生結果
 
 ## garak
 
-對已核准的模型端點探測特定不當回應行為。
+對一個核准的模型服務送出 54 個固定測試提示。開始前請確認請求限制與服務商費用。
 
 [Upstream](https://github.com/NVIDIA/garak) · [README @ 93aa9cd](https://github.com/NVIDIA/garak/blob/93aa9cdec309ec4170559676f1826ea2a679920c/README.md) · [整合與更新筆記](https://github.com/teddashh/ai-security-scanner/blob/335d0666bdc63eb86e6c8c4cddeae110db893397/docs/engines/garak.md)
 
-### 上游工具的用途
+### 原本的工具能做什麼
 
 NVIDIA garak 是具備探測、生成器及偵測器外掛的 LLM 弱點掃描器。完整上游支援多種研究流程；本產品提供一組明確受限的原生探測設定。
 
-### 本專案啟用的功能
+### 這個程式會檢查什麼
 
 Garak 0.17.0 將 dan.Dan_11_0、dan.Dan_10_0、dan.Dan_9_0 與 ansiescape.AnsiEscaped 的 54 個原生提示，送到單一已核准 HTTPS chat-completions 網址及模型。原生 DAN 與 ANSI 跳脫偵測器評估回應。請求依序執行，每秒一個，含重試最多 64 次，工作期限為 600 秒。
 
-### 此設定未涵蓋的功能
+### 哪些不在檢查範圍內
 
 此功能不包含整套 Garak 外掛目錄、自適應紅隊測試或本機模型執行，也不保證模型安全。沒有任意提示編輯器或輔助模型服務。供應商使用量可能收費；核准範圍僅限所選端點及模型。
 
@@ -1480,19 +1480,19 @@ Garak 0.17.0 將 dan.Dan_11_0、dan.Dan_10_0、dan.Dan_9_0 與 ansiescape.AnsiEs
 
 ## Agentic Radar
 
-盤點代理式應用程式的靜態結構：代理、工具及其連線。
+整理支援的 AI 工作流程，讓你看懂有哪些代理、工具與連線，不會執行那些流程。
 
 [Upstream](https://github.com/splx-ai/agentic-radar) · [README @ 65a7e4b](https://github.com/splx-ai/agentic-radar/blob/65a7e4bd01e2034c7cb52e9620eeed287688cc53/README.md) · [整合與更新筆記](https://github.com/teddashh/ai-security-scanner/blob/335d0666bdc63eb86e6c8c4cddeae110db893397/docs/engines/agentic-radar.md)
 
-### 上游工具的用途
+### 原本的工具能做什麼
 
 Agentic Radar 分析代理式工作流程，提供架構及安全分析能力。本整合選用其框架解析器與圖形盤點，不包含完整上游分析流程。
 
-### 本專案啟用的功能
+### 這個程式會檢查什麼
 
 從單一不可變更的儲存庫快照，解析明確選取的框架：LangGraph、CrewAI、n8n、OpenAI Agents 或 AutoGen。離線輸出記錄工作流程元件與邊。小範圍的機器可讀 JSON 修改提供原生解析資料；產品不執行應用程式，也不載入其 .env 檔案。
 
-### 此設定未涵蓋的功能
+### 哪些不在檢查範圍內
 
 不包含即時代理呼叫、提示攻擊、模型下載或網路存取。上游警告與圖形結構不會轉成自創安全發現，也不宣稱已啟用上游更廣泛的風險分析功能。
 
@@ -1544,19 +1544,19 @@ Agentic Radar 分析代理式工作流程，提供架構及安全分析能力。
 
 ## MCP Armor
 
-檢查所選 MCP 設定中的硬編碼機密資料與過大工具權限。
+檢查選定的 MCP 設定是否留下金鑰，或給了工具過大的權限；不會啟動或連線 MCP 伺服器。
 
 [Upstream](https://github.com/aira-security/mcp-armor) · [README @ 6af4cee](https://github.com/aira-security/mcp-armor/blob/6af4cee4665ab6242f02a88952f9127b6a04922a/README.md) · [整合與更新筆記](https://github.com/teddashh/ai-security-scanner/blob/335d0666bdc63eb86e6c8c4cddeae110db893397/docs/engines/mcp-armor.md)
 
-### 上游工具的用途
+### 原本的工具能做什麼
 
 MCP Armor 提供 Model Context Protocol 設定及相關工作流程的安全檢查。本產品透過僅限設定模式，使用其中兩項既有原生靜態檢查。
 
-### 本專案啟用的功能
+### 這個程式會檢查什麼
 
 MCP Armor 1.0.2 評估唯讀儲存庫快照中，明確選取的單一 JSON/YAML 設定。原生 hardcoded_secrets 與 excessive_tool_permissions 檢查保留原本模式、嚴重程度及判定。維護中的修改新增僅限設定入口與結構化完成紀錄。
 
-### 此設定未涵蓋的功能
+### 哪些不在檢查範圍內
 
 不啟動或連接 MCP 伺服器、不呼叫工具、不載入提示注入模型，也不測試執行時權限。本整合不宣稱包含完整上游動態測試功能。
 
