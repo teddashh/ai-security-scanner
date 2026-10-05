@@ -2,7 +2,7 @@
 
 [繁體中文](development-status.zh-TW.md) · [Documentation](README.md)
 
-_Updated 2026-10-04._
+_Updated 2026-10-05._
 
 This page summarizes current engineering status for contributors. It is not a product specification
 or release declaration. [The product specification](product-spec.md) remains the source of truth for
@@ -10,7 +10,7 @@ product behavior, and the [current product review](product-audit.md) tracks the 
 
 ## At a glance
 
-- The current release, [v0.4.0](https://github.com/teddashh/ai-security-scanner/releases/tag/v0.4.0), is on the stable channel for Linux, macOS, and Windows. See the [release record](release/v0.4.0.md) for exact installer and updater observations.
+- The current release, [v0.4.1](https://github.com/teddashh/ai-security-scanner/releases/tag/v0.4.1), is on the stable channel for Linux, macOS, and Windows. See the [release record](release/v0.4.1.md) for exact installer and updater observations.
 - The released desktop includes Prowler failure headlines, approved AWS report grouping, reconnect-and-rescan, blocked-scan continuations, Semgrep `1.174.0-4`, and explicit kube-bench/KICS incomplete-coverage handling.
 - A fresh owner-signed-in Microsoft 365 live rerun remains unobserved. Garak model checks and Agentic Radar offline inventory are optionally dispatchable in v0.4.0.
 - The paired repository [Agent Skills](getting-started.md#use-with-an-agent-skill) install the
@@ -30,6 +30,8 @@ product behavior, and the [current product review](product-audit.md) tracks the 
 - Native report, case, coverage, route, permission, and engine-task vocabularies are bound to their Rust
   wire contracts; unknown permissions and tasks cannot claim authorization, execution, or coverage.
 - No owner or hosted model-provider endpoint was contacted during development; Garak native QA used owned TLS fixtures.
+
+**v0.4.1 stable** adds optional original scanner ZIP attachments to English and Traditional Chinese HTML reports, clearer results, temporary credential-file cleanup on failed creation, and recorded AWS/Microsoft 365 access cleanup helpers. Exact delivery and limitations are in the [release record](release/v0.4.1.md).
 
 **v0.4.0 stable** delivers the owner-selected result-integrity work, engine build/patch maintenance and optional integrations. Result-integrity work now separates Greenbone tasks by exact grant, freezes task grant membership for resume, rejects malformed or unevaluated Kubescape output as complete coverage, and streams large reports within the 512 MiB evidence budget. These changes are included in v0.4.0. The Gitleaks fixture rebuild and complete recipe/patch audit are finished. ZAP now has an explicit passive website choice, per-grant dispatch and native per-request pacing; Agentic Radar is published and optionally dispatchable offline; Garak is published and optionally dispatchable with exact HTTPS/model consent and a one-shot local key; v0.4.0 is published; exact source, frozen artifact selectors, installer observations and anonymous public-byte verification are in the [delivery record](release/v0.4.0.md).
 

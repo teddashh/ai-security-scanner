@@ -6,21 +6,11 @@ The product owner selects the version, channel, source commit, supported install
 
 ## Current release
 
-[v0.4.0](https://github.com/teddashh/ai-security-scanner/releases/tag/v0.4.0) is the current **stable/latest** desktop release on **Linux, macOS, and Windows**, published on 2026-10-04. [Candidate run 37188549410](https://github.com/teddashh/ai-security-scanner/actions/runs/37188549410) built and qualified exact source `335d0666bdc63eb86e6c8c4cddeae110db893397`. [Promotion run 37191173323](https://github.com/teddashh/ai-security-scanner/actions/runs/37191173323) published the frozen bytes without rebuilding after normal approval in the `release-publication` environment. All 49 public assets were independently downloaded and matched the frozen checksums; source-bound provenance and updater signatures were verified. See the [bilingual delivery record](release/v0.4.0.md).
+[v0.4.1](https://github.com/teddashh/ai-security-scanner/releases/tag/v0.4.1) is the current **stable/latest** desktop release for **Linux, macOS and Windows**, published on 2026-10-05. [Candidate 37333229133](https://github.com/teddashh/ai-security-scanner/actions/runs/37333229133) built exact source `94ef7be18e83630553d9a72746b0533695df1ee2`; [Promotion 37341283323](https://github.com/teddashh/ai-security-scanner/actions/runs/37341283323) published the frozen files without rebuilding after normal approval in the `release-publication` environment. All 49 public assets were anonymously downloaded and matched the frozen checksums; source-bound provenance and updater signatures were independently verified. See the [bilingual delivery record](release/v0.4.1.md).
 
-GitHub records `prerelease: false`; frozen metadata records `releaseChannel: stable` and `stableTarget: 0.4.0`, matching `package.json`. The public `latest.json` contains macOS and Windows NSIS updater targets; Debian and MSI have no artifact-scoped updater. See the bilingual [v0.4.0 delivery record](release/v0.4.0.md) for exact checksums, source checks, local scan/report/reopen observations and known limitations.
+GitHub records `prerelease: false`; frozen metadata records `releaseChannel: stable` and `stableTarget: 0.4.1`. macOS and Windows NSIS have updater targets; Debian and MSI do not. Windows installers are unsigned; macOS is not notarized. Windows lifecycle/data-preservation and exact-candidate beginner human-path observations remain absent; macOS managed-runtime execution was not observed on the qualification host. AppImage and RPM are not offered. Installer-specific evidence and checksums are in the delivery record.
 
-The previous stable release, [v0.3.1](release/v0.3.1.md), retains its original files and delivery observations. Earlier release [v0.3.0](https://github.com/teddashh/ai-security-scanner/releases/tag/v0.3.0) retains its original files and testing disclosures. Its frozen metadata records the original prerelease channel even though GitHub later marked it stable/latest; that historical label does not change its bytes or qualification observations.
-
-| Platform | Installer | Disclosure |
-| --- | --- | --- |
-| Windows x86-64 | MSI and NSIS | **Unsigned**; SmartScreen may warn. Technical qualification passed; Windows lifecycle and data-preservation observations are absent. |
-| macOS Universal | `.dmg` | **Not notarized**; OS signing is not configured. Installer qualification passed; managed-runtime execution was not observed on the qualification host. |
-| Linux x86-64 | Debian `.deb` | Technical qualification passed. AppImage and `.rpm` are **not offered** because their technical qualification was not observed. |
-
-For both Windows installers, metadata retains `windows-lifecycle-not-observed` and `windows-data-preservation-not-observed`; a passing installer qualification is not evidence of those lifecycle checks. The exact-candidate beginner human path is `not-observed` for every offered installer. Updater signatures, where present, do not establish OS signing or Apple notarization. These are disclosures, not release gates.
-
-The [2026-10-03 desktop delivery record](release/desktop-readiness-2026-10-03.md) records the completed owner-requested delivery steps and separate follow-ups.
+The previous stable [v0.4.0](release/v0.4.0.md) and earlier releases retain their original files and observations.
 
 ## Release identity
 

@@ -34,4 +34,4 @@ CLI 的執行結果記錄在 [generation.json](generation.json)。上述原稿�
 - [閱讀與分享結果](../../results-and-exports.zh-TW.md) · [English guide](../../results-and-exports.md)
 - [HTML 報告文字](../../../src-tauri/src/case_service.rs) · [桌面結果狀態](../../../src/pages/FindingsPage.tsx)
 
-以上是本機工作目錄的變更，尚未發布網站或更新安裝程式。
+採用的文案已隨 [v0.4.1 正式版](../../release/v0.4.1.zh-TW.md)發布；上方模型原稿與當時比較紀錄維持原樣。

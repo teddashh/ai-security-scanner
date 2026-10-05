@@ -6,11 +6,11 @@
 
 ## 使用產品
 
-- [開始使用](getting-started.zh-TW.md)：安裝 Linux、macOS 或 Windows 的 v0.4.0 桌面程式並完成第一次掃描。
+- [開始使用](getting-started.zh-TW.md)：安裝 Linux、macOS 或 Windows 的 v0.4.1 桌面程式並完成第一次掃描。
 - [Agent Skills](getting-started.zh-TW.md#透過-agent-skill-使用)：在同一台電腦上透過 Claude Code 或 Codex 確認能否掃描、引導在應用程式中掃描，並保存最終報告。
 - [掃描範圍](scanning-scope.zh-TW.md)：精確目標界線、掃描設定與引擎行為。
 - [結果與匯出](results-and-exports.zh-TW.md)：閱讀優先順序、涵蓋範圍、證據與保存報告。
-- [v0.4.0 發布紀錄](release/v0.4.0.zh-TW.md)：本版更新、實際交付證據與尚未觀察的平台項目。
+- [v0.4.1 發布紀錄](release/v0.4.1.zh-TW.md)：本版更新、實際交付證據與尚未觀察的平台項目。
 
 - [標準報告範例](samples/v0.4.0/README.zh-TW.md)：遮蔽／完整揭露版，中英皆有；25 個 adapter、真實格式、模擬資料。
 - [全部掃描器指南](scanner-guide.zh-TW.md)：詳細 SWOT、選用原因、情境、啟用功能與 2026-10-04 版本快照。
