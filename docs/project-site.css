@@ -1104,3 +1104,16 @@ h1 {
     color: var(--ink-soft);
   }
 }
+
+.fd {
+  --fd-surface: var(--paper-strong);
+  --fd-edge: var(--line);
+  --fd-text: var(--ink);
+  --fd-faint: var(--ink-soft);
+  --fd-accent: var(--lime-deep);
+  --fd-accent-ink: color-mix(in srgb, var(--lime-deep) 50%, var(--ink));
+  --fd-warn: var(--coral);
+  --fd-info: color-mix(in srgb, var(--sky) 35%, var(--ink));
+  --fd-font: inherit;
+  --fd-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
