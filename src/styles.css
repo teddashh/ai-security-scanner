@@ -3376,6 +3376,7 @@ button.history-row:hover, .history-row--active { background: #f2f8f5; }
 .diff-row__copy { min-width: 0; }
 .diff-row__meta { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .evidence-changed { color: var(--blue); font-size: 0.78rem; font-weight: 700; }
+.diff-row__count { color: var(--muted); font-size: 0.78rem; }
 .diff-row h3 { margin: 9px 0 4px; color: var(--ink-strong); font-size: 0.8rem; }
 .diff-row p { margin: 0; color: var(--muted); font-size: 0.78rem; line-height: 1.5; }
 .diff-row__copy > p + span { display: block; margin-top: 7px; color: var(--subtle); font-size: 0.78rem; }
