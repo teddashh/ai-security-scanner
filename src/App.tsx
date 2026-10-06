@@ -31,7 +31,7 @@ import {
 } from "./scanLifecycleDisposition";
 import { findRunCreatedAfterStart, hasActiveScanWork } from "./freshScanSelection";
 import { reconcileReportRunId } from "./exportRunSelection";
-import { isSecurityFinding } from "./findingClassification";
+import { latestProblemCount } from "./latestProblemCount.ts";
 import {
   afterLatestCaseSelection,
   appendExportToMatchingSnapshot,
@@ -2448,6 +2448,12 @@ export default function App() {
     }
 
     if (displayedPage === "cases") {
+      const shownProblems = latestProblemCount({
+        runs: workspace?.runs ?? [],
+        beginnerReports: workspace?.beginnerReports ?? [],
+        findings: workspace?.findings ?? [],
+        isDemo: mode === "demo" || Boolean(workspace?.case.isDemo),
+      });
       return (
         <CasesPage
           cases={snapshot?.cases ?? []}
@@ -2455,7 +2461,8 @@ export default function App() {
           selectedUseCase={selectedUseCase?.definition.id}
           selectionKey={selectedUseCase?.selectionKey}
           assetCount={workspace?.assets.length ?? 0}
-          findingCount={workspace?.findings.filter(isSecurityFinding).length ?? 0}
+          findingCount={shownProblems.count}
+          problemCountRun={shownProblems.run}
           unknownSourceCount={workspace?.coverage.filter((item) => item.state === "source_unavailable_unknown").length ?? 0}
           connectedNoAssetSourceCount={workspace?.coverage.filter((item) => item.state === "source_connected_none").length ?? 0}
           latestRun={workspace?.runs[0]}

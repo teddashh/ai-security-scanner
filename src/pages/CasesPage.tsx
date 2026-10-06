@@ -68,6 +68,8 @@ export interface CasesPageProps {
   selectionKey?: string | number;
   assetCount: number;
   findingCount: number;
+  /** Finished run whose report supplied `findingCount`. Absent on the saved-results fallback. */
+  problemCountRun?: Pick<ScanRun, "label" | "sequence" | "status">;
   unknownSourceCount: number;
   connectedNoAssetSourceCount: number;
   latestRun?: ScanRun;
@@ -621,6 +623,7 @@ export function CasesPage({
   selectionKey,
   assetCount,
   findingCount,
+  problemCountRun,
   unknownSourceCount,
   connectedNoAssetSourceCount,
   latestRun,
@@ -1896,7 +1899,15 @@ export function CasesPage({
         {runs.length > 0 && (
           <section className="metrics-grid page-outcome-metrics" aria-label={text(pageCopy.summaryAria)}>
             <MetricCard label={text(pageCopy.assetsMetric)} value={formatNumber(assetCount)} icon="database" />
-            <MetricCard label={text(pageCopy.findingsMetric)} value={formatNumber(findingCount)} icon="findings" tone={findingCount ? "danger" : "default"} />
+            <MetricCard
+              label={text(pageCopy.findingsMetric)}
+              value={formatNumber(findingCount)}
+              detail={problemCountRun
+                ? `${scanRunIdentityPresentation(problemCountRun, locale)} · ${t(runStatusKeys[problemCountRun.status])}`
+                : undefined}
+              icon="findings"
+              tone={findingCount ? "danger" : "default"}
+            />
           </section>
         )}
 
