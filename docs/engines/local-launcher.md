@@ -62,12 +62,13 @@
 ## Publishing
 
 - **Triggers.** Pushes to `main` that touch `engines/images/local-launcher/**`, any of the six engine directories (each `plan.json` excepted), `scripts/generate-oci-layout-fixture.mjs` or `scripts/prepare-offline-engine-data.mjs`, and manual dispatch. Every run builds all six entries (`fail-fast: false`).
-- **Plans track source, not images.** All six plans record `launcher_sha256` `e5b1c32b…`, the current `main.go`, but the images differ:
-  - Semgrep, TruffleHog and Kubescape were published from 2641850, whose launcher hashes to `8ae5ab14…`.
-  - Trivy and kube-bench were rebuilt from the current launcher at 9ee5257 and pinned in 85f92b1.
+- **Plans track source, not images.** All six plans record `launcher_sha256` `ddd57759…`, the current `main.go`, but the images differ:
+  - Semgrep `1.174.0-4` was published at 94af3e7 from the current launcher and pinned in b0c4ed4.
+  - TruffleHog and Kubescape were published from 2641850, whose launcher hashes to `8ae5ab14…`.
+  - Trivy and kube-bench were rebuilt at 9ee5257 from the launcher recorded then (`e5b1c32b…`) and pinned in 85f92b1.
   - The Grype pin has no build provenance (3990168).
 - **Tag reuse.** The guard (`publicationPreflight` in `scripts/engine-image-evidence.mjs`) builds any tag that does not exist yet. An existing tag is reused only with a verifiable attestation and a plan, at the publishing commit, that binds that tag with the same recorded input hashes.
-  - Today only Trivy and kube-bench pass. The plans at 2641850 still bind the earlier `-2` tags, and the Grype image has no attestation.
+  - Today only Trivy and kube-bench pass. The Semgrep plan at 94af3e7 still binds `1.174.0-3`, the plans at 2641850 still bind the earlier `-2` tags, and the Grype image has no attestation.
   - Give Semgrep, TruffleHog, Kubescape and Grype new tags in any push that touches these paths, or their jobs fail.
 - **Launcher changes.** A change to `main.go` changes every plan's `launcher_sha256` and needs new tags for all six images. `go.mod` has no plan digest (`directories_without_plans` in `engines/image-input-hash-policy.json`), and `main_test.go` and `testdata/` are excluded from the hash. The guard cannot see a change to those files alone, so advance the tags by hand.
 

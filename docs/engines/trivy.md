@@ -72,7 +72,7 @@ Follow [section 4](../engine-maintenance.md#4-updating-an-engine), then:
   - catalog `provenance.data`, `compatibility.knowledge_input` and `knowledge_date`;
   - the Trivy entry in `scripts/validate-engine-catalog.mjs`.
 
-  Every file must stay at or under 2 GiB. Text that predates the Java DB: the catalog's third notice, its `compatibility.wrapper.strategy` and the Trivy row of `docs/engine-catalog.md` say the Java DB is not embedded, and `provenance.data` and `knowledge_input` name only the standard database.
+  Every file must stay at or under 2 GiB. The catalog's third notice, `compatibility.wrapper.strategy`, and the Trivy row of `docs/engine-catalog.md` describe the embedded Java index. `provenance.data` and `knowledge_input` still name only the standard vulnerability database; their revision is the `trivy-db` digest, and the Java index is recorded on the plan as `offline_data.java_index_database`.
 - **CLI and output shape.**
   - Re-check every shared flag, and that the `filesystem`/`rootfs` analyzer split still exists.
   - Check that an empty pass still omits `Results`.

@@ -1326,8 +1326,7 @@
       "authorized target services"
     ],
     "output_formats": [
-      "jsonl",
-      "sarif"
+      "jsonl"
     ],
     "command": [
       "--engine",
@@ -1754,8 +1753,7 @@
     "estimated_disk_mb": 2048,
     "network_destinations": [],
     "output_formats": [
-      "json",
-      "sarif"
+      "json"
     ],
     "command": [
       "--engine",
@@ -2157,9 +2155,7 @@
     "estimated_disk_mb": 2048,
     "network_destinations": [],
     "output_formats": [
-      "json",
-      "sarif",
-      "cyclonedx"
+      "json"
     ],
     "command": [
       "-d",
@@ -2303,8 +2299,7 @@
     "estimated_disk_mb": 1024,
     "network_destinations": [],
     "output_formats": [
-      "json",
-      "sarif"
+      "json"
     ],
     "command": [
       "scan",
@@ -2454,10 +2449,7 @@
     "estimated_disk_mb": 5000,
     "network_destinations": [],
     "output_formats": [
-      "json",
-      "sarif",
-      "cyclonedx",
-      "spdx-json"
+      "json"
     ],
     "command": [
       "--engine",
@@ -2471,7 +2463,7 @@
     "notices": [
       "The standard vulnerability database snapshot is embedded and digest-recorded; standard DB, Java DB, VEX repository, version, and telemetry updates are disabled.",
       "The backend-attested input selects a fixed vulnerability profile: package type library for repository and IaC working trees, and package type os for single-image OCI layouts.",
-      "Repository and IaC scans cover recognized language-package manifests, including supported Java manifests such as pom.xml. Dependencies discoverable only from JAR archive contents remain outside this profile because the Java database is not embedded.",
+      "Repository and IaC scans cover recognized language-package manifests, including supported Java manifests such as pom.xml, and JAR archives identified with the embedded Java index database.",
       "Use the complementary managed Grype container profile for offline language-package and JAR archive vulnerability coverage inside validated OCI layouts.",
       "The backend-attested input profile selects a fixed filesystem or OCI image-layout command; registry pulls and live Kubernetes access are not accepted.",
       "Runs against the read-only case workspace with engine networking disabled."
@@ -2528,7 +2520,7 @@
       },
       "wrapper": {
         "required": true,
-        "strategy": "Invoke the pinned source build with fixed library-package profiles for repository and IaC working trees and an OS-package profile for single-image OCI layouts; the checksum-verified standard database is embedded while the Java database and every update path remain disabled.",
+        "strategy": "Invoke the pinned source build with its non-overlapping filesystem lockfile and rootfs individual-package analyzer profiles for repository and IaC working trees, plus an OS-package profile for single-image OCI layouts; checksum-verified standard vulnerability and Java index databases are embedded while every update path remains disabled.",
         "entrypoint": "/usr/local/bin/ai-security-scanner-engine-entrypoint"
       },
       "packaging_plan": "engines/images/trivy/plan.json"
@@ -2598,9 +2590,7 @@
     "estimated_disk_mb": 3000,
     "network_destinations": [],
     "output_formats": [
-      "json",
-      "cyclonedx",
-      "sarif"
+      "json"
     ],
     "command": [
       "--engine",
@@ -2745,9 +2735,7 @@
     "estimated_disk_mb": 1024,
     "network_destinations": [],
     "output_formats": [
-      "syft-json",
-      "cyclonedx-json",
-      "spdx-json"
+      "syft-json"
     ],
     "command": [
       "dir:/workspace",
