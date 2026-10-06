@@ -1,7 +1,7 @@
 492c55f5e36ad1de93c4779cacea15afb006c458d49a05744b072c7379966f89  scan1-before-fix-en.html
 cc0a97ec9ceeaacee090884d07344052eed11e41122224acb68e92816ce17b03  scan1-before-fix-zh-TW.html
-729d55609ee04a934e6c69f9525a27abe6f8dffe505863c6854b85710ecf9439  scan2-after-fix-en.html
-c7e8aaffc4d09a2ad5eac522c32f75838c99342ce0b23d455843420ec8a8da1c  scan2-after-fix-zh-TW.html
+1697fbaca499070b2547ec72b69654784f091086a4f6f9b7f4fe159e61f0abef  scan2-after-fix-en.html
+1c009821cc06ab89fc92c006bf3c0cbd818084186a8f9a68505811e88365c6f4  scan2-after-fix-zh-TW.html
 0d76688f22b1ac0a7310106a2a908baf43a62c91f40b0dac6313aa369d5ad2bd  results-scan1-en.webp
 d4415dcf00315f65db0cccd76233c9c6e910070859dec13b8345a050bb58f4c1  results-scan1-zh-TW.webp
 b204d78d4c62b8d7b08f6e685e2cad5361d0eebd3bcb3f4a433a3c49a7ed288e  choose-folder-en.webp
