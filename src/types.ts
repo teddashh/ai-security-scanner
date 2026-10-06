@@ -1407,6 +1407,8 @@ export interface BeginnerReportProblemGroup {
   representativeFindingId: string;
   findingIds: string[];
   policyName?: string;
+  /** Set when this product orders some or all members lower than their severity. */
+  lowerPriorityMembers?: "partial" | "all";
 }
 
 export type ScanReadinessState =
@@ -1521,6 +1523,16 @@ export interface Evidence {
   redacted?: boolean;
 }
 
+/**
+ * A benchmark a scanner says its rule checks.
+ * Scanner-reported and untrusted; never a product claim of conformance.
+ */
+export interface BenchmarkReference {
+  name: string;
+  version: string;
+  reference: string;
+}
+
 export interface ScannerFindingDetails {
   description?: string;
   remediation?: string;
@@ -1528,6 +1540,8 @@ export interface ScannerFindingDetails {
   fixedVersion?: string;
   /** Bounded, untrusted AWS IAM policy context retained from Cloudsplaining. */
   awsIamPolicy?: AwsIamPolicyFindingDetails;
+  /** Present only when the scanner reported at least one usable benchmark reference. */
+  benchmarks?: BenchmarkReference[];
 }
 
 export type AwsIamPolicySource = "aws_managed" | "customer_managed" | "inline";

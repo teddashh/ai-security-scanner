@@ -18,8 +18,8 @@
 //!  - The engine's own title is never restated in another language.
 
 use crate::domain::{
-    AwsIamPolicyFindingDetails, AwsIamPolicySource, ConfidenceBasisCode, ContextFactor,
-    FindingFamily, Severity, SeverityBasisCode,
+    AwsIamPolicyFindingDetails, AwsIamPolicySource, BenchmarkReference, ConfidenceBasisCode,
+    ContextFactor, FindingFamily, Severity, SeverityBasisCode,
 };
 
 /// The direct possible impact for each finding family.
@@ -649,6 +649,15 @@ pub const INCOMPLETE_CHECK_CONFIRM_ACTION: &str = "Finish the check that did not
 pub const INCOMPLETE_CHECK_CONFIRM_ACTION_ZH_HANT: &str =
     "先完成未完成的檢查，再確認這項觀察，之後才變更任何內容。";
 
+/// Why a character-mix password check is ordered lower than its severity.
+pub const PASSWORD_COMPOSITION_ORDER_REASON: &str = "Placed lower than its severity suggests. CIS AWS Foundations Benchmark v1.2.0 asks for this character rule, but later CIS versions dropped it and NIST SP 800-63B-4 says not to require character mixes. Check password length and MFA first; change this only if an audit you must pass still requires it.";
+/// Traditional Chinese form of [`PASSWORD_COMPOSITION_ORDER_REASON`].
+pub const PASSWORD_COMPOSITION_ORDER_REASON_ZH_HANT: &str = "處理順序比嚴重程度所示更後面。CIS AWS Foundations Benchmark v1.2.0 要求這項字元規則，但之後的 CIS 版本已移除，NIST SP 800-63B-4 也要求不要強制混合字元類型。請先確認密碼長度與 MFA；只有在必須通過的稽核仍要求這項規則時，才需要變更。";
+/// Why a scheduled-expiry password check is ordered lower than its severity.
+pub const PASSWORD_EXPIRY_ORDER_REASON: &str = "Placed lower than its severity suggests. CIS AWS Foundations Benchmark v1.2.0 asks for scheduled password expiry, but later CIS versions dropped it and NIST SP 800-63B-4 says to force a change only when there is evidence a password was compromised. Change this only if an audit you must pass still requires it.";
+/// Traditional Chinese form of [`PASSWORD_EXPIRY_ORDER_REASON`].
+pub const PASSWORD_EXPIRY_ORDER_REASON_ZH_HANT: &str = "處理順序比嚴重程度所示更後面。CIS AWS Foundations Benchmark v1.2.0 要求密碼定期到期，但之後的 CIS 版本已移除，NIST SP 800-63B-4 也規定只有在有證據顯示密碼已外洩時，才強制更換。只有在必須通過的稽核仍要求這項規則時，才需要變更。";
+
 /// "Why this priority", in the reader's language.
 ///
 /// `priority_reasons` is a bare `Vec<String>` with no per-entry code, so each
@@ -660,9 +669,12 @@ pub const INCOMPLETE_CHECK_CONFIRM_ACTION_ZH_HANT: &str =
 ///  - the evidence constant above
 ///  - the reachable-service inventory constant above
 ///  - the two case-context reasons `apply_case_context` pushes
+///  - the two product-order reasons for a password character-mix rule and a
+///    scheduled password-expiry rule
 ///
 /// Anything else is returned unchanged. A reason is the product's account of
-/// why it moved a finding up the list; printing a confident Chinese sentence
+/// why it ordered a finding where it did, including when it places one lower
+/// than the scanner's severity suggests. Printing a confident Chinese sentence
 /// for text this build cannot identify would be inventing that account.
 /// The two sentences of an unattributed-results coverage gap.
 ///
@@ -2353,6 +2365,9 @@ pub fn priority_reason_english(english: &str) -> String {
     const LEGACY_UNRATED_PREFIX: &str = "Severity remains Unknown because ";
     const LEGACY_UNRATED_TAIL: &str = " did not assign one; human review is required.";
     let trimmed = english.trim();
+    if trimmed == PASSWORD_COMPOSITION_ORDER_REASON || trimmed == PASSWORD_EXPIRY_ORDER_REASON {
+        return english.to_owned();
+    }
     if trimmed == LEGACY_INTERNET {
         return crate::prioritization::INTERNET_REASON.to_owned();
     }
@@ -2384,6 +2399,12 @@ pub fn priority_reason_english(english: &str) -> String {
 pub fn priority_reason_zh_hant(english: &str) -> String {
     let normalized = priority_reason_english(english);
     let trimmed = normalized.trim();
+    if trimmed == PASSWORD_COMPOSITION_ORDER_REASON {
+        return PASSWORD_COMPOSITION_ORDER_REASON_ZH_HANT.to_owned();
+    }
+    if trimmed == PASSWORD_EXPIRY_ORDER_REASON {
+        return PASSWORD_EXPIRY_ORDER_REASON_ZH_HANT.to_owned();
+    }
     if trimmed == ENGLISH_EVIDENCE_REASON {
         return "已附上掃描工具的直接證據。".to_owned();
     }
@@ -2467,6 +2488,97 @@ pub fn priority_reason_zh_hant(english: &str) -> String {
         "嚴重程度是由{}推導而來；{engine} 本身不提供嚴重程度。",
         basis(code)
     )
+}
+
+/// The benchmark line a card shows for one scanner.
+///
+/// Entries that name the same benchmark item are one group, in the order the
+/// scanner reported them. Versions inside a group stay in that order, without
+/// duplicates, joined by `/`. At most three groups are named.
+pub fn benchmark_line_english(engine: &str, benchmarks: &[BenchmarkReference]) -> Option<String> {
+    benchmark_line(engine, benchmarks, false)
+}
+
+/// Traditional Chinese form of [`benchmark_line_english`].
+pub fn benchmark_line_zh_hant(engine: &str, benchmarks: &[BenchmarkReference]) -> Option<String> {
+    benchmark_line(engine, benchmarks, true)
+}
+
+struct BenchmarkGroup {
+    name: String,
+    reference: String,
+    versions: Vec<String>,
+}
+
+fn benchmark_groups(benchmarks: &[BenchmarkReference]) -> Vec<BenchmarkGroup> {
+    let mut groups: Vec<BenchmarkGroup> = Vec::new();
+    for benchmark in benchmarks {
+        if let Some(group) = groups
+            .iter_mut()
+            .find(|group| group.name == benchmark.name && group.reference == benchmark.reference)
+        {
+            if !group
+                .versions
+                .iter()
+                .any(|version| version == &benchmark.version)
+            {
+                group.versions.push(benchmark.version.clone());
+            }
+        } else {
+            groups.push(BenchmarkGroup {
+                name: benchmark.name.clone(),
+                reference: benchmark.reference.clone(),
+                versions: vec![benchmark.version.clone()],
+            });
+        }
+    }
+    groups
+}
+
+fn benchmark_line(
+    engine: &str,
+    benchmarks: &[BenchmarkReference],
+    zh_hant: bool,
+) -> Option<String> {
+    if benchmarks.is_empty() {
+        return None;
+    }
+    let groups = benchmark_groups(benchmarks);
+    let shown = groups.len().min(3);
+    let extra = groups.len() - shown;
+    let mut parts = Vec::with_capacity(shown);
+    for group in groups.iter().take(shown) {
+        let versions = group.versions.join("/");
+        if zh_hant {
+            parts.push(format!(
+                "{} {} 第 {} 項",
+                group.name, versions, group.reference
+            ));
+        } else {
+            parts.push(format!(
+                "{} {} item {}",
+                group.name, versions, group.reference
+            ));
+        }
+    }
+    let mut line = if zh_hant {
+        parts.join("；")
+    } else {
+        parts.join("; ")
+    };
+    if extra > 0 {
+        if zh_hant {
+            line.push_str(&format!("，另有 {extra} 項"));
+        } else {
+            line.push_str(&format!(" and {extra} more"));
+        }
+    }
+    if zh_hant {
+        line.push_str(&format!("（{engine} 回報）"));
+    } else {
+        line.push_str(&format!(" (reported by {engine})"));
+    }
+    Some(line)
 }
 
 /// "After an approved manual change, rerun {engine} ... source rule {rule}
@@ -4399,5 +4511,88 @@ mod tests {
             assert_eq!(location_english(raw), en, "{raw}");
             assert_eq!(location_zh_hant(raw), zh, "{raw}");
         }
+    }
+
+    fn benchmark(name: &str, version: &str, reference: &str) -> BenchmarkReference {
+        BenchmarkReference {
+            name: name.into(),
+            version: version.into(),
+            reference: reference.into(),
+        }
+    }
+
+    #[test]
+    fn benchmark_lines_follow_the_scanner_and_stop_at_three_groups() {
+        let one = [benchmark(
+            "CIS Amazon Web Services Foundations",
+            "1.2.0",
+            "1.5",
+        )];
+        assert_eq!(
+            benchmark_line_english("ScoutSuite", &one).as_deref(),
+            Some("CIS Amazon Web Services Foundations 1.2.0 item 1.5 (reported by ScoutSuite)")
+        );
+        assert_eq!(
+            benchmark_line_zh_hant("ScoutSuite", &one).as_deref(),
+            Some("CIS Amazon Web Services Foundations 1.2.0 第 1.5 項（ScoutSuite 回報）")
+        );
+        let versions = [
+            benchmark("CIS Amazon Web Services Foundations", "1.0.0", "1.5"),
+            benchmark("CIS Amazon Web Services Foundations", "1.1.0", "1.5"),
+            benchmark("CIS Amazon Web Services Foundations", "1.2.0", "1.5"),
+        ];
+        assert_eq!(
+            benchmark_line_english("ScoutSuite", &versions).as_deref(),
+            Some(
+                "CIS Amazon Web Services Foundations 1.0.0/1.1.0/1.2.0 item 1.5 (reported by ScoutSuite)"
+            )
+        );
+        assert_eq!(
+            benchmark_line_zh_hant("ScoutSuite", &versions).as_deref(),
+            Some(
+                "CIS Amazon Web Services Foundations 1.0.0/1.1.0/1.2.0 第 1.5 項（ScoutSuite 回報）"
+            )
+        );
+        let many = [
+            benchmark("A", "1", "r1"),
+            benchmark("A", "1", "r2"),
+            benchmark("B", "2", "r3"),
+            benchmark("C", "3", "r4"),
+        ];
+        assert_eq!(
+            benchmark_line_english("X", &many).as_deref(),
+            Some("A 1 item r1; A 1 item r2; B 2 item r3 and 1 more (reported by X)")
+        );
+        assert_eq!(
+            benchmark_line_zh_hant("X", &many).as_deref(),
+            Some("A 1 第 r1 項；A 1 第 r2 項；B 2 第 r3 項，另有 1 項（X 回報）")
+        );
+        let duplicated = [benchmark("A", "1", "r1"), benchmark("A", "1", "r1")];
+        assert_eq!(
+            benchmark_line_english("X", &duplicated).as_deref(),
+            Some("A 1 item r1 (reported by X)")
+        );
+        assert_eq!(benchmark_line_english("X", &[]), None);
+        assert_eq!(benchmark_line_zh_hant("ScoutSuite", &[]), None);
+    }
+
+    #[test]
+    fn password_order_reasons_translate_and_english_stays_verbatim() {
+        assert_eq!(
+            priority_reason_english(PASSWORD_COMPOSITION_ORDER_REASON),
+            PASSWORD_COMPOSITION_ORDER_REASON
+        );
+        assert_eq!(
+            priority_reason_english(&format!("  {PASSWORD_EXPIRY_ORDER_REASON}  ")),
+            format!("  {PASSWORD_EXPIRY_ORDER_REASON}  ")
+        );
+        assert_eq!(
+            priority_reason_zh_hant(PASSWORD_COMPOSITION_ORDER_REASON),
+            PASSWORD_COMPOSITION_ORDER_REASON_ZH_HANT
+        );
+        assert_eq!(
+            priority_reason_zh_hant(&format!("\n{PASSWORD_EXPIRY_ORDER_REASON}\n")),
+            PASSWORD_EXPIRY_ORDER_REASON_ZH_HANT
+        );
     }
 }

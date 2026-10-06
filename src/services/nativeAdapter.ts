@@ -6,6 +6,7 @@ import type {
   AssessmentActivity,
   AiGeneratedArtifactAnswer,
   AwsIamPolicyFindingDetails,
+  BenchmarkReference,
   Asset,
   AssetKind,
   AssetType,
@@ -570,6 +571,7 @@ export interface NativeBeginnerMasterReport {
     representative_finding_id: string;
     finding_ids: string[];
     policy_name?: string | null;
+    lower_priority_members?: unknown;
   }>;
   next_steps: Array<{
     priority: number;
@@ -663,6 +665,7 @@ interface NativeScannerFindingDetails {
       complete?: unknown;
     } | null;
   } | null;
+  benchmarks?: unknown;
 }
 
 interface NativeControlMappingProvenance {
@@ -1700,6 +1703,22 @@ const mapAwsIamPolicyDetails = (
   };
 };
 
+/** Keep scanner-reported benchmark rows whose three fields are non-empty after trim. */
+const mapBenchmarkReferences = (value: unknown): BenchmarkReference[] | undefined => {
+  if (!Array.isArray(value)) return undefined;
+  const benchmarks: BenchmarkReference[] = [];
+  for (const entry of value) {
+    if (!entry || typeof entry !== "object") continue;
+    const record = entry as { name?: unknown; version?: unknown; reference?: unknown };
+    const name = typeof record.name === "string" ? record.name.trim() : "";
+    const version = typeof record.version === "string" ? record.version.trim() : "";
+    const reference = typeof record.reference === "string" ? record.reference.trim() : "";
+    if (!name || !version || !reference) continue;
+    benchmarks.push({ name, version, reference });
+  }
+  return benchmarks.length > 0 ? benchmarks : undefined;
+};
+
 const mapScannerFindingDetails = (
   details: NativeScannerFindingDetails | null | undefined,
   engineId: string,
@@ -1714,7 +1733,10 @@ const mapScannerFindingDetails = (
   const awsIamPolicy = engineId === "cloudsplaining"
     ? mapAwsIamPolicyDetails(details.aws_iam_policy)
     : undefined;
-  return awsIamPolicy ? { ...mapped, awsIamPolicy } : mapped;
+  const benchmarks = mapBenchmarkReferences(details.benchmarks);
+  if (awsIamPolicy) mapped.awsIamPolicy = awsIamPolicy;
+  if (benchmarks) mapped.benchmarks = benchmarks;
+  return mapped;
 };
 
 const mapControlMappingProvenance = (
@@ -3279,16 +3301,23 @@ export const adaptBeginnerMasterReport = (
       observedInSelectedRun: member.observed_in_selected_run,
     })),
   })),
-  problemGroups: (report.problem_groups ?? []).map((group) => ({
-    groupId: group.group_id,
-    ruleVersion: group.rule_version,
-    kind: group.kind,
-    title: group.title,
-    targetAssetId: group.target_asset_id,
-    representativeFindingId: group.representative_finding_id,
-    findingIds: [...group.finding_ids],
-    policyName: group.policy_name ?? undefined,
-  })),
+  problemGroups: (report.problem_groups ?? []).map((group) => {
+    const lowerPriorityMembers = group.lower_priority_members === "partial"
+      || group.lower_priority_members === "all"
+      ? group.lower_priority_members
+      : undefined;
+    return {
+      groupId: group.group_id,
+      ruleVersion: group.rule_version,
+      kind: group.kind,
+      title: group.title,
+      targetAssetId: group.target_asset_id,
+      representativeFindingId: group.representative_finding_id,
+      findingIds: [...group.finding_ids],
+      policyName: group.policy_name ?? undefined,
+      ...(lowerPriorityMembers ? { lowerPriorityMembers } : {}),
+    };
+  }),
   nextSteps: report.next_steps.map((step) => ({
     priority: step.priority,
     code: step.code,

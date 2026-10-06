@@ -763,6 +763,141 @@ test("shared_fix is kept only when it is exactly true", () => {
   assert.equal(adapted(undefined, false), undefined);
 });
 
+test("scanner benchmarks and lowered password-policy groups keep only exact values", () => {
+  const benchmarks = [
+    { name: " CIS Amazon Web Services Foundations ", version: " 1.2.0 ", reference: " 1.5 " },
+    { name: "", version: "1.0.0", reference: "1.1" },
+    { name: "A", version: "   ", reference: "r" },
+    { name: "A", version: 1, reference: "r" },
+    null,
+    "nope",
+    { name: "B", version: "2", reference: "r3" },
+  ];
+  const evidence = (scannerDetails: Record<string, unknown> | null | undefined) => ({
+    evidence_id: "evidence-uppercase",
+    engine_id: "scoutsuite",
+    details_frozen: true,
+    source_rule: "iam-password-policy-uppercase",
+    ...(scannerDetails === undefined ? {} : { scanner_details: scannerDetails }),
+    summary: "ScoutSuite reported the password policy.",
+    artifact_sha256: "a".repeat(64),
+    observed_at: "2026-10-06T12:00:00Z",
+  });
+  const finding = (scannerDetails: Record<string, unknown> | null | undefined) => ({
+    finding_id: "finding-uppercase",
+    fingerprint: "fp-uppercase",
+    snapshot_source: "frozen_selected_run",
+    title: "Password Policy Lacks Uppercase Requirement",
+    plain_language_risk: "Risk",
+    possible_impact: "Impact",
+    severity: "high",
+    confidence: "medium",
+    priority: 35,
+    priority_reasons: [],
+    target_asset_ids: ["asset-status"],
+    next_step: "Review it.",
+    recommended_expert_type: "Cloud identity specialist",
+    evidence_references: [evidence(scannerDetails)],
+    framework_references: [],
+  });
+  const group = (lowerPriorityMembers: unknown, include: boolean) => ({
+    group_id: "group-password",
+    rule_version: "aws-related-checks-1",
+    kind: "iam_password_policy" as const,
+    title: "IAM password policy needs attention",
+    target_asset_id: "asset-status",
+    representative_finding_id: "finding-uppercase",
+    finding_ids: ["finding-uppercase"],
+    policy_name: null,
+    ...(include ? { lower_priority_members: lowerPriorityMembers } : {}),
+  });
+  const adapted = (
+    scannerDetails: Record<string, unknown> | null | undefined,
+    lowerPriorityMembers: unknown,
+    includeGroupFlag: boolean,
+  ) => adaptBeginnerMasterReport({
+    ...beginnerStatusReportFixture(),
+    findings: [finding(scannerDetails)],
+    problem_groups: [group(lowerPriorityMembers, includeGroupFlag)],
+  });
+
+  const kept = adapted({ description: "Uppercase is not required.", benchmarks }, "partial", true);
+  assert.deepEqual(kept.findings[0]?.evidenceReferences[0]?.scannerDetails?.benchmarks, [
+    { name: "CIS Amazon Web Services Foundations", version: "1.2.0", reference: "1.5" },
+    { name: "B", version: "2", reference: "r3" },
+  ]);
+  assert.equal(kept.findings[0]?.evidenceReferences[0]?.scannerDetails?.description, "Uppercase is not required.");
+  assert.equal(kept.problemGroups?.[0]?.lowerPriorityMembers, "partial");
+
+  const malformed = adapted({
+    description: "The description remains.",
+    benchmarks: [{ name: " ", version: "1", reference: "r" }, { name: 1, version: "1", reference: "r" }],
+  }, "all", true);
+  assert.equal(malformed.findings[0]?.evidenceReferences[0]?.scannerDetails?.benchmarks, undefined);
+  assert.equal(Object.hasOwn(malformed.findings[0]?.evidenceReferences[0]?.scannerDetails ?? {}, "benchmarks"), false);
+  assert.equal(malformed.findings[0]?.evidenceReferences[0]?.scannerDetails?.description, "The description remains.");
+  assert.equal(malformed.problemGroups?.[0]?.lowerPriorityMembers, "all");
+
+  for (const scannerDetails of [
+    { description: "No benchmark list." },
+    { description: "Empty benchmark list.", benchmarks: [] },
+    null,
+  ]) {
+    const report = adapted(scannerDetails, "some", true);
+    assert.equal(report.findings[0]?.evidenceReferences[0]?.scannerDetails?.benchmarks, undefined);
+    assert.equal(report.problemGroups?.[0]?.lowerPriorityMembers, undefined);
+    assert.equal(Object.hasOwn(report.problemGroups?.[0] ?? {}, "lowerPriorityMembers"), false);
+  }
+
+  const absentFlag = adapted({ description: "No flag." }, undefined, false);
+  assert.equal(absentFlag.problemGroups?.[0]?.lowerPriorityMembers, undefined);
+  assert.equal(Object.hasOwn(absentFlag.problemGroups?.[0] ?? {}, "lowerPriorityMembers"), false);
+
+  const workspace = adaptNativeCase(platformCaseFixture({
+    findings: [{
+      id: "finding-uppercase",
+      case_id: "case-platforms-1",
+      first_seen_run_id: "run-1",
+      last_seen_run_id: "run-1",
+      fingerprint: "fp-uppercase",
+      title: "Password Policy Lacks Uppercase Requirement",
+      plain_language_summary: "Review this scanner observation.",
+      possible_impact: "Impact",
+      severity: "high",
+      confidence: "medium",
+      priority: 35,
+      priority_reasons: [],
+      asset_ids: ["repository-asset"],
+      evidence: [{
+        id: "evidence-uppercase",
+        finding_id: "finding-uppercase",
+        run_id: "run-1",
+        engine_run_id: "task-scout",
+        kind: "configuration",
+        engine_id: "scoutsuite",
+        source_rule: "iam-password-policy-uppercase",
+        scanner_details: { benchmarks },
+        observed_at: "2026-10-06T12:00:00Z",
+        summary: "ScoutSuite reported the password policy.",
+        artifact_id: "artifact-1",
+        artifact_sha256: "a".repeat(64),
+        pointer: null,
+        redacted: false,
+      }],
+      control_references: [],
+      recommendation: "Review the password policy.",
+      official_references: [],
+      recommended_expert_type: "Cloud identity specialist",
+      status: "unreviewed",
+      tags: [],
+    }],
+  }));
+  assert.deepEqual(workspace.findings[0]?.evidence[0]?.scannerDetails?.benchmarks, [
+    { name: "CIS Amazon Web Services Foundations", version: "1.2.0", reference: "1.5" },
+    { name: "B", version: "2", reference: "r3" },
+  ]);
+});
+
 test("frozen evidence redaction claims only the exact boolean and preserves absence", () => {
   const redactedFor = (redacted: unknown, omit = false) => adaptBeginnerMasterReport({
     ...beginnerStatusReportFixture(),

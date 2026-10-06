@@ -999,6 +999,7 @@ mod tests {
             aws_iam_policy: None,
             cwe_ids: Vec::new(),
             cvss: Vec::new(),
+            benchmarks: Vec::new(),
         });
         let adapter = TestAdapter {
             output: AdapterOutput {
@@ -1060,6 +1061,7 @@ mod tests {
             }),
             cwe_ids: Vec::new(),
             cvss: Vec::new(),
+            benchmarks: Vec::new(),
         });
         let adapter = CloudsplainingTestAdapter {
             output: AdapterOutput {

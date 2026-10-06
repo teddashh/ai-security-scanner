@@ -244,6 +244,8 @@ Without opening technical details, the user can answer:
 
 Each priority item shows severity, confidence, affected target/location, plain-language impact, next action, and verification guidance. Priority is transparent ordering, not a pseudo-precise score.
 
+Severity is the scanner's own rating; this product assigns one only where the scanner did not, and says so. Priority is this product's recommended order. A scanner check that enforces a benchmark item current guidance advises against keeps its scanner severity, shows the benchmark the scanner reported, and is ordered at the Low tier with its reason on the card: the AWS IAM password character-mix and scheduled-expiry checks, which CIS AWS Foundations Benchmark v1.2.0 lists, later CIS versions dropped, and NIST SP 800-63B-4 advises against. Their password-policy problem card tells the reader to fix failed length or reuse settings first.
+
 Product-authored finding narrative states the result, possible impact, next action, rollback, and verification directly. The specialist type is separate routing information; it does not wrap the action in human-review, approval, or responsibility-shifting language. When an upstream scanner supplies no severity, the report says that the scanner did not rate it and keeps the severity **Unknown**.
 
 The asset summary gives every requested asset exactly one beginner-readable state: **problems found**, **no problems in completed checks**, **incomplete or failed**, or **not tested**. A finding linked to multiple assets counts for each affected asset. “No problems” applies only to completed security checks; discovery-only or connection-only work cannot earn that state.

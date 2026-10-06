@@ -3208,6 +3208,7 @@ mod tests {
                     aws_iam_policy: Some(iam.clone()),
                     cwe_ids: Vec::new(),
                     cvss: Vec::new(),
+                    benchmarks: Vec::new(),
                 }),
                 source_rule: Some("DataExfiltration".into()),
                 result_pointer_sha256: Some("b".repeat(64)),
@@ -4143,6 +4144,7 @@ mod tests {
             }),
             cwe_ids: Vec::new(),
             cvss: Vec::new(),
+            benchmarks: Vec::new(),
         });
         assert!(
             validate_evidence_references(&case)
@@ -5120,6 +5122,7 @@ mod tests {
                     aws_iam_policy: None,
                     cwe_ids: Vec::new(),
                     cvss: Vec::new(),
+                    benchmarks: Vec::new(),
                 }),
                 source_rule: None,
                 result_pointer_sha256: None,

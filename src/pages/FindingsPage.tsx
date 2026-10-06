@@ -23,7 +23,9 @@ import {
   findingActionSentence,
   findingUnconfirmedByCoverage,
   findingConfidencePresentation,
+  benchmarkLine,
   findingPriorityReason,
+  priorityGuidanceReason,
   findingUnattributedGap,
   coverageGapProse,
   coverageGapProseWithoutDiagnosticCode,
@@ -60,6 +62,7 @@ import { scanRunIdentityPresentation } from "../scanRunIdentityPresentation";
 import { legacyCheckResultKind } from "../checkResultKind";
 import { isSettledSkippedCheck } from "../settledSkippedChecks";
 import type {
+  BenchmarkReference,
   BeginnerCheckResultKind,
   BeginnerCoverageStatus,
   BeginnerTechnicalExecution,
@@ -547,7 +550,7 @@ const copy = {
   expires: { en: "expires {date}", zhTW: "到期：{date}" },
   neverExpires: { en: "no expiration", zhTW: "不到期" },
   possibleImpact: { en: "Possible impact", zhTW: "可能影響" },
-  whyPriority: { en: "Why this appears first", zhTW: "為何優先顯示" },
+  whyPriority: { en: "Why this order", zhTW: "排序原因" },
   recommendation: { en: "Recommended next step", zhTW: "建議下一步" },
   beforeChanging: { en: "Before making a change", zhTW: "變更前考量" },
   verification: { en: "How to verify the fix", zhTW: "修復確認方式" },
@@ -589,6 +592,7 @@ const copy = {
     en: "Scanner-provided remediation",
     zhTW: "掃描工具提供的修復資訊",
   },
+  benchmark: { en: "Benchmark", zhTW: "基準" },
   scanRun: { en: "Scan run", zhTW: "掃描輪次" },
   engineRun: { en: "Scanner job", zhTW: "掃描工具作業" },
   artifactId: { en: "Evidence file ID", zhTW: "證據檔案 ID" },
@@ -1243,6 +1247,39 @@ const adviceLabel = (locale: Locale, label: string): ReactNode =>
   ) : (
     <strong>{label}：</strong>
   );
+
+/**
+ * One benchmark line per displayed engine name, in the order evidence is kept.
+ * Identical references from sibling records of that engine are kept once.
+ */
+const benchmarkAdviceLines = (
+  evidence: readonly Finding["evidence"][number][],
+  engineNameFor: (item: Finding["evidence"][number]) => string,
+  locale: Locale,
+): Array<{ engineName: string; line: string }> => {
+  const grouped: Array<{ engineName: string; benchmarks: BenchmarkReference[] }> = [];
+  for (const item of evidence) {
+    const reported = item.scannerDetails?.benchmarks;
+    if (!reported?.length) continue;
+    const engineName = engineNameFor(item);
+    let entry = grouped.find((candidate) => candidate.engineName === engineName);
+    if (!entry) {
+      entry = { engineName, benchmarks: [] };
+      grouped.push(entry);
+    }
+    for (const benchmark of reported) {
+      if (entry.benchmarks.some((existing) =>
+        existing.name === benchmark.name
+        && existing.version === benchmark.version
+        && existing.reference === benchmark.reference)) continue;
+      entry.benchmarks.push(benchmark);
+    }
+  }
+  return grouped.flatMap((entry) => {
+    const line = benchmarkLine(locale, entry.engineName, entry.benchmarks);
+    return line ? [{ engineName: entry.engineName, line }] : [];
+  });
+};
 
 const checkRecordedTestedWork = (
   check: BeginnerMasterReport["actual"]["checks"][number],
@@ -2616,6 +2653,11 @@ export function FindingsPage({
   // run, so every run the page holds is searched, not only the one on screen.
   const engineNameByEngineRunId = new Map(runs.flatMap((run) =>
     run.engineRuns.map((engine) => [engine.id, engine.engineName.trim()] as const)));
+  const engineNameForEvidence = (evidence: Finding["evidence"][number]): string =>
+    engineNameByEngineRunId.get(evidence.engineRunId ?? "") ?? evidence.sourceEngine;
+  const selectedBenchmarkLines = selected
+    ? benchmarkAdviceLines(selected.evidence, engineNameForEvidence, locale)
+    : [];
   // One location already joins its parts with " · ", so two locations are
   // separated by a semicolon rather than another dot.
   const locationsFor = (finding: Finding): string[] => [
@@ -3153,6 +3195,13 @@ export function FindingsPage({
               const scannerRemediations = group ? [] : uniqueScannerRemediations(finding.evidence);
               const scannerFixedVersions = group ? [] : uniqueScannerFixedVersions(finding.evidence);
               const locations = group ? [] : locationsFor(finding);
+              // A partly lowered password-policy group already says what comes first.
+              const orderReason = (
+                group?.lowerPriorityMembers === "partial"
+                || (group !== undefined && members.some((member) => !priorityGuidanceReason(member.priorityReasons ?? [])))
+              )
+                ? undefined
+                : priorityGuidanceReason(finding.priorityReasons ?? []);
               return (
               <button
                 key={finding.id}
@@ -3192,6 +3241,12 @@ export function FindingsPage({
                       unconfirmedByCoverage: actionUnconfirmedByCoverage(finding),
                     })} />
                   </span>
+                  {orderReason && (
+                    <span>
+                      <strong>{text(copy.whyPriority)}</strong>
+                      {findingPriorityReason(locale, orderReason)}
+                    </span>
+                  )}
                   {scannerRemediations.map((remediation) => (
                     <span key={remediation}>
                       <strong>{text(copy.scannerRemediation)}</strong>
@@ -3771,6 +3826,12 @@ export function FindingsPage({
                     {selectedScannerFixedVersions.join(" · ")}
                   </p>
                 )}
+                {selectedBenchmarkLines.map((entry) => (
+                  <p key={entry.engineName}>
+                    {adviceLabel(locale, text(copy.benchmark))}
+                    {entry.line}
+                  </p>
+                ))}
                 {selectedScannerRemediations.length === 0 && selectedScannerFixedVersions.length === 0 && (
                   <p>
                     {adviceLabel(locale, text(copy.scannerRemediation))}

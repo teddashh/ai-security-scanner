@@ -42,16 +42,55 @@ test("group titles translate product wording and keep the recorded policy label"
   assert.equal(problemGroupTitle({...group,kind:"iam_policy_permissions",policyName:"Policy 1"},"zh-TW"),"檢查 IAM policy 的權限：Policy 1");
 });
 
+const PARTIAL_ACTION = {
+  en: "Review the account's IAM password policy. Fix the failed length or reuse settings first; change the character-mix or expiry settings only if an audit you must pass still requires them.",
+  "zh-TW": "檢查帳號的 IAM 密碼政策：先調整未通過的長度或重複使用設定；字元組成或到期設定，只有在必須通過的稽核仍要求時才需要變更。",
+} as const;
+const ALL_ACTION = {
+  en: "Change these IAM password policy settings only if an audit you must pass still requires them; NIST SP 800-63B-4 says not to require character mixes or scheduled expiry.",
+  "zh-TW": "只有在必須通過的稽核仍要求時，才需要變更這些 IAM 密碼政策設定；NIST SP 800-63B-4 要求不要強制混合字元類型或定期到期。",
+} as const;
+const ALL_IMPACT = {
+  en: "CIS AWS Foundations Benchmark v1.2.0 lists these settings; current guidance does not treat their absence as a weakness.",
+  "zh-TW": "CIS AWS Foundations Benchmark v1.2.0 列出這些設定；現行指引不把缺少這些設定視為弱點。",
+} as const;
+
+test("a lowered password-policy group says what still comes first", () => {
+  const partial = {...group, lowerPriorityMembers: "partial" as const};
+  const all = {...group, lowerPriorityMembers: "all" as const};
+  for (const locale of ["en", "zh-TW"] as const) {
+    assert.equal(problemGroupAction(partial, locale), PARTIAL_ACTION[locale]);
+    assert.equal(problemGroupImpact(partial, locale), problemGroupImpact(group, locale));
+    assert.equal(problemGroupAction(all, locale), ALL_ACTION[locale]);
+    assert.equal(problemGroupImpact(all, locale), ALL_IMPACT[locale]);
+    assert.equal(problemGroupTitle(partial, locale), problemGroupTitle(group, locale));
+    assert.equal(problemGroupTitle(all, locale), problemGroupTitle(group, locale));
+  }
+  const root = {...group, kind: "root_account_usage" as const, lowerPriorityMembers: "all" as const};
+  assert.equal(problemGroupAction(root, "en"), problemGroupAction({...group, kind: "root_account_usage"}, "en"));
+  assert.equal(problemGroupImpact(root, "zh-TW"), problemGroupImpact({...group, kind: "root_account_usage"}, "zh-TW"));
+});
+
 test("Results group guidance matches the shared HTML report in both languages", () => {
   const shared = readFileSync(new URL("../../src-tauri/src/report_problem_groups.rs", import.meta.url), "utf8");
+  const passwordGroups = [
+    group,
+    {...group, lowerPriorityMembers: "partial" as const},
+    {...group, lowerPriorityMembers: "all" as const},
+  ];
+  const missing: string[] = [];
   for (const kind of ["iam_password_policy", "root_account_usage"] as const) {
     for (const locale of ["en", "zh-TW"] as const) {
-      const candidate = {...group, kind};
-      for (const sentence of [problemGroupTitle(candidate, locale), problemGroupAction(candidate, locale), problemGroupImpact(candidate, locale)]) {
-        assert.ok(sentence);
-        assert.ok(shared.includes(JSON.stringify(sentence)), `Shared report must retain ${locale} guidance: ${sentence}`);
+      const candidates = kind === "iam_password_policy" ? passwordGroups : [group];
+      for (const base of candidates) {
+        const candidate = {...base, kind};
+        for (const sentence of [problemGroupTitle(candidate, locale), problemGroupAction(candidate, locale), problemGroupImpact(candidate, locale)]) {
+          assert.ok(sentence);
+          if (!shared.includes(JSON.stringify(sentence))) missing.push(`${locale} ${kind}: ${sentence}`);
+        }
       }
     }
   }
+  assert.deepEqual(missing, [], `Shared report must retain this guidance:\n${missing.join("\n")}`);
   assert.equal(problemGroupAction({...group,kind:"iam_policy_permissions"},"en"),undefined);
 });

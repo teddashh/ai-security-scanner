@@ -9,10 +9,10 @@ mod control_mapping;
 
 use crate::adapter::{AdapterInput, AdapterOutput, AdapterRegistry, EngineAdapter};
 use crate::domain::{
-    AwsIamAttachedTo, AwsIamPolicyFindingDetails, AwsIamPolicySource, Confidence,
-    ConfidenceBasisCode, CvssScore, Evidence, EvidenceKind, Finding, FindingFamily, FindingStatus,
-    InventoryObservation, InventoryObservationKind, ManualReviewControl, RawArtifact,
-    ScannerFindingDetails, SecurityTemplateExecution, Severity, SeverityBasisCode,
+    AwsIamAttachedTo, AwsIamPolicyFindingDetails, AwsIamPolicySource, BenchmarkReference,
+    Confidence, ConfidenceBasisCode, CvssScore, Evidence, EvidenceKind, Finding, FindingFamily,
+    FindingStatus, InventoryObservation, InventoryObservationKind, ManualReviewControl,
+    RawArtifact, ScannerFindingDetails, SecurityTemplateExecution, Severity, SeverityBasisCode,
     UnevaluatedTarget, UnevaluatedTargetCause,
 };
 use crate::error::{AppError, AppResult};
@@ -2353,6 +2353,7 @@ fn with_weakness(mut record: SourceRecord, weakness: UpstreamWeakness) -> Source
             aws_iam_policy: None,
             cwe_ids: Vec::new(),
             cvss: Vec::new(),
+            benchmarks: Vec::new(),
         });
     details.cwe_ids = weakness.cwe_ids;
     details.cvss = weakness.cvss;
@@ -2374,6 +2375,7 @@ fn with_scanner_details(
         aws_iam_policy: None,
         cwe_ids: Vec::new(),
         cvss: Vec::new(),
+        benchmarks: Vec::new(),
     };
     if details.description.is_some()
         || details.remediation.is_some()
@@ -4113,28 +4115,108 @@ fn extract_scoutsuite(parsed: &ParsedArtifact, warnings: &mut Vec<String>) -> Ve
                 .or_else(|| scoutsuite_rule_key(&pointer))?;
             let title = string_any(object, &["description", "title", "name"])
                 .unwrap_or_else(|| format!("ScoutSuite rule {rule_id}"));
-            Some(with_scanner_details(
-                record_with_derived_confidence!(
-                    pointer,
-                    rule_id,
-                    title,
-                    string_any(object, &["level", "severity"]).unwrap_or_else(|| "unknown".into()),
-                    string_any(object, &["resource", "path", "service"])
-                        .unwrap_or_else(|| "cloud-resource".into()),
-                    string_any(object, &["account_id", "subscription_id", "project_id"]),
-                    derived_confidence(ConfidenceBasisCode::DeterministicPolicyEvaluation),
-                    EvidenceKind::Configuration,
-                    references_from(value),
-                    vec![],
+            Some(attach_scoutsuite_benchmarks(
+                with_scanner_details(
+                    record_with_derived_confidence!(
+                        pointer,
+                        rule_id,
+                        title,
+                        string_any(object, &["level", "severity"])
+                            .unwrap_or_else(|| "unknown".into()),
+                        string_any(object, &["resource", "path", "service"])
+                            .unwrap_or_else(|| "cloud-resource".into()),
+                        string_any(object, &["account_id", "subscription_id", "project_id"]),
+                        derived_confidence(ConfidenceBasisCode::DeterministicPolicyEvaluation),
+                        EvidenceKind::Configuration,
+                        references_from(value),
+                        vec![],
+                    ),
+                    string_any(object, &["rationale"]),
+                    string_any(object, &["remediation"]),
+                    None,
+                    None,
                 ),
-                string_any(object, &["rationale"]),
-                string_any(object, &["remediation"]),
-                None,
-                None,
+                object,
             ))
         })
         .take(MAX_RECORDS)
         .collect()
+}
+
+/// A rule file can cite the same benchmark item under several versions. Eight
+/// covers every password-policy compliance list ScoutSuite ships and still
+/// bounds untrusted input.
+const MAX_SCOUTSUITE_BENCHMARKS: usize = 8;
+
+/// Benchmark items ScoutSuite attached to one rule, cleaned the same way as
+/// other short scanner text. Exact duplicates and incomplete entries are
+/// dropped. Upstream order is kept.
+fn scoutsuite_benchmarks(object: &Map<String, Value>) -> Vec<BenchmarkReference> {
+    let Some(entries) = object.get("compliance").and_then(Value::as_array) else {
+        return Vec::new();
+    };
+    let mut benchmarks = Vec::new();
+    for entry in entries {
+        let Some(entry) = entry.as_object() else {
+            continue;
+        };
+        let Some(name) = entry.get("name").and_then(Value::as_str) else {
+            continue;
+        };
+        let Some(version) = entry.get("version").and_then(Value::as_str) else {
+            continue;
+        };
+        let Some(reference) = entry.get("reference").and_then(Value::as_str) else {
+            continue;
+        };
+        let Some(name) = bounded_scanner_detail(Some(name.to_owned()), MAX_SHORT_TEXT) else {
+            continue;
+        };
+        let Some(version) = bounded_scanner_detail(Some(version.to_owned()), MAX_SHORT_TEXT) else {
+            continue;
+        };
+        let Some(reference) = bounded_scanner_detail(Some(reference.to_owned()), MAX_SHORT_TEXT)
+        else {
+            continue;
+        };
+        let benchmark = BenchmarkReference {
+            name,
+            version,
+            reference,
+        };
+        if benchmarks.contains(&benchmark) {
+            continue;
+        }
+        if benchmarks.len() >= MAX_SCOUTSUITE_BENCHMARKS {
+            break;
+        }
+        benchmarks.push(benchmark);
+    }
+    benchmarks
+}
+
+fn attach_scoutsuite_benchmarks(
+    mut record: SourceRecord,
+    object: &Map<String, Value>,
+) -> SourceRecord {
+    let benchmarks = scoutsuite_benchmarks(object);
+    if benchmarks.is_empty() {
+        return record;
+    }
+    let details = record
+        .scanner_details
+        .get_or_insert_with(|| ScannerFindingDetails {
+            description: None,
+            remediation: None,
+            installed_version: None,
+            fixed_version: None,
+            aws_iam_policy: None,
+            cwe_ids: Vec::new(),
+            cvss: Vec::new(),
+            benchmarks: Vec::new(),
+        });
+    details.benchmarks = benchmarks;
+    record
 }
 
 /// Recover a ScoutSuite rule key from the pointer of the object it names.
@@ -4434,6 +4516,7 @@ fn with_aws_iam_policy_details(
                 aws_iam_policy: Some(details),
                 cwe_ids: Vec::new(),
                 cvss: Vec::new(),
+                benchmarks: Vec::new(),
             });
         }
     }
@@ -10101,6 +10184,103 @@ mod tests {
                 .iter()
                 .any(|warning| warning == "Greenbone XML element exceeded the attribute limit"),
             "unexpected warnings: {warnings:?}"
+        );
+    }
+
+    fn cis(version: &str, reference: &str) -> BenchmarkReference {
+        BenchmarkReference {
+            name: "CIS Amazon Web Services Foundations".into(),
+            version: version.into(),
+            reference: reference.into(),
+        }
+    }
+
+    #[test]
+    fn scoutsuite_compliance_is_cleaned_deduplicated_and_bounded() {
+        let payload = serde_json::json!({
+            "findings": {
+                "iam-password-policy-no-uppercase-required": {
+                    "description": "Password Policy Lacks Uppercase Requirement",
+                    "flagged_items": 1,
+                    "level": "danger",
+                    "compliance": [
+                        {
+                            "name": "CIS\nAmazon   Web Services Foundations",
+                            "version": "1.0.0",
+                            "reference": "1.5"
+                        },
+                        {
+                            "name": "CIS Amazon Web Services Foundations",
+                            "version": "1.1.0",
+                            "reference": "1.5"
+                        },
+                        {
+                            "name": "CIS Amazon Web Services Foundations",
+                            "version": "1.2.0",
+                            "reference": "1.5"
+                        },
+                        {
+                            "name": "CIS Amazon Web Services Foundations",
+                            "version": "1.2.0",
+                            "reference": "  "
+                        },
+                        {
+                            "name": "CIS Amazon Web Services Foundations",
+                            "version": 12,
+                            "reference": "1.5"
+                        },
+                        {
+                            "name": "CIS Amazon Web Services Foundations",
+                            "version": "1.2.0",
+                            "reference": "1.5"
+                        }
+                    ]
+                }
+            }
+        });
+        let mut warnings = Vec::new();
+        let records = extract_scoutsuite(&ParsedArtifact::Json(payload), &mut warnings);
+        assert_eq!(records.len(), 1);
+        let details = records[0]
+            .scanner_details
+            .as_ref()
+            .expect("benchmarks create the details block");
+        assert!(details.description.is_none());
+        assert_eq!(
+            details.benchmarks,
+            vec![
+                cis("1.0.0", "1.5"),
+                cis("1.1.0", "1.5"),
+                cis("1.2.0", "1.5")
+            ]
+        );
+
+        let mut compliance = Vec::new();
+        for index in 0..9 {
+            compliance.push(serde_json::json!({
+                "name": "CIS Amazon Web Services Foundations",
+                "version": format!("1.{index}"),
+                "reference": "1.5"
+            }));
+        }
+        let overflow = serde_json::json!({
+            "findings": {
+                "iam-password-policy-no-uppercase-required": {
+                    "description": "Password Policy Lacks Uppercase Requirement",
+                    "flagged_items": 1,
+                    "level": "danger",
+                    "compliance": compliance
+                }
+            }
+        });
+        let records = extract_scoutsuite(&ParsedArtifact::Json(overflow), &mut warnings);
+        let kept = &records[0].scanner_details.as_ref().unwrap().benchmarks;
+        assert_eq!(kept.len(), MAX_SCOUTSUITE_BENCHMARKS);
+        assert_eq!(
+            kept.iter()
+                .map(|item| item.version.clone())
+                .collect::<Vec<_>>(),
+            (0..8).map(|index| format!("1.{index}")).collect::<Vec<_>>()
         );
     }
 }

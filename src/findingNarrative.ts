@@ -2,6 +2,7 @@ import type {
   AwsIamPolicyFindingDetails,
   BeginnerCoverageStatus,
   BeginnerNextActionCode,
+  BenchmarkReference,
   ConfidenceBasisCode,
   ContextFactor,
   FindingFamily,
@@ -741,12 +742,26 @@ const LEGACY_ENGLISH_SENSITIVE_REASON =
   "An affected asset is marked sensitive, all retained source attribution for that asset is non-questionnaire, and the case questionnaire separately records sensitive-data context.";
 
 /**
- * "Why this priority", in the reader's language.
+ * Stored when this product orders a character-mix password check below the
+ * scanner's severity. Recognised by exact trimmed equality; never reclassified here.
+ */
+export const PASSWORD_COMPOSITION_ORDER_REASON =
+  "Placed lower than its severity suggests. CIS AWS Foundations Benchmark v1.2.0 asks for this character rule, but later CIS versions dropped it and NIST SP 800-63B-4 says not to require character mixes. Check password length and MFA first; change this only if an audit you must pass still requires it.";
+/**
+ * Stored when this product orders a scheduled password-expiry check below the
+ * scanner's severity. Recognised by exact trimmed equality; never reclassified here.
+ */
+export const PASSWORD_EXPIRY_ORDER_REASON =
+  "Placed lower than its severity suggests. CIS AWS Foundations Benchmark v1.2.0 asks for scheduled password expiry, but later CIS versions dropped it and NIST SP 800-63B-4 says to force a change only when there is evidence a password was compromised. Change this only if an audit you must pass still requires it.";
+
+/**
+ * "Why this order", in the reader's language.
  *
  * priorityReasons is a bare string list with no per-entry code, so each entry
  * is recognised by its shape. Anything this build cannot identify is returned
- * unchanged: a reason is the product's account of why it moved a finding up the
- * list, and printing a confident Chinese sentence for text it cannot read would
+ * unchanged: a reason is the product's account of why it placed a finding
+ * where it did, including a place lower than the severity suggests, and
+ * printing a confident Chinese sentence for text it cannot read would
  * be inventing that account.
  */
 export const findingPriorityReason = (
@@ -773,6 +788,10 @@ export const findingPriorityReason = (
           .replace("an unverified pattern or detector match", "a pattern or detector match");
   const trimmed = normalized.trim();
   if (locale === "en") return normalized;
+  if (trimmed === PASSWORD_COMPOSITION_ORDER_REASON)
+    return "處理順序比嚴重程度所示更後面。CIS AWS Foundations Benchmark v1.2.0 要求這項字元規則，但之後的 CIS 版本已移除，NIST SP 800-63B-4 也要求不要強制混合字元類型。請先確認密碼長度與 MFA；只有在必須通過的稽核仍要求這項規則時，才需要變更。";
+  if (trimmed === PASSWORD_EXPIRY_ORDER_REASON)
+    return "處理順序比嚴重程度所示更後面。CIS AWS Foundations Benchmark v1.2.0 要求密碼定期到期，但之後的 CIS 版本已移除，NIST SP 800-63B-4 也規定只有在有證據顯示密碼已外洩時，才強制更換。只有在必須通過的稽核仍要求這項規則時，才需要變更。";
   if (trimmed === ENGLISH_EVIDENCE_REASON)
     return "已附上掃描工具的直接證據。";
   if (trimmed === ENGLISH_EXPOSURE_OBSERVATION_REASON)
@@ -837,6 +856,54 @@ export const findingPriorityReason = (
   );
   if (!code || !engine) return english;
   return `嚴重程度是由${BASIS[code]}推導而來；${engine} 本身不提供嚴重程度。`;
+};
+
+/** The first stored reason that places a password-policy check below its severity. */
+export const priorityGuidanceReason = (reasons: readonly string[]): string | undefined => {
+  for (const reason of reasons) {
+    const trimmed = reason.trim();
+    if (trimmed === PASSWORD_COMPOSITION_ORDER_REASON || trimmed === PASSWORD_EXPIRY_ORDER_REASON) {
+      return trimmed;
+    }
+  }
+  return undefined;
+};
+
+/**
+ * One benchmark line for the references a scanner reported.
+ * At most three groups; an empty list produces no line.
+ */
+export const benchmarkLine = (
+  locale: "en" | "zh-TW",
+  engine: string,
+  benchmarks: readonly BenchmarkReference[],
+): string | undefined => {
+  if (benchmarks.length === 0) return undefined;
+  const groups: Array<{ name: string; reference: string; versions: string[] }> = [];
+  for (const benchmark of benchmarks) {
+    const group = groups.find((candidate) =>
+      candidate.name === benchmark.name && candidate.reference === benchmark.reference);
+    if (!group) {
+      groups.push({ name: benchmark.name, reference: benchmark.reference, versions: [benchmark.version] });
+      continue;
+    }
+    if (!group.versions.includes(benchmark.version)) group.versions.push(benchmark.version);
+  }
+  const shown = groups.slice(0, 3);
+  const hidden = groups.length - shown.length;
+  const body = shown.map((group) => {
+    const versions = group.versions.join("/");
+    return locale === "en"
+      ? `${group.name} ${versions} item ${group.reference}`
+      : `${group.name} ${versions} 第 ${group.reference} 項`;
+  }).join(locale === "en" ? "; " : "；");
+  const more = hidden > 0
+    ? (locale === "en" ? ` and ${hidden} more` : `，另有 ${hidden} 項`)
+    : "";
+  const reportedBy = locale === "en"
+    ? ` (reported by ${engine})`
+    : `（${engine} 回報）`;
+  return `${body}${more}${reportedBy}`;
 };
 
 /**

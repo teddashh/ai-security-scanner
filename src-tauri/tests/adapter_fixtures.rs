@@ -2,10 +2,10 @@ use ai_security_scanner_lib::adapter::{AdapterAssetIdentifierMap, AdapterInput, 
 use ai_security_scanner_lib::adapters::{BUILTIN_ENGINE_IDS, builtin_adapter_registry};
 use ai_security_scanner_lib::correlation::correlation_report;
 use ai_security_scanner_lib::domain::{
-    AssessmentCase, Asset, AssetIdentifier, AssetKind, AwsIamPolicySource, Confidence,
-    ConfidenceBasisCode, DataClass, EngineCategory, Finding, FindingFamily, FindingStatus,
-    InventoryObservationKind, OrganizationProfile, RawArtifact, Severity, SeverityBasisCode,
-    UnevaluatedTarget, UnevaluatedTargetCause,
+    AssessmentCase, Asset, AssetIdentifier, AssetKind, AwsIamPolicySource, BenchmarkReference,
+    Confidence, ConfidenceBasisCode, DataClass, EngineCategory, Finding, FindingFamily,
+    FindingStatus, InventoryObservationKind, OrganizationProfile, RawArtifact, Severity,
+    SeverityBasisCode, UnevaluatedTarget, UnevaluatedTargetCause,
 };
 use ai_security_scanner_lib::finding_narrative::{
     ENGLISH_ROLLBACK, expert_type_zh_hant, priority_reason_zh_hant, rollback_zh_hant,
@@ -5393,6 +5393,28 @@ fn scoutsuite_rule_identity_survives_being_stored_only_as_a_parent_key() {
     );
     assert_eq!(found["s3-bucket-world-policy-star"], Severity::High);
     assert_eq!(found["iam-ec2-role-without-instances"], Severity::Medium);
+
+    let uppercase = output
+        .findings
+        .iter()
+        .find(|finding| {
+            finding
+                .tags
+                .iter()
+                .any(|tag| tag == "source-rule:iam-password-policy-no-uppercase-required")
+        })
+        .expect("uppercase password rule");
+    assert_eq!(
+        uppercase.evidence[0]
+            .scanner_details
+            .as_ref()
+            .map(|details| details.benchmarks.clone()),
+        Some(vec![BenchmarkReference {
+            name: "CIS Amazon Web Services Foundations".into(),
+            version: "1.2.0".into(),
+            reference: "1.5".into(),
+        }])
+    );
 
     assert!(
         !found.contains_key("iam-password-policy-minimum-length"),

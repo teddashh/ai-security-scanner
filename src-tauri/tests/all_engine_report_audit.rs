@@ -1541,6 +1541,22 @@ fn section_between<'a>(html: &'a str, start: &str, end: &str) -> &'a str {
     &rest[..end_at]
 }
 
+fn article_containing<'a>(html: &'a str, needle: &str) -> &'a str {
+    let mut rest = html;
+    while let Some(start) = rest.find("<article") {
+        let item_rest = &rest[start..];
+        let Some(end) = item_rest.find("</article>") else {
+            break;
+        };
+        let item = &item_rest[..end + "</article>".len()];
+        if item.contains(needle) {
+            return item;
+        }
+        rest = &item_rest[end + "</article>".len()..];
+    }
+    panic!("no article contains {needle}");
+}
+
 fn list_item_containing<'a>(html: &'a str, needle: &str) -> &'a str {
     let mut rest = html;
     while let Some(start) = rest.find("<li>") {
@@ -1565,6 +1581,73 @@ fn first_strong(item: &str) -> &str {
     &item[start..start + end]
 }
 
+fn assert_uppercase_password_rule_keeps_its_severity_and_explains_a_lower_order(
+    english: &str,
+    chinese: &str,
+) {
+    let title = "Password Policy Lacks Uppercase Requirement";
+    let card = article_containing(english, title);
+    assert!(
+        card.contains(
+            "<p class=\"finding-priority-basis\"><strong>Benchmark:</strong> CIS Amazon Web Services Foundations 1.2.0 item 1.5 (reported by ScoutSuite)<br><strong>Why this order:</strong> Placed lower than its severity suggests."
+        ),
+        "{card}"
+    );
+    assert_eq!(
+        card.matches(ai_security_scanner_lib::finding_narrative::PASSWORD_COMPOSITION_ORDER_REASON)
+            .count(),
+        1,
+        "{card}"
+    );
+    assert!(
+        card.contains("<span class=\"pill pill--high\">Severity: High</span>"),
+        "{card}"
+    );
+    // The reviewed mismatch: a password-policy card told the reader to apply
+    // least privilege. Its next step names the setting instead.
+    assert!(
+        !card.contains("least privilege"),
+        "the password-policy card must name the setting, not least privilege: {card}"
+    );
+    let card_zh = article_containing(chinese, title);
+    assert!(
+        !card_zh.contains("最小權限"),
+        "the Chinese password-policy card must name the setting: {card_zh}"
+    );
+    assert!(
+        card_zh.contains(
+            "<p class=\"finding-priority-basis\"><strong>基準：</strong>CIS Amazon Web Services Foundations 1.2.0 第 1.5 項（ScoutSuite 回報）<br><strong>排序原因：</strong>處理順序比嚴重程度所示更後面。"
+        ),
+        "{card_zh}"
+    );
+    assert_eq!(
+        card_zh
+            .matches(
+                ai_security_scanner_lib::finding_narrative::PASSWORD_COMPOSITION_ORDER_REASON_ZH_HANT
+            )
+            .count(),
+        1,
+        "{card_zh}"
+    );
+    assert!(
+        card_zh.contains("<span class=\"pill pill--high\">嚴重程度：高</span>"),
+        "{card_zh}"
+    );
+    let index = section_between(english, "<table class=\"finding-index\">", "</table>");
+    let row_at = index
+        .find(title)
+        .expect("the uppercase password rule is in the problem index");
+    let mut rest = index;
+    while let Some(at) = rest.find("pill--medium") {
+        let absolute = index.len() - rest.len() + at;
+        assert!(
+            absolute < row_at,
+            "a Medium-severity row sorts after the uppercase password rule"
+        );
+        rest = &rest[at + "pill--medium".len()..];
+    }
+}
+
 /// A family-level instruction repeated across different findings is the same
 /// kind of change, not one fix. A typed IAM policy action is one fix. A
 /// Microsoft 365 control is titled for the state it was checking, so a failed
@@ -1582,7 +1665,7 @@ fn assert_next_steps_distinguish_one_fix_from_the_same_kind_of_change(
     for title in [
         "Resource limits",
         "Vulnerable package example-package (CVE-2025-0002)",
-        "Password Policy Lacks Uppercase Requirement",
+        "Attached IAM customer-managed policy allows &#39;*:*&#39; administrative privileges",
         "Content Security Policy (CSP) Header Not Set",
     ] {
         let step = list_item_containing(english_steps, title);
@@ -1640,17 +1723,21 @@ fn assert_next_steps_distinguish_one_fix_from_the_same_kind_of_change(
         "a grouped step names the lead's place and counts the others in Chinese: {kubernetes_zh}"
     );
 
-    let password =
-        list_item_containing(english_steps, "Password Policy Lacks Uppercase Requirement");
+    let password = list_item_containing(
+        english_steps,
+        "Attached IAM customer-managed policy allows &#39;*:*&#39; administrative privileges",
+    );
     assert!(
         !first_strong(password).contains("least privilege"),
-        "the password-policy action must name the setting, not least privilege: {password}"
+        "the cloud-setting action must name the setting, not least privilege: {password}"
     );
-    let password_zh =
-        list_item_containing(chinese_steps, "Password Policy Lacks Uppercase Requirement");
+    let password_zh = list_item_containing(
+        chinese_steps,
+        "Attached IAM customer-managed policy allows &#39;*:*&#39; administrative privileges",
+    );
     assert!(
         !first_strong(password_zh).contains("最小權限"),
-        "the Chinese password-policy action must name the setting: {password_zh}"
+        "the Chinese cloud-setting action must name the setting: {password_zh}"
     );
 
     let semgrep = list_item_containing(
@@ -1999,6 +2086,9 @@ fn every_detector_places_its_finding_on_its_mapped_control() {
             // in the coverage and next-step sections.
             assert!(english.contains("What needs attention"));
             assert!(english.contains("What to do next"));
+            assert_uppercase_password_rule_keeps_its_severity_and_explains_a_lower_order(
+                &english, &chinese,
+            );
             assert_next_steps_distinguish_one_fix_from_the_same_kind_of_change(&english, &chinese);
 
             // The node's remaining checks need an asset-specific step, so its

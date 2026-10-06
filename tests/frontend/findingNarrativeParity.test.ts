@@ -2,6 +2,11 @@ import assert from "node:assert/strict";
 import { readdirSync, readFileSync } from "node:fs";
 import test from "node:test";
 
+import {
+  PASSWORD_COMPOSITION_ORDER_REASON,
+  PASSWORD_EXPIRY_ORDER_REASON,
+} from "../../src/findingNarrative.ts";
+
 // The same sentences about a finding are written twice: TypeScript composes
 // them for the findings pane, Rust composes them for the shared HTML report,
 // because that report is produced as a file rather than rendered. Duplication
@@ -95,6 +100,18 @@ const rustLiterals = (() => {
     (match) => match[1]?.replaceAll("\\'", "'") ?? "",
   );
 })();
+
+test("the lower-order password reasons are the sentences the report stores", () => {
+  // The screen recognises these by exact text. JSON.stringify keeps the
+  // surrounding quotes, so a longer sentence that merely contains one cannot pass.
+  const missing = [PASSWORD_COMPOSITION_ORDER_REASON, PASSWORD_EXPIRY_ORDER_REASON]
+    .filter((sentence) => !rustSource.includes(JSON.stringify(sentence)));
+  assert.deepEqual(
+    missing,
+    [],
+    `src-tauri/src/finding_narrative.rs must store:\n${missing.join("\n")}`,
+  );
+});
 
 test("the English keys the screen matches on are the ones the report writes", () => {
   const matchedOnScreen = [

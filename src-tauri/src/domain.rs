@@ -1350,6 +1350,18 @@ pub struct AwsIamPolicyFindingDetails {
     pub attached_to: AwsIamAttachedTo,
 }
 
+/// One benchmark item a scanner says its rule checks, exactly as the scanner
+/// named it.
+///
+/// Scanner-reported provenance and untrusted text, never a product claim of
+/// conformance.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct BenchmarkReference {
+    pub name: String,
+    pub version: String,
+    pub reference: String,
+}
+
 /// Bounded fields reported by the scanner for one exact result.
 ///
 /// These strings are retained as untrusted evidence. They are not product
@@ -1391,6 +1403,11 @@ pub struct ScannerFindingDetails {
     /// CVSS scores the scanner reported, one per scoring source it published.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub cvss: Vec<CvssScore>,
+    /// Benchmark items the scanner says this rule checks, exactly as it named
+    /// them. Scanner-reported provenance and untrusted text, never a product
+    /// claim of conformance.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub benchmarks: Vec<BenchmarkReference>,
 }
 
 /// One CVSS score exactly as a scanner published it.

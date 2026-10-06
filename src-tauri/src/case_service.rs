@@ -6698,10 +6698,10 @@ impl<'a> CaseService<'a> {
             insert_or_validate_inventory_observation(case, observation)?;
         }
         for finding in &report.findings {
-            // Keep the durable engine report immutable. Contextual priority is
-            // a bounded case projection: it may add explainable ordering
-            // reasons, but it cannot change source severity, evidence, scope,
-            // or the scanner's canonical observation identity.
+            // Keep the durable engine report immutable. Case context may add
+            // explainable ordering reasons, and a product-owned review order
+            // may place a check lower. Neither changes source severity,
+            // evidence, scope, or the scanner's canonical observation identity.
             let mut contextual_finding = finding.clone();
             crate::prioritization::apply_case_context(case, &mut contextual_finding);
             reconcile_finding(case, &contextual_finding, &report.checkpoint.engine_id)?;
@@ -17274,6 +17274,109 @@ fn html_finding_location_block(
     )
 }
 
+/// Benchmark lines the scanner reported, one per engine, in evidence order.
+fn html_benchmark_line(
+    finding: &crate::beginner_report::BeginnerFinding,
+    catalog: HtmlReportCatalog,
+) -> Option<String> {
+    let mut by_engine: Vec<(String, Vec<crate::domain::BenchmarkReference>)> = Vec::new();
+    for reference in &finding.evidence_references {
+        let Some(details) = reference.scanner_details.as_ref() else {
+            continue;
+        };
+        if details.benchmarks.is_empty() {
+            continue;
+        }
+        if let Some((_, benchmarks)) = by_engine
+            .iter_mut()
+            .find(|(engine_id, _)| engine_id == &reference.engine_id)
+        {
+            for benchmark in &details.benchmarks {
+                if !benchmarks.contains(benchmark) {
+                    benchmarks.push(benchmark.clone());
+                }
+            }
+        } else {
+            let mut benchmarks = Vec::new();
+            for benchmark in &details.benchmarks {
+                if !benchmarks.contains(benchmark) {
+                    benchmarks.push(benchmark.clone());
+                }
+            }
+            by_engine.push((reference.engine_id.clone(), benchmarks));
+        }
+    }
+    let lines = by_engine
+        .into_iter()
+        .filter_map(|(engine_id, benchmarks)| {
+            let engine = engine_named(&engine_id);
+            match catalog.locale {
+                crate::export::ReportLocale::En => {
+                    crate::finding_narrative::benchmark_line_english(&engine, &benchmarks)
+                }
+                crate::export::ReportLocale::ZhHant => {
+                    crate::finding_narrative::benchmark_line_zh_hant(&engine, &benchmarks)
+                }
+            }
+        })
+        .collect::<Vec<_>>();
+    if lines.is_empty() {
+        None
+    } else {
+        Some(lines.join(catalog.text("; ", "；")))
+    }
+}
+
+/// The product order reason, in the report's language, when one was recorded.
+fn html_lower_order_reason(
+    finding: &crate::beginner_report::BeginnerFinding,
+    catalog: HtmlReportCatalog,
+) -> Option<String> {
+    let guidance = crate::priority_guidance::PriorityGuidance::from_priority_reasons(
+        &finding.priority_reasons,
+    )?;
+    let english = guidance.reason_english();
+    Some(match catalog.locale {
+        crate::export::ReportLocale::En => {
+            crate::finding_narrative::priority_reason_english(english)
+        }
+        crate::export::ReportLocale::ZhHant => {
+            crate::finding_narrative::priority_reason_zh_hant(english)
+        }
+    })
+}
+
+/// Scanner benchmark and, when this product ordered the check lower than its
+/// severity suggests, the reason. Both are read from the same scanner details
+/// and priority reasons the rest of the card already uses.
+fn html_priority_basis_block(
+    finding: &crate::beginner_report::BeginnerFinding,
+    catalog: HtmlReportCatalog,
+) -> String {
+    let benchmark = html_benchmark_line(finding, catalog);
+    let reason = html_lower_order_reason(finding, catalog);
+    match (benchmark, reason) {
+        (None, None) => String::new(),
+        (Some(benchmark), None) => format!(
+            "<p class=\"finding-priority-basis\">{}{}</p>",
+            catalog.strong_label(catalog.text("Benchmark", "基準")),
+            html_escape(&benchmark)
+        ),
+        (None, Some(reason)) => format!(
+            "<p class=\"finding-priority-basis\">{}{}</p>",
+            catalog.strong_label(catalog.text("Why this order", "排序原因")),
+            html_escape(&reason)
+        ),
+        (Some(benchmark), Some(reason)) => format!(
+            "<p class=\"finding-priority-basis\">{}{}<br>{}{}</p>",
+            catalog.strong_label(catalog.text("Benchmark", "基準")),
+            html_escape(&benchmark),
+            catalog.strong_label(catalog.text("Why this order", "排序原因")),
+            html_escape(&reason)
+        ),
+    }
+}
+
 fn html_evidence_reference(
     reference: &crate::beginner_report::FindingEvidenceReference,
     catalog: HtmlReportCatalog,
@@ -19373,14 +19476,21 @@ fn html_report_bytes_with_attachments(
             .unwrap_or_default();
         let scanner_remediation_block = html_scanner_remediation_block(finding, catalog);
         let finding_location_block = html_finding_location_block(finding, catalog);
+        let priority_basis_block = html_priority_basis_block(finding, catalog);
         // The reasons are stored as English prose with no per-entry code, so
         // each is recognised by shape. One this build cannot identify stays in
-        // English rather than being replaced by a confident guess about why
-        // this product moved the finding up the list.
+        // English. A reason that places the finding lower than its severity
+        // suggests is already on the card's first layer.
         let mut priority_reasons = finding
             .priority_reasons
             .iter()
-            .filter(|reason| !crate::finding_narrative::is_evidence_only_priority_reason(reason))
+            .filter(|reason| {
+                !crate::finding_narrative::is_evidence_only_priority_reason(reason)
+                    && crate::priority_guidance::PriorityGuidance::from_priority_reasons(
+                        std::slice::from_ref(*reason),
+                    )
+                    .is_none()
+            })
             .map(|reason| match catalog.locale {
                 crate::export::ReportLocale::En => format!(
                     "<li>{}</li>",
@@ -19643,8 +19753,10 @@ fn html_report_bytes_with_attachments(
                 "<span class=\"pill\">{}{}</span><span>{} #{}</span>",
                 "<span>{}{}</span></p>",
                 // Where the problem is; empty when no location was retained
-                // or the export masks it.
-                "{}",
+                // or the export masks it. The basis line follows it when the
+                // scanner named a benchmark or this product ordered the check
+                // lower than that severity suggests.
+                "{}{}",
                 // Run-in labels, not headings. Each of these carries one
                 // sentence, and a heading line plus a margin above and below
                 // it cost more vertical space than the sentence did. Six of
@@ -19677,6 +19789,7 @@ fn html_report_bytes_with_attachments(
             catalog.label(catalog.text("Suggested expert", "建議諮詢的專家")),
             html_escape(&expert_type),
             finding_location_block,
+            priority_basis_block,
             html_escape(&plain_language_risk),
             catalog.gap_after(&plain_language_risk),
             catalog.strong_label(catalog.text("Possible impact", "可能影響")),
@@ -20628,8 +20741,8 @@ fn html_report_bytes_with_attachments(
         next_step_items,
         catalog.text("Problems found", "發現的問題"),
         catalog.text(
-            "Problems follow the report order. Severity describes possible impact, confidence describes evidence strength, and priority sets the recommended review order.",
-            "問題依報告順序排列。嚴重程度描述可能影響，信心程度描述證據強度，優先順序則是建議的檢視次序。",
+            "Problems follow the report order. Severity is the scanner's rating of possible impact (this product rates it only when the scanner did not), confidence describes evidence strength, and priority is this product's recommended order. When this product places a problem lower than its severity suggests, the card says why.",
+            "問題依報告順序排列。嚴重程度是掃描工具對可能影響的評級（掃描工具未評級時才由本產品評定），信心程度描述證據強度，優先順序則是本產品建議的處理次序。若本產品把某項問題排得比嚴重程度所示更後面，問題卡會說明原因。",
         ),
         finding_index,
         findings,
@@ -37583,6 +37696,7 @@ mod tests {
                 }),
                 cwe_ids: Vec::new(),
                 cvss: Vec::new(),
+                benchmarks: Vec::new(),
             }),
             summary: Some("summary".into()),
             kind: Some(EvidenceKind::SourceCode),
@@ -37740,6 +37854,7 @@ mod tests {
                     aws_iam_policy: None,
                     cwe_ids: Vec::new(),
                     cvss: Vec::new(),
+                    benchmarks: Vec::new(),
                 }),
                 summary: Some("summary".into()),
                 kind: Some(EvidenceKind::PackageInventory),
@@ -38106,6 +38221,98 @@ mod tests {
             .unwrap(),
         )
         .unwrap()
+    }
+
+    fn article_containing<'a>(html: &'a str, needle: &str) -> &'a str {
+        let mut rest = html;
+        while let Some(start) = rest.find("<article") {
+            let item_rest = &rest[start..];
+            let Some(end) = item_rest.find("</article>") else {
+                break;
+            };
+            let item = &item_rest[..end + "</article>".len()];
+            if item.contains(needle) {
+                return item;
+            }
+            rest = &item_rest[end + "</article>".len()..];
+        }
+        panic!("no article contains {needle}");
+    }
+
+    #[test]
+    fn html_card_shows_a_scanner_benchmark_and_why_the_check_is_ordered_lower() {
+        use crate::domain::{BenchmarkReference, ScannerFindingDetails};
+        use crate::export::ReportLocale;
+        use crate::finding_narrative::{
+            PASSWORD_COMPOSITION_ORDER_REASON, PASSWORD_COMPOSITION_ORDER_REASON_ZH_HANT,
+        };
+
+        let plain =
+            case_for_rated_httpx_finding(EngineRunStatus::Completed, None, Some("httpx-task"));
+        let plain_html = html_from_export_case(&plain, ReportLocale::En);
+        assert!(
+            !plain_html.contains("finding-priority-basis"),
+            "a finding with neither a benchmark nor a lower order has no basis block"
+        );
+
+        let mut case = plain;
+        let mut finding = case.findings[0].clone();
+        finding.title = "Password Policy Lacks Uppercase Requirement".into();
+        finding.severity = Severity::High;
+        finding.priority = 35;
+        finding.priority_reasons = vec![PASSWORD_COMPOSITION_ORDER_REASON.into()];
+        finding.evidence[0].engine_id = "scoutsuite".into();
+        finding.evidence[0].source_rule = Some("iam-password-policy-no-uppercase-required".into());
+        finding.evidence[0].scanner_details = Some(ScannerFindingDetails {
+            description: None,
+            remediation: None,
+            installed_version: None,
+            fixed_version: None,
+            aws_iam_policy: None,
+            cwe_ids: Vec::new(),
+            cvss: Vec::new(),
+            benchmarks: vec![BenchmarkReference {
+                name: "CIS Amazon Web Services Foundations".into(),
+                version: "1.2.0".into(),
+                reference: "1.5".into(),
+            }],
+        });
+        case.finding_observations[0].severity = Severity::High;
+        case.finding_observations[0].finding_snapshot = Some(finding.clone());
+        case.findings[0] = finding;
+
+        let english = html_from_export_case(&case, ReportLocale::En);
+        let card = article_containing(&english, "Password Policy Lacks Uppercase Requirement");
+        assert!(
+            card.contains(
+                "<p class=\"finding-priority-basis\"><strong>Benchmark:</strong> CIS Amazon Web Services Foundations 1.2.0 item 1.5 (reported by ScoutSuite)<br><strong>Why this order:</strong> Placed lower than its severity suggests."
+            ),
+            "{card}"
+        );
+        assert_eq!(card.matches(PASSWORD_COMPOSITION_ORDER_REASON).count(), 1);
+        assert!(card.contains("<span class=\"pill pill--high\">Severity: High</span>"));
+        assert!(english.contains(
+            "Problems follow the report order. Severity is the scanner's rating of possible impact (this product rates it only when the scanner did not), confidence describes evidence strength, and priority is this product's recommended order. When this product places a problem lower than its severity suggests, the card says why."
+        ));
+
+        let chinese = html_from_export_case(&case, ReportLocale::ZhHant);
+        let card_zh = article_containing(&chinese, "Password Policy Lacks Uppercase Requirement");
+        assert!(
+            card_zh.contains(
+                "<p class=\"finding-priority-basis\"><strong>基準：</strong>CIS Amazon Web Services Foundations 1.2.0 第 1.5 項（ScoutSuite 回報）<br><strong>排序原因：</strong>處理順序比嚴重程度所示更後面。"
+            ),
+            "{card_zh}"
+        );
+        assert_eq!(
+            card_zh
+                .matches(PASSWORD_COMPOSITION_ORDER_REASON_ZH_HANT)
+                .count(),
+            1
+        );
+        assert!(card_zh.contains("<span class=\"pill pill--high\">嚴重程度：高</span>"));
+        assert!(chinese.contains(
+            "問題依報告順序排列。嚴重程度是掃描工具對可能影響的評級（掃描工具未評級時才由本產品評定），信心程度描述證據強度，優先順序則是本產品建議的處理次序。若本產品把某項問題排得比嚴重程度所示更後面，問題卡會說明原因。"
+        ));
     }
 
     #[test]
@@ -38808,6 +39015,7 @@ mod tests {
                     aws_iam_policy: None,
                     cwe_ids: Vec::new(),
                     cvss: Vec::new(),
+                    benchmarks: Vec::new(),
                 }),
                 source_rule: Some("generic-api-key".into()),
                 result_pointer_sha256: None,
@@ -38864,6 +39072,7 @@ mod tests {
                 aws_iam_policy: None,
                 cwe_ids: Vec::new(),
                 cvss: Vec::new(),
+                benchmarks: Vec::new(),
             });
         mutable_canonical.official_references = vec![NEWER_EVIDENCE_SENTINEL.into()];
         case.findings.push(mutable_canonical);
@@ -39854,6 +40063,7 @@ mod tests {
                 aws_iam_policy: Some(policy),
                 cwe_ids: Vec::new(),
                 cvss: Vec::new(),
+                benchmarks: Vec::new(),
             }),
             summary: Some("summary".into()),
             kind: Some(EvidenceKind::Configuration),
@@ -40875,6 +41085,7 @@ mod tests {
                         aws_iam_policy: Some(policy),
                         cwe_ids: Vec::new(),
                         cvss: Vec::new(),
+                        benchmarks: Vec::new(),
                     }),
                     summary: Some("summary".into()),
                     kind: Some(EvidenceKind::Configuration),
@@ -41039,6 +41250,7 @@ mod tests {
                 aws_iam_policy: None,
                 cwe_ids: Vec::new(),
                 cvss: Vec::new(),
+                benchmarks: Vec::new(),
             }),
             summary: Some(sentinel.into()),
             kind: Some(EvidenceKind::Configuration),

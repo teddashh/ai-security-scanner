@@ -37,6 +37,7 @@ pub mod mcp_armor_input;
 pub mod naabu_work_plan;
 pub mod orchestrator;
 pub mod prioritization;
+pub mod priority_guidance;
 pub mod process_lease;
 pub mod product_uninstall;
 pub mod registry;

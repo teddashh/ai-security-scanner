@@ -18,7 +18,9 @@ use crate::execution_coverage::{
     CumulativeNaabuCoverage, WorkUnitOutcome, reduce_naabu_attempt_coverage,
 };
 use crate::naabu_work_plan::{NAABU_ENGINE_ID, NaabuWorkStage};
-pub use crate::report_problem_groups::{ReportProblemGroup, ReportProblemKind};
+pub use crate::report_problem_groups::{
+    LowerPriorityMembers, ReportProblemGroup, ReportProblemKind,
+};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -7910,6 +7912,7 @@ pub(crate) mod tests {
             aws_iam_policy: None,
             cwe_ids: Vec::new(),
             cvss: Vec::new(),
+            benchmarks: Vec::new(),
         });
         case.findings = vec![low.clone(), high.clone()];
         case.finding_observations = vec![
@@ -7958,6 +7961,7 @@ pub(crate) mod tests {
                 aws_iam_policy: None,
                 cwe_ids: Vec::new(),
                 cvss: Vec::new(),
+                benchmarks: Vec::new(),
             })
         );
         assert_eq!(evidence.kind, Some(EvidenceKind::Observation));
@@ -8590,6 +8594,7 @@ pub(crate) mod tests {
                 aws_iam_policy: Some(policy.clone()),
                 cwe_ids: Vec::new(),
                 cvss: Vec::new(),
+                benchmarks: Vec::new(),
             });
         }
         follow.title = "A second privilege path in the same policy".into();

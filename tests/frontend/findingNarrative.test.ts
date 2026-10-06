@@ -11,7 +11,11 @@ import {
   findingActionSentence,
   findingUnconfirmedByCoverage,
   findingConfidencePresentation,
+  PASSWORD_COMPOSITION_ORDER_REASON,
+  PASSWORD_EXPIRY_ORDER_REASON,
+  benchmarkLine,
   findingPriorityReason,
+  priorityGuidanceReason,
   findingRollbackSentence,
   findingSeverityIsUnrated,
   findingVerificationSentence,
@@ -25,6 +29,7 @@ import {
 } from "../../src/findingNarrative.ts";
 import type {
   AwsIamPolicyFindingDetails,
+  BenchmarkReference,
   ConfidenceBasisCode,
   FindingFamily,
   SeverityBasisCode,
@@ -693,6 +698,88 @@ test("why this priority is said in Chinese, keeping the engine's own words", () 
   assert.equal(
     findingPriorityReason("zh-TW", ENGLISH_EXPOSURE_OBSERVATION_REASON),
     "這是可連線服務的盤點觀察，不是漏洞。",
+  );
+});
+
+const COMPOSITION_ZH =
+  "處理順序比嚴重程度所示更後面。CIS AWS Foundations Benchmark v1.2.0 要求這項字元規則，但之後的 CIS 版本已移除，NIST SP 800-63B-4 也要求不要強制混合字元類型。請先確認密碼長度與 MFA；只有在必須通過的稽核仍要求這項規則時，才需要變更。";
+const EXPIRY_ZH =
+  "處理順序比嚴重程度所示更後面。CIS AWS Foundations Benchmark v1.2.0 要求密碼定期到期，但之後的 CIS 版本已移除，NIST SP 800-63B-4 也規定只有在有證據顯示密碼已外洩時，才強制更換。只有在必須通過的稽核仍要求這項規則時，才需要變更。";
+
+test("a lower password-policy order is said in the reader's language and leaves the English unchanged", () => {
+  assert.equal(findingPriorityReason("en", PASSWORD_COMPOSITION_ORDER_REASON), PASSWORD_COMPOSITION_ORDER_REASON);
+  assert.equal(findingPriorityReason("zh-TW", PASSWORD_COMPOSITION_ORDER_REASON), COMPOSITION_ZH);
+  assert.equal(findingPriorityReason("en", PASSWORD_EXPIRY_ORDER_REASON), PASSWORD_EXPIRY_ORDER_REASON);
+  assert.equal(findingPriorityReason("zh-TW", PASSWORD_EXPIRY_ORDER_REASON), EXPIRY_ZH);
+  assert.equal(findingPriorityReason("zh-TW", `  ${PASSWORD_COMPOSITION_ORDER_REASON}  `), COMPOSITION_ZH);
+});
+
+test("priority guidance keeps the first password-policy order reason", () => {
+  assert.equal(
+    priorityGuidanceReason([`  ${PASSWORD_EXPIRY_ORDER_REASON}  `]),
+    PASSWORD_EXPIRY_ORDER_REASON,
+  );
+  assert.equal(
+    priorityGuidanceReason(["Direct scanner evidence is attached.", "Raised because the asset is sensitive."]),
+    undefined,
+  );
+  assert.equal(
+    priorityGuidanceReason([
+      "Direct scanner evidence is attached.",
+      PASSWORD_COMPOSITION_ORDER_REASON,
+      PASSWORD_EXPIRY_ORDER_REASON,
+    ]),
+    PASSWORD_COMPOSITION_ORDER_REASON,
+  );
+});
+
+test("benchmark lines group scanner references and stop after three", () => {
+  const cis = (version: string, reference = "1.5"): BenchmarkReference => ({
+    name: "CIS Amazon Web Services Foundations",
+    version,
+    reference,
+  });
+  const line = (
+    locale: "en" | "zh-TW",
+    engine: string,
+    benchmarks: readonly BenchmarkReference[],
+  ) => benchmarkLine(locale, engine, benchmarks);
+
+  assert.equal(line("en", "ScoutSuite", []), undefined);
+  assert.equal(line("zh-TW", "ScoutSuite", []), undefined);
+  assert.equal(
+    line("en", "ScoutSuite", [cis("1.2.0")]),
+    "CIS Amazon Web Services Foundations 1.2.0 item 1.5 (reported by ScoutSuite)",
+  );
+  assert.equal(
+    line("zh-TW", "ScoutSuite", [cis("1.2.0")]),
+    "CIS Amazon Web Services Foundations 1.2.0 第 1.5 項（ScoutSuite 回報）",
+  );
+  assert.equal(
+    line("en", "ScoutSuite", [cis("1.0.0"), cis("1.1.0"), cis("1.2.0")]),
+    "CIS Amazon Web Services Foundations 1.0.0/1.1.0/1.2.0 item 1.5 (reported by ScoutSuite)",
+  );
+  assert.equal(
+    line("zh-TW", "ScoutSuite", [cis("1.0.0"), cis("1.1.0"), cis("1.2.0")]),
+    "CIS Amazon Web Services Foundations 1.0.0/1.1.0/1.2.0 第 1.5 項（ScoutSuite 回報）",
+  );
+  const many: BenchmarkReference[] = [
+    { name: "A", version: "1", reference: "r1" },
+    { name: "A", version: "1", reference: "r2" },
+    { name: "B", version: "2", reference: "r3" },
+    { name: "C", version: "3", reference: "r4" },
+  ];
+  assert.equal(
+    line("en", "X", many),
+    "A 1 item r1; A 1 item r2; B 2 item r3 and 1 more (reported by X)",
+  );
+  assert.equal(
+    line("zh-TW", "X", many),
+    "A 1 第 r1 項；A 1 第 r2 項；B 2 第 r3 項，另有 1 項（X 回報）",
+  );
+  assert.equal(
+    line("en", "X", [many[0]!, many[0]!]),
+    "A 1 item r1 (reported by X)",
   );
 });
 

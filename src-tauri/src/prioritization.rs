@@ -1,14 +1,18 @@
 //! Conservative case-context enrichment for canonical findings.
 //!
-//! Scanner severity remains intact. This layer records why an already-observed
-//! issue may deserve earlier human attention in this exact case. Questionnaire
-//! data never invents a finding and only affects wording when an affected asset
-//! independently carries the matching sensitivity or exposure attribute.
+//! Scanner severity remains intact. Case context records why an already-observed
+//! issue may deserve earlier human attention in this exact case. A product-owned
+//! review order can also place a check lower than its scanner severity suggests
+//! when current guidance advises against the benchmark item that check enforces.
+//! Questionnaire data never invents a finding and only affects wording when an
+//! affected asset independently carries the matching sensitivity or exposure
+//! attribute.
 
 use crate::domain::{AssessmentCase, Asset, ContextFactor, DataClass, Finding, SourceKind};
 use std::collections::BTreeSet;
 
 const CONTEXT_VERSION_TAG: &str = "context-priority:v1";
+const PRIORITY_GUIDANCE_TAG: &str = "priority-guidance:v1";
 pub(crate) const INTERNET_REASON: &str = "The affected asset is internet-accessible.";
 pub(crate) const SENSITIVE_REASON: &str =
     "The affected asset contains sensitive data, increasing the potential impact.";
@@ -17,8 +21,15 @@ const INTERNET_IMPACT: &str =
 const SENSITIVE_IMPACT: &str =
     " The affected asset contains sensitive data, increasing the potential impact.";
 
-/// Adds bounded, explainable case-context factors without changing severity,
-/// confidence, fingerprints, evidence, workflow status, or any authorization.
+/// Adds bounded, explainable case-context factors, then caps a check whose
+/// benchmark item current guidance advises against.
+///
+/// Case context only raises priority. Afterwards, when every evidence rule
+/// maps to the same product order, that order's reason is recorded once, the
+/// priority is capped at [`crate::priority_guidance::GUIDED_PRIORITY_CEILING`]
+/// (the Low tier of `priority_for`), and the guidance tag is recorded once.
+/// Severity, confidence, evidence, title, recommendation, and context factors
+/// stay untouched. Questionnaire data never invents a finding.
 pub fn apply_case_context(case: &AssessmentCase, finding: &mut Finding) {
     // Reachability inventory is not a weakness to triage. Raising its priority
     // because the target is internet-facing would turn the defining fact of
@@ -77,6 +88,19 @@ pub fn apply_case_context(case: &AssessmentCase, finding: &mut Finding) {
     if adjustment > 0 {
         finding.priority = finding.priority.saturating_add(adjustment).min(100);
         push_once(&mut finding.tags, CONTEXT_VERSION_TAG);
+    }
+
+    if let Some(guidance) = crate::priority_guidance::guidance_for_rules(
+        finding
+            .evidence
+            .iter()
+            .map(|evidence| (evidence.engine_id.as_str(), evidence.source_rule.as_deref())),
+    ) {
+        push_once(&mut finding.priority_reasons, guidance.reason_english());
+        finding.priority = finding
+            .priority
+            .min(crate::priority_guidance::GUIDED_PRIORITY_CEILING);
+        push_once(&mut finding.tags, PRIORITY_GUIDANCE_TAG);
     }
 
     deduplicate(&mut finding.priority_reasons);
@@ -494,5 +518,168 @@ mod tests {
         assert_eq!(finding.priority, 80);
         assert!(!finding.possible_impact.contains("sensitive data"));
         assert!(!finding.tags.contains(&CONTEXT_VERSION_TAG.into()));
+    }
+
+    use crate::domain::EvidenceKind;
+    use crate::finding_narrative::{
+        PASSWORD_COMPOSITION_ORDER_REASON, PASSWORD_EXPIRY_ORDER_REASON,
+    };
+    use chrono::{TimeZone, Utc};
+
+    fn evidence(engine: &str, rule: Option<&str>) -> crate::domain::Evidence {
+        crate::domain::Evidence {
+            id: "evidence".into(),
+            finding_id: "finding".into(),
+            run_id: "run".into(),
+            engine_run_id: Some("engine-run".into()),
+            kind: EvidenceKind::Configuration,
+            engine_id: engine.into(),
+            scanner_details: None,
+            source_rule: rule.map(str::to_owned),
+            result_pointer_sha256: None,
+            observed_at: Utc.with_ymd_and_hms(2026, 8, 24, 12, 0, 0).unwrap(),
+            summary: "summary".into(),
+            location: Some("location".into()),
+            artifact_id: "artifact".into(),
+            artifact_sha256: "hash".into(),
+            pointer: None,
+            redacted: false,
+        }
+    }
+
+    fn plain_case() -> AssessmentCase {
+        let mut case = contextual_case();
+        case.assets[0].internet_exposed = None;
+        case.assets[0].contains_sensitive_data = None;
+        case
+    }
+
+    #[test]
+    fn scoutsuite_uppercase_password_rule_is_capped_without_changing_the_scanner_rating() {
+        let case = plain_case();
+        let mut finding = finding(&case);
+        finding.evidence.push(evidence(
+            "scoutsuite",
+            Some("iam-password-policy-no-uppercase-required"),
+        ));
+        let severity = finding.severity.clone();
+        let confidence = finding.confidence.clone();
+        let title = finding.title.clone();
+        let recommendation = finding.recommendation.clone();
+        let evidence_before = serde_json::to_value(&finding.evidence).unwrap();
+
+        apply_case_context(&case, &mut finding);
+
+        assert_eq!(finding.priority, 35);
+        assert_eq!(finding.severity, severity);
+        assert_eq!(finding.confidence, confidence);
+        assert_eq!(finding.title, title);
+        assert_eq!(finding.recommendation, recommendation);
+        assert!(finding.context_factors.is_empty());
+        assert_eq!(
+            serde_json::to_value(&finding.evidence).unwrap(),
+            evidence_before
+        );
+        assert!(
+            finding
+                .priority_reasons
+                .contains(&PASSWORD_COMPOSITION_ORDER_REASON.into())
+        );
+        assert!(finding.tags.contains(&"priority-guidance:v1".into()));
+    }
+
+    #[test]
+    fn case_context_cannot_lift_a_guided_password_rule_above_the_low_tier() {
+        let case = contextual_case();
+        let mut finding = finding(&case);
+        finding.evidence.push(evidence(
+            "scoutsuite",
+            Some("iam-password-policy-no-uppercase-required"),
+        ));
+        let severity = finding.severity.clone();
+        let confidence = finding.confidence.clone();
+        let evidence_before = serde_json::to_value(&finding.evidence).unwrap();
+
+        apply_case_context(&case, &mut finding);
+
+        assert_eq!(finding.priority, 35);
+        assert_eq!(finding.severity, severity);
+        assert_eq!(finding.confidence, confidence);
+        assert_eq!(
+            serde_json::to_value(&finding.evidence).unwrap(),
+            evidence_before
+        );
+        assert!(finding.priority_reasons.contains(&INTERNET_REASON.into()));
+        assert!(finding.priority_reasons.contains(&SENSITIVE_REASON.into()));
+        assert!(
+            finding
+                .priority_reasons
+                .contains(&PASSWORD_COMPOSITION_ORDER_REASON.into())
+        );
+        assert_eq!(
+            finding.context_factors,
+            vec![
+                ContextFactor::InternetExposedAsset,
+                ContextFactor::SensitiveDataAsset
+            ]
+        );
+        assert!(finding.tags.contains(&CONTEXT_VERSION_TAG.into()));
+        assert!(finding.tags.contains(&"priority-guidance:v1".into()));
+
+        let once = serde_json::to_value(&finding).unwrap();
+        apply_case_context(&case, &mut finding);
+        assert_eq!(serde_json::to_value(&finding).unwrap(), once);
+    }
+
+    #[test]
+    fn minimum_password_length_keeps_the_high_priority() {
+        let case = plain_case();
+        let mut finding = finding(&case);
+        finding.evidence.push(evidence(
+            "scoutsuite",
+            Some("iam-password-policy-minimum-length"),
+        ));
+
+        apply_case_context(&case, &mut finding);
+
+        assert_eq!(finding.priority, 80);
+        assert_eq!(finding.severity, Severity::High);
+        assert!(
+            !finding
+                .priority_reasons
+                .iter()
+                .any(|reason| reason == PASSWORD_COMPOSITION_ORDER_REASON
+                    || reason == PASSWORD_EXPIRY_ORDER_REASON)
+        );
+        assert!(!finding.tags.contains(&"priority-guidance:v1".into()));
+    }
+
+    #[test]
+    fn prowler_scheduled_expiry_records_the_expiry_reason() {
+        let case = plain_case();
+        let mut finding = finding(&case);
+        finding.evidence.push(evidence(
+            "prowler",
+            Some("iam_password_policy_expires_passwords_within_90_days_or_less"),
+        ));
+        let severity = finding.severity.clone();
+        let confidence = finding.confidence.clone();
+
+        apply_case_context(&case, &mut finding);
+
+        assert_eq!(finding.priority, 35);
+        assert_eq!(finding.severity, severity);
+        assert_eq!(finding.confidence, confidence);
+        assert!(
+            finding
+                .priority_reasons
+                .contains(&PASSWORD_EXPIRY_ORDER_REASON.into())
+        );
+        assert!(
+            !finding
+                .priority_reasons
+                .contains(&PASSWORD_COMPOSITION_ORDER_REASON.into())
+        );
+        assert!(finding.tags.contains(&"priority-guidance:v1".into()));
     }
 }

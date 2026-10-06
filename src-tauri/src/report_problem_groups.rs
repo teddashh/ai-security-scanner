@@ -17,6 +17,15 @@ pub enum ReportProblemKind {
     IamPolicyPermissions,
 }
 
+/// How many members of a problem group this product ordered lower than their
+/// scanner severity suggests.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LowerPriorityMembers {
+    Partial,
+    All,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ReportProblemGroup {
     pub group_id: Id,
@@ -28,14 +37,26 @@ pub struct ReportProblemGroup {
     pub finding_ids: Vec<Id>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub policy_name: Option<String>,
+    /// Present when at least one member carries a product order lower than its
+    /// scanner severity. Omitted from the group id: it is presentation only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lower_priority_members: Option<LowerPriorityMembers>,
 }
 
 impl ReportProblemGroup {
     pub fn next_step_english(&self) -> Option<&'static str> {
         match self.kind {
-            ReportProblemKind::IamPasswordPolicy => {
-                Some("Review the account's IAM password policy and address each failed setting.")
-            }
+            ReportProblemKind::IamPasswordPolicy => match self.lower_priority_members {
+                Some(LowerPriorityMembers::Partial) => Some(
+                    "Review the account's IAM password policy. Fix the failed length or reuse settings first; change the character-mix or expiry settings only if an audit you must pass still requires them.",
+                ),
+                Some(LowerPriorityMembers::All) => Some(
+                    "Change these IAM password policy settings only if an audit you must pass still requires them; NIST SP 800-63B-4 says not to require character mixes or scheduled expiry.",
+                ),
+                None => Some(
+                    "Review the account's IAM password policy and address each failed setting.",
+                ),
+            },
             ReportProblemKind::RootAccountUsage => Some(
                 "Review each scanner's root-usage window and use an IAM role for routine work.",
             ),
@@ -45,9 +66,15 @@ impl ReportProblemGroup {
 
     pub fn next_step_zh_hant(&self) -> Option<&'static str> {
         match self.kind {
-            ReportProblemKind::IamPasswordPolicy => {
-                Some("檢查帳號的 IAM 密碼政策，並調整每項未通過的設定。")
-            }
+            ReportProblemKind::IamPasswordPolicy => match self.lower_priority_members {
+                Some(LowerPriorityMembers::Partial) => Some(
+                    "檢查帳號的 IAM 密碼政策：先調整未通過的長度或重複使用設定；字元組成或到期設定，只有在必須通過的稽核仍要求時才需要變更。",
+                ),
+                Some(LowerPriorityMembers::All) => Some(
+                    "只有在必須通過的稽核仍要求時，才需要變更這些 IAM 密碼政策設定；NIST SP 800-63B-4 要求不要強制混合字元類型或定期到期。",
+                ),
+                None => Some("檢查帳號的 IAM 密碼政策，並調整每項未通過的設定。"),
+            },
             ReportProblemKind::RootAccountUsage => {
                 Some("檢查各掃描工具記錄的 root 使用時間範圍，日常工作改用 IAM role。")
             }
@@ -57,9 +84,14 @@ impl ReportProblemGroup {
 
     pub fn impact_english(&self) -> Option<&'static str> {
         match self.kind {
-            ReportProblemKind::IamPasswordPolicy => Some(
-                "Weak password settings increase the risk of unauthorized access to IAM users.",
-            ),
+            ReportProblemKind::IamPasswordPolicy => match self.lower_priority_members {
+                Some(LowerPriorityMembers::All) => Some(
+                    "CIS AWS Foundations Benchmark v1.2.0 lists these settings; current guidance does not treat their absence as a weakness.",
+                ),
+                Some(LowerPriorityMembers::Partial) | None => Some(
+                    "Weak password settings increase the risk of unauthorized access to IAM users.",
+                ),
+            },
             ReportProblemKind::RootAccountUsage => Some(
                 "Root-account activity uses permissions with broad control of this AWS account.",
             ),
@@ -69,9 +101,14 @@ impl ReportProblemGroup {
 
     pub fn impact_zh_hant(&self) -> Option<&'static str> {
         match self.kind {
-            ReportProblemKind::IamPasswordPolicy => {
-                Some("較弱的密碼設定會增加 IAM 使用者遭未授權存取的風險。")
-            }
+            ReportProblemKind::IamPasswordPolicy => match self.lower_priority_members {
+                Some(LowerPriorityMembers::All) => Some(
+                    "CIS AWS Foundations Benchmark v1.2.0 列出這些設定；現行指引不把缺少這些設定視為弱點。",
+                ),
+                Some(LowerPriorityMembers::Partial) | None => {
+                    Some("較弱的密碼設定會增加 IAM 使用者遭未授權存取的風險。")
+                }
+            },
             ReportProblemKind::RootAccountUsage => {
                 Some("root 帳號的活動會使用可廣泛控制此 AWS 帳號的權限。")
             }
@@ -302,6 +339,22 @@ pub(crate) fn build_problem_groups(
                 digest.update(component.as_bytes());
                 digest.update([0]);
             }
+            let guided = members
+                .iter()
+                .filter(|finding| {
+                    crate::priority_guidance::PriorityGuidance::from_priority_reasons(
+                        &finding.priority_reasons,
+                    )
+                    .is_some()
+                })
+                .count();
+            let lower_priority_members = if guided == 0 {
+                None
+            } else if guided == members.len() {
+                Some(LowerPriorityMembers::All)
+            } else {
+                Some(LowerPriorityMembers::Partial)
+            };
             let mut group = ReportProblemGroup {
                 group_id: format!("report-problem:{}", hex::encode(digest.finalize())),
                 rule_version: RULE_VERSION.into(),
@@ -314,6 +367,7 @@ pub(crate) fn build_problem_groups(
                     .map(|finding| finding.finding_id.clone())
                     .collect(),
                 policy_name,
+                lower_priority_members,
             };
             group.title = group.title_english();
             Some(group)
@@ -631,5 +685,167 @@ pub(crate) mod tests {
         assert!(!wire.contains("123456789012"));
         assert!(!wire.contains("private-one"));
         assert!(!wire.contains("private-two"));
+    }
+
+    #[test]
+    fn password_policy_group_says_when_members_are_ordered_lower() {
+        use crate::finding_narrative::{
+            PASSWORD_COMPOSITION_ORDER_REASON, PASSWORD_EXPIRY_ORDER_REASON,
+        };
+
+        let case = approved_case();
+        let report = build_beginner_master_report(&case, "run-1").unwrap();
+        let run = &case.scan_runs[0];
+        let original = report
+            .problem_groups
+            .iter()
+            .find(|group| group.kind == ReportProblemKind::IamPasswordPolicy)
+            .unwrap();
+        assert_eq!(original.lower_priority_members, None);
+        assert_eq!(
+            original.next_step_english(),
+            Some("Review the account's IAM password policy and address each failed setting.")
+        );
+        assert_eq!(
+            original.next_step_zh_hant(),
+            Some("檢查帳號的 IAM 密碼政策，並調整每項未通過的設定。")
+        );
+        assert_eq!(
+            original.impact_english(),
+            Some("Weak password settings increase the risk of unauthorized access to IAM users.")
+        );
+        assert_eq!(
+            original.impact_zh_hant(),
+            Some("較弱的密碼設定會增加 IAM 使用者遭未授權存取的風險。")
+        );
+        let group_id = original.group_id.clone();
+        let representative = original.representative_finding_id.clone();
+        let password_ids = original
+            .finding_ids
+            .iter()
+            .cloned()
+            .collect::<BTreeSet<_>>();
+
+        let mut partial_findings = report.findings.clone();
+        for finding in &mut partial_findings {
+            if !password_ids.contains(&finding.finding_id) {
+                continue;
+            }
+            let evidence = &finding.evidence_references[0];
+            let reason = match (evidence.engine_id.as_str(), evidence.source_rule.as_deref()) {
+                (
+                    "prowler",
+                    Some(
+                        "iam_password_policy_uppercase"
+                        | "iam_password_policy_lowercase"
+                        | "iam_password_policy_number"
+                        | "iam_password_policy_symbol",
+                    ),
+                ) => Some(PASSWORD_COMPOSITION_ORDER_REASON),
+                (
+                    "prowler",
+                    Some("iam_password_policy_expires_passwords_within_90_days_or_less"),
+                ) => Some(PASSWORD_EXPIRY_ORDER_REASON),
+                (
+                    "scoutsuite",
+                    Some(
+                        "iam-password-policy-no-expiration"
+                        | "iam-password-policy-expiration-threshold",
+                    ),
+                ) => Some(PASSWORD_EXPIRY_ORDER_REASON),
+                _ => None,
+            };
+            if let Some(reason) = reason {
+                finding.priority_reasons.push(reason.to_owned());
+            }
+        }
+        let partial = build_problem_groups(&partial_findings, run)
+            .into_iter()
+            .find(|group| group.kind == ReportProblemKind::IamPasswordPolicy)
+            .unwrap();
+        assert_eq!(
+            partial.lower_priority_members,
+            Some(LowerPriorityMembers::Partial)
+        );
+        assert_eq!(partial.group_id, group_id);
+        assert_eq!(partial.representative_finding_id, representative);
+        assert_eq!(
+            partial.next_step_english(),
+            Some(
+                "Review the account's IAM password policy. Fix the failed length or reuse settings first; change the character-mix or expiry settings only if an audit you must pass still requires them."
+            )
+        );
+        assert_eq!(
+            partial.next_step_zh_hant(),
+            Some(
+                "檢查帳號的 IAM 密碼政策：先調整未通過的長度或重複使用設定；字元組成或到期設定，只有在必須通過的稽核仍要求時才需要變更。"
+            )
+        );
+        assert_eq!(partial.impact_english(), original.impact_english());
+        assert_eq!(partial.impact_zh_hant(), original.impact_zh_hant());
+        let partial_wire = serde_json::to_value(&partial).unwrap();
+        assert_eq!(partial_wire["lower_priority_members"], "partial");
+        let mut without = partial_wire.clone();
+        without
+            .as_object_mut()
+            .unwrap()
+            .remove("lower_priority_members");
+        let decoded: ReportProblemGroup = serde_json::from_value(without).unwrap();
+        assert_eq!(decoded.lower_priority_members, None);
+
+        let mut all_findings = report.findings.clone();
+        for finding in &mut all_findings {
+            if password_ids.contains(&finding.finding_id) {
+                finding
+                    .priority_reasons
+                    .push(PASSWORD_COMPOSITION_ORDER_REASON.to_owned());
+            }
+        }
+        let groups = build_problem_groups(&all_findings, run);
+        let all = groups
+            .iter()
+            .find(|group| group.kind == ReportProblemKind::IamPasswordPolicy)
+            .unwrap();
+        assert_eq!(all.lower_priority_members, Some(LowerPriorityMembers::All));
+        assert_eq!(all.group_id, group_id);
+        assert_eq!(all.representative_finding_id, representative);
+        assert_eq!(
+            all.next_step_english(),
+            Some(
+                "Change these IAM password policy settings only if an audit you must pass still requires them; NIST SP 800-63B-4 says not to require character mixes or scheduled expiry."
+            )
+        );
+        assert_eq!(
+            all.next_step_zh_hant(),
+            Some(
+                "只有在必須通過的稽核仍要求時，才需要變更這些 IAM 密碼政策設定；NIST SP 800-63B-4 要求不要強制混合字元類型或定期到期。"
+            )
+        );
+        assert_eq!(
+            all.impact_english(),
+            Some(
+                "CIS AWS Foundations Benchmark v1.2.0 lists these settings; current guidance does not treat their absence as a weakness."
+            )
+        );
+        assert_eq!(
+            all.impact_zh_hant(),
+            Some(
+                "CIS AWS Foundations Benchmark v1.2.0 列出這些設定；現行指引不把缺少這些設定視為弱點。"
+            )
+        );
+        assert!(groups.iter().all(|group| {
+            group.kind == ReportProblemKind::IamPasswordPolicy
+                || group.lower_priority_members.is_none()
+        }));
+        assert!(
+            serde_json::to_value(original)
+                .unwrap()
+                .get("lower_priority_members")
+                .is_none()
+        );
+        assert_eq!(
+            serde_json::to_value(all).unwrap()["lower_priority_members"],
+            "all"
+        );
     }
 }
