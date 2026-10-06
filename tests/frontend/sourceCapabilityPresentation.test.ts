@@ -77,8 +77,6 @@ const manifest = (
   blockedBy: [],
   compatibilityValid: true,
   providerExecutionProfiles: [],
-  supportUntil: "9999-12-31",
-  supportStatus: "supported",
   ...overrides,
 });
 
@@ -198,21 +196,32 @@ test("only a matching verified source binding supplies the displayed source scop
   assert.equal(projectSourceCapabilityView({ provider: "gcp", source: mismatched, manifests: currentManifests }).resourceScope, undefined);
 });
 
-test("expired support is an engine limitation and does not erase runnable capability", () => {
-  const expiredCloudQuery = manifest("cloudquery", ["aws"], {
-    supportStatus: "expired",
-    supportUntil: "0001-01-01",
+test("a recorded knowledge date is provenance and does not erase runnable capability", () => {
+  const datedCloudQuery = manifest("cloudquery", ["aws"], {
+    knowledgeDate: "0001-01-01",
   });
   const view = projectSourceCapabilityView({
     provider: "aws",
     source: sourceByProvider.aws,
-    manifests: [expiredCloudQuery, manifest("steampipe", ["aws"]), prowler, manifest("scoutsuite", ["aws"]), manifest("cloudsplaining", ["aws"])],
+    manifests: [datedCloudQuery, manifest("steampipe", ["aws"]), prowler, manifest("scoutsuite", ["aws"]), manifest("cloudsplaining", ["aws"])],
   });
   const projected = view.cells[0]?.engines.find((engine) => engine.id === "cloudquery");
   assert.equal(view.cells[0]?.state, "partial");
   assert.equal(projected?.availability, "available");
-  assert.equal(projected?.supportStatus, "expired");
-  assert.equal(projected?.supportUntil, "0001-01-01");
+  assert.equal(projected?.knowledgeDate, "0001-01-01");
+  assert.equal(Object.hasOwn(projected ?? {}, "supportStatus"), false);
+  assert.equal(Object.hasOwn(projected ?? {}, "supportUntil"), false);
+
+  const malformed = manifest("cloudquery", ["aws"], { knowledgeDate: "not-a-date" });
+  const malformedView = projectSourceCapabilityView({
+    provider: "aws",
+    source: sourceByProvider.aws,
+    manifests: [malformed, manifest("steampipe", ["aws"]), prowler, manifest("scoutsuite", ["aws"]), manifest("cloudsplaining", ["aws"])],
+  });
+  const malformedEngine = malformedView.cells[0]?.engines.find((engine) => engine.id === "cloudquery");
+  assert.equal(malformedView.cells[0]?.state, "partial");
+  assert.equal(malformedEngine?.availability, "available");
+  assert.equal(malformedEngine?.knowledgeDate, undefined);
 });
 
 test("contradictory compatibility data fails soft to unknown", () => {

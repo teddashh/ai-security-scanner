@@ -3,7 +3,7 @@ use ai_security_scanner_lib::adapters::{BUILTIN_ENGINE_IDS, builtin_adapter_regi
 use ai_security_scanner_lib::artifact_store::ArtifactStore;
 use ai_security_scanner_lib::beginner_report::{
     BeginnerInventoryItemKind, BeginnerMasterReport, CLOUD_SCOPE_LIMIT_DIMENSIONS,
-    CoverageDimensionStatus, CoverageGapClass, CoverageGapKind, NextActionCode,
+    CoverageDimensionStatus, CoverageGapClass, CoverageGapKind, NextActionCode, TechnicalExecution,
     build_beginner_master_report,
 };
 use ai_security_scanner_lib::case_service::{
@@ -1584,16 +1584,14 @@ fn every_detector_places_its_finding_on_its_mapped_control() {
                 "a successful process must not hide the fixture's WARN controls"
             );
             // What is left is coverage data, not unfinished execution: a
-            // pinned catalog whose declared support has ended, a control
-            // upstream evaluated but left for a person to rule on, what a
-            // cloud or Microsoft 365 check's fixed profile leaves out, and
-            // the controls an engine said it did not evaluate.
+            // control upstream evaluated but left for a person to rule on,
+            // what a cloud or Microsoft 365 check's fixed profile leaves out,
+            // and the controls an engine said it did not evaluate.
             let unfinished_gaps = report
                 .coverage_gaps
                 .iter()
                 .filter(|gap| {
                     !matches!(gap.kind, CoverageGapKind::ManualReview)
-                        && !gap.dimension.ends_with("expired detection knowledge")
                         && !CLOUD_SCOPE_LIMIT_DIMENSIONS.contains(&gap.dimension.as_str())
                         && !gap.dimension.ends_with(": controls not evaluated")
                 })
@@ -2122,34 +2120,62 @@ fn every_integrated_engine_lands_in_one_terminal_report() {
                 );
             }
 
-            // CloudQuery is the one engine in the catalog whose declared knowledge
-            // support ended before this run. Planning already writes that as an
-            // engine-run warning, but the warning is a Progress surface: without a
-            // coverage row the reader receives a report in which a scanner running on
-            // knowledge three years past support is indistinguishable from a current
-            // one.
-            let stale = report
-                .coverage_gaps
+            // CloudQuery's catalog records a knowledge date years before this
+            // run. That date is provenance on the technical execution. It does
+            // not open a coverage gap.
+            let cloudquery_knowledge_date = subject
+                .completed
+                .scan_runs
                 .iter()
-                .filter(|gap| gap.dimension.ends_with(": expired detection knowledge"))
-                .collect::<Vec<_>>();
-            assert_eq!(
-                stale.len(),
-                1,
-                "exactly the engines whose support ended: {:#?}",
-                stale
-            );
-            assert_eq!(
-                stale[0].dimension,
-                "cloudquery: expired detection knowledge"
-            );
+                .find(|run| run.id == scan_run_id)
+                .expect("the audited run")
+                .engine_runs
+                .iter()
+                .find(|run| run.engine_id == "cloudquery")
+                .expect("CloudQuery ran")
+                .knowledge_input
+                .as_ref()
+                .and_then(|input| input.knowledge_date.clone())
+                .expect("the CloudQuery fixture records a knowledge date");
             assert!(
-                stale[0].reason.ends_with(" Support ended: 2023-04-10."),
-                "{}",
-                stale[0].reason
+                report.coverage_gaps.iter().all(|gap| {
+                    let text = format!("{} {}", gap.dimension, gap.reason).to_ascii_lowercase();
+                    !text.contains("expired knowledge")
+                        && !text.contains("expired detection knowledge")
+                        && !text.contains("support ended")
+                        && !text.contains("stale-knowledge")
+                }),
+                "scanner age became a coverage gap: {:#?}",
+                report
+                    .coverage_gaps
+                    .iter()
+                    .filter(|gap| {
+                        let text = format!("{} {}", gap.dimension, gap.reason).to_ascii_lowercase();
+                        text.contains("expired")
+                            || text.contains("knowledge")
+                            || text.contains("support ended")
+                            || text.contains("stale-knowledge")
+                    })
+                    .collect::<Vec<_>>()
             );
-            // The check still ran and its inventory is still reported. The row
-            // qualifies the result; it does not withdraw it.
+            let cloudquery_execution = report
+                .technical_details
+                .tasks
+                .iter()
+                .find_map(|task| match &task.execution {
+                    TechnicalExecution::CatalogEngine {
+                        engine_id,
+                        knowledge_date,
+                        ..
+                    } if engine_id == "cloudquery" => Some(knowledge_date),
+                    _ => None,
+                })
+                .expect("CloudQuery technical execution");
+            assert_eq!(
+                cloudquery_execution.as_deref(),
+                Some(cloudquery_knowledge_date.as_str())
+            );
+            // The check still ran and its inventory is still reported.
             assert_eq!(
                 report
                     .actual
@@ -2346,11 +2372,40 @@ fn every_integrated_engine_lands_in_one_terminal_report() {
             }
             // Each run is one row now: the check names itself, the state and the
             // targets sit in their own columns, and the window is the last two.
+            // The header also names the scanner version and its last-updated date.
             // A run that retained dimension detail keeps it in a row beneath.
+            let syft_check = report
+                .actual
+                .checks
+                .iter()
+                .find(|check| check.check_id == "syft")
+                .expect("Syft check");
+            let (syft_version, syft_knowledge_date) = report
+                .technical_details
+                .tasks
+                .iter()
+                .find_map(|task| match &task.execution {
+                    TechnicalExecution::CatalogEngine {
+                        engine_version,
+                        knowledge_date,
+                        ..
+                    } if task.task_id == syft_check.task_id => {
+                        Some((engine_version.as_deref(), knowledge_date.as_deref()))
+                    }
+                    _ => None,
+                })
+                .expect("Syft technical execution");
+            let (Some(syft_version), Some(syft_knowledge_date)) =
+                (syft_version, syft_knowledge_date)
+            else {
+                panic!(
+                    "Syft recorded version {syft_version:?} and knowledge date {syft_knowledge_date:?}"
+                );
+            };
             assert!(
-                tested.contains(
-                    "<tr><th scope=\"row\">Syft</th><td class=\"tested-state\">Completed</td>"
-                ),
+                tested.contains(&format!(
+                    "<tr><th scope=\"row\">Syft<br><small>Version {syft_version} · last updated {syft_knowledge_date}</small></th><td class=\"tested-state\">Completed</td>"
+                )),
                 "a completed run lost its row"
             );
             assert!(
@@ -2490,7 +2545,6 @@ fn every_integrated_engine_lands_in_one_terminal_report() {
                 "The bounded check reached its time limit, so it cannot be treated as tested complete.",
                 "This check was cancelled before completed coverage was recorded.",
                 "This check did not reach a confirmed complete result.",
-                "This check ran on detection knowledge whose declared support had already ended",
                 "This run did not retain an exact reduction record.",
                 "Maester evaluated this control but did not return a pass or fail verdict.",
             ] {
@@ -2505,7 +2559,6 @@ fn every_integrated_engine_lands_in_one_terminal_report() {
                 "Retry the timed-out work.</strong> — KICS · Repository <em>",
                 "Retry this check for a confirmed result.</strong> — kube-bench: unfinished part · Kubernetes node; Nuclei: unfinished part · https://portal.example.test:443</li>",
                 "Check these controls by hand.</strong> — kube-bench: controls not evaluated · Kubernetes node; Maester: controls not evaluated · Audit tenant</li>",
-                "Treat these results as evidence from expired knowledge, not as current coverage.</strong> — CloudQuery: expired detection knowledge",
                 // One step closes two rows, and says so rather than showing one
                 // of the two reasons and dropping the other.
                 "Retry this check to complete the missing coverage.</strong> — Naabu · 203.0.113.11; TruffleHog · Repository</li>",
@@ -2516,6 +2569,16 @@ fn every_integrated_engine_lands_in_one_terminal_report() {
                     "a step lost its coverage name: {named}\n{steps}"
                 );
             }
+            for absent in ["expired knowledge", "Support ended", "stale-knowledge"] {
+                assert!(
+                    !ordered_html.contains(absent),
+                    "the English report still treats scanner age as expiry: {absent}"
+                );
+            }
+            assert!(
+                ordered_html.contains(&format!("last updated {cloudquery_knowledge_date}")),
+                "the English report omitted CloudQuery's last-updated date"
+            );
             assert!(
                 ordered_html.find("Before changing anything")
                     < ordered_html.find(">Problems found</h2>")
@@ -2559,7 +2622,6 @@ fn every_integrated_engine_lands_in_one_terminal_report() {
                 "KICS 檢查",
                 "Naabu 檢查",
                 "TruffleHog 檢查",
-                "CloudQuery 的已過期的偵測知識",
                 "Nuclei 未完成的部分",
                 "Maester：未回傳判定的控制項 MT.1003",
             ] {
@@ -2568,6 +2630,23 @@ fn every_integrated_engine_lands_in_one_terminal_report() {
                     "the Chinese report lost a scanner's name: {named}"
                 );
             }
+            for absent in [
+                "expired knowledge",
+                "Support ended",
+                "stale-knowledge",
+                "已過期的偵測知識",
+                "過時知識",
+                "支援結束日期",
+            ] {
+                assert!(
+                    !zh_html.contains(absent),
+                    "the Chinese report still treats scanner age as expiry: {absent}"
+                );
+            }
+            assert!(
+                zh_html.contains(&format!("最後更新 {cloudquery_knowledge_date}")),
+                "the Chinese report omitted CloudQuery's last-updated date"
+            );
             // The deepest technical block is the report's provenance, not a
             // dumping ground: its headings were translated while the values
             // under them stayed in English. A Chinese reader saw "證據類型:

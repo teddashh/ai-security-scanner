@@ -973,6 +973,73 @@ test("beginner report cleanup claims require exact booleans and preserve absence
   }
 });
 
+test("catalog engine knowledge_date maps to knowledgeDate and an absent key stays undefined", () => {
+  const executionFor = (knowledgeDate: "present" | "null" | "absent") => {
+    const fixture = beginnerStatusReportFixture();
+    return adaptBeginnerMasterReport({
+      ...fixture,
+      technical_details: {
+        collapsed_by_default: true,
+        tasks: [{
+          task_id: "task-status",
+          target_asset_ids: ["asset-status"],
+          status: "completed",
+          phase: "completed",
+          progress_percent: 100,
+          started_at: "2026-09-15T11:59:00Z",
+          finished_at: "2026-09-15T12:00:00Z",
+          exit_code: 0,
+          cleanup_removed: null,
+          cleanup_detail: {
+            availability: "recorded",
+            value: "Cleanup outcome recorded.",
+            explanation: "Cleanup outcome was recorded.",
+          },
+          error_code: null,
+          redacted_scanner_message: {
+            availability: "unavailable",
+            value: null,
+            explanation: "No scanner message was retained.",
+          },
+          redacted_diagnostic_log: {
+            availability: "unavailable",
+            value: null,
+            explanation: "No diagnostic log was retained.",
+          },
+          evidence_sha256: [],
+          execution: {
+            kind: "catalog_engine",
+            engine_id: "prowler",
+            engine_version: "0.74.0",
+            image_digest: null,
+            command_sha256: null,
+            runtime_provider: null,
+            runtime_version: null,
+            runtime_security_options: null,
+            distribution_mode: null,
+            image_repository: null,
+            adapter_version: "1.0.0",
+            rule_version: null,
+            ...(knowledgeDate === "present"
+              ? { knowledge_date: "2026-08-24" }
+              : knowledgeDate === "null"
+                ? { knowledge_date: null }
+                : {}),
+          },
+        }],
+      },
+    }).technicalDetails.tasks[0]?.execution;
+  };
+
+  const present = executionFor("present");
+  assert.equal(present?.kind, "catalog_engine");
+  assert.equal(present?.kind === "catalog_engine" ? present.knowledgeDate : undefined, "2026-08-24");
+  const absent = executionFor("absent");
+  assert.equal(absent?.kind === "catalog_engine" ? absent.knowledgeDate : "missing", undefined);
+  const cleared = executionFor("null");
+  assert.equal(cleared?.kind === "catalog_engine" ? cleared.knowledgeDate : "missing", undefined);
+});
+
 test("beginner coverage gap kinds preserve known values and fail closed to unavailable", () => {
   const known = adaptBeginnerMasterReport(beginnerStatusReportFixture({ gapKind: "failed" }));
   assert.equal(known.coverageGaps[0]?.kind, "failed");
@@ -1736,20 +1803,27 @@ test("missing or malformed manifest compatibility fails soft instead of inventin
   assert.equal(futureVocabulary.status, "unsupported");
 });
 
-test("manifest support dates preserve valid dates and never promote malformed dates to supported", () => {
+test("manifest knowledge dates are kept and support dates are not projected", () => {
   const known = adaptNativeManifest(nativeManifestFixture({
     compatibility: { knowledge_date: "2026-01-01", support_until: "9999-12-31", runnable: true, blocked_by: [] },
   }));
-  assert.equal(known.supportUntil, "9999-12-31");
-  assert.equal(known.supportStatus, "supported");
+  assert.equal(known.knowledgeDate, "2026-01-01");
+  assert.equal(Object.hasOwn(known, "supportUntil"), false);
+  assert.equal(Object.hasOwn(known, "supportStatus"), false);
 
   for (const support_until of [undefined, null, "not-a-date", "2026-02-30", true]) {
     const manifest = adaptNativeManifest(nativeManifestFixture({
       compatibility: { knowledge_date: "2026-01-01", support_until, runnable: true, blocked_by: [] },
     }));
-    assert.equal(manifest.supportUntil, undefined);
-    assert.equal(manifest.supportStatus, "unknown");
+    assert.equal(manifest.knowledgeDate, "2026-01-01");
+    assert.equal(Object.hasOwn(manifest, "supportUntil"), false);
+    assert.equal(Object.hasOwn(manifest, "supportStatus"), false);
   }
+
+  const missing = adaptNativeManifest(nativeManifestFixture({
+    compatibility: { support_until: "9999-12-31", runnable: true, blocked_by: [] },
+  }));
+  assert.equal(missing.knowledgeDate, undefined);
 });
 
 test("case summaries display only applicable source platforms and preserve real multi-platform scope", () => {

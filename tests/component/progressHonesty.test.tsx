@@ -1603,8 +1603,13 @@ test.each([
   },
 );
 
-test("an expired inventory check does not ask for a knowledge update", () => {
-  const expiredKnowledge = {
+test("a check past its catalog support date shows its last-updated date and asks for no update", () => {
+  const plainDate = (locale: "en" | "zh-TW") => new Intl.DateTimeFormat(locale, {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+  }).format(new Date("2023-01-10T12:00:00"));
+  const recordedKnowledge = {
     kind: "embedded" as const,
     identifier: "pinned-catalog",
     pinState: "pinned_or_not_applicable" as const,
@@ -1612,28 +1617,34 @@ test("an expired inventory check does not ask for a knowledge update", () => {
     supportUntil: "2023-04-10",
   };
   const catalog = { kind: "catalog_engine" as const };
-  const inventoryOnly = renderProgress(run([
+  const recordedRun = run([
     engine("cloudquery", "completed", {
       progress: 100,
       taskKind: catalog,
-      knowledgeInput: expiredKnowledge,
-    }),
-  ], "completed"));
-  expect(inventoryOnly.container.textContent).not.toContain("Update needed before checking fixes again");
-
-  cleanup();
-  const withSecurityCheck = renderProgress(run([
-    engine("cloudquery", "completed", {
-      progress: 100,
-      taskKind: catalog,
-      knowledgeInput: expiredKnowledge,
+      knowledgeInput: recordedKnowledge,
     }),
     engine("prowler", "completed", {
       progress: 100,
       taskKind: catalog,
-      knowledgeInput: expiredKnowledge,
+      knowledgeInput: recordedKnowledge,
     }),
-  ], "completed"));
-  expect(withSecurityCheck.container.textContent).toContain("Update needed before checking fixes again");
-  expect(withSecurityCheck.container.textContent).toContain("Checks needing newer security knowledge: 1.");
+  ], "completed");
+  const lastUpdatedValues = (container: HTMLElement, label: string) =>
+    Array.from(container.querySelectorAll(".engine-provenance dl > div"))
+      .filter((row) => row.querySelector("dt")?.textContent === label)
+      .map((row) => row.querySelector("dd")?.textContent);
+
+  const english = renderProgress(recordedRun);
+  expect(english.container.textContent).not.toContain("Update needed before checking fixes again");
+  expect(english.container.textContent).not.toContain("past support date");
+  expect(english.container.textContent).toContain("Case snapshot");
+  expect(lastUpdatedValues(english.container, "Last updated")).toEqual([plainDate("en"), plainDate("en")]);
+
+  cleanup();
+  window.localStorage.setItem(localeStorageKey, "zh-TW");
+  const chinese = renderProgress(recordedRun);
+  expect(chinese.container.textContent).not.toContain("再次確認修復前，需要先更新");
+  expect(chinese.container.textContent).not.toContain("已超過支援日期");
+  expect(chinese.container.textContent).toContain("案件快照");
+  expect(lastUpdatedValues(chinese.container, "最後更新")).toEqual([plainDate("zh-TW"), plainDate("zh-TW")]);
 });

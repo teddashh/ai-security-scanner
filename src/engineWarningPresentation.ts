@@ -357,8 +357,8 @@ const directEngineWarningEnglish = (warning: string): string => {
       "The installed version cannot process this saved check. Start a new scan.",
     )
     .replace(
-      /Execution retains this explicit stale-knowledge warning; its results must not be presented as current knowledge\.$/u,
-      "Results use outdated knowledge.",
+      /^Engine (.+) uses knowledge dated (.+) whose declared support ended .+\. Execution retains this explicit stale-knowledge warning; its results must not be presented as current knowledge\.$/u,
+      "Scanner $1 knowledge last updated $2.",
     )
     .replace(
       /Verified empty JSONL result processing continued without scanner execution or mapping changes\.$/u,
@@ -418,7 +418,6 @@ const directEngineWarningZhTW = (warning: string): string => {
     .replace("已保留先前儲存的錯誤分類供診斷：", "先前儲存的錯誤分類：")
     .replace("結果處理已停止；請使用目前的結果讀取器開始新的掃描。", "結果處理已停止；請開始新的掃描。")
     .replace("已安裝的結果讀取器無法繼續處理這項檢查；請開始新的掃描。", "已安裝版本無法處理這項已保存的檢查；請開始新的掃描。")
-    .replace("執行記錄保留這項明確的過時知識警告；其結果不得呈現為目前知識。", "結果使用過時知識。")
     .replace("已驗證的空白 JSONL 結果已繼續處理，沒有重新執行掃描工具或變更對照。", "空白 JSONL 結果處理完成。");
 };
 
@@ -612,7 +611,7 @@ export const recognizedEngineWarningZhTW = (warning: string): string | undefined
     [/^Captured launcher coverage remained unverified after restart \((.+)\); no unverified work was counted as tested\.$/u, (reason) => `重新啟動後，擷取的啟動器涵蓋仍未驗證（${reason}）；未驗證的工作不會計為已檢測。`],
     [/^Earlier saved error classification was preserved for diagnosis: (.+)\.$/u, (code) => `已保留先前儲存的錯誤分類供診斷：${code}。`],
     [/^the tenant's ScubaGear configuration disputes the result of (.+) (.+); they are reported on ScubaGear's own determination and tagged tenant-disputed rather than suppressed$/u, (count) => `租用戶的 ScubaGear 設定對 ${count} 個控制措施的結果有異議；系統依 ScubaGear 本身的判定回報，並標記為租用戶異議，而不是隱藏`],
-    [/^Engine (.+) uses knowledge dated (.+) whose declared support ended (.+)\. Execution retains this explicit stale-knowledge warning; its results must not be presented as current knowledge\.$/u, (engine, date, ended) => `掃描工具 ${engine} 使用日期為 ${date}、宣告支援已於 ${ended} 結束的知識。執行記錄保留這項明確的過時知識警告；其結果不得呈現為目前知識。`],
+    [/^Engine (.+) uses knowledge dated (.+) whose declared support ended .+\. Execution retains this explicit stale-knowledge warning; its results must not be presented as current knowledge\.$/u, (engine, date) => `掃描工具 ${engine} 知識最後更新：${date}。`],
     [/^Engine (.+) uses different release settings \((.+)\), and (.+)\. Start a new scan with the installed release\.$/u, (engine, differences, reason) => `掃描工具 ${engine} 使用不同的版本設定（${differences}），且${reason}。請使用已安裝版本開始新的掃描。`],
     [/^Release settings differ \((.+)\)\. Verified empty JSONL result processing continued without scanner execution or mapping changes\.$/u, (differences) => `版本設定不同（${differences}）。已驗證的空白 JSONL 結果已繼續處理，沒有重新執行掃描工具或變更對照。`],
   ];

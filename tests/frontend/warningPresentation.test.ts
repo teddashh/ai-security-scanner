@@ -377,3 +377,14 @@ test("a translated disclosure keeps the engine's counts and translates its prose
     /3 deferred by a later build/u,
   );
 });
+
+test("a stored stale-knowledge warning reads as the scanner's last-updated date", () => {
+  const stored = "Engine prowler uses knowledge dated 2026-08-24 whose declared support ended 2026-11-22. Execution retains this explicit stale-knowledge warning; its results must not be presented as current knowledge.";
+  const english = "Scanner prowler knowledge last updated 2026-08-24.";
+  const chinese = "掃描工具 prowler 知識最後更新：2026-08-24。";
+  assert.equal(localizedEngineWarning(stored, "en"), english);
+  assert.equal(localizedEngineWarning(stored, "zh-TW"), chinese);
+  assert.equal(recognizedEngineWarningZhTW(stored), chinese);
+  assert.doesNotMatch(english, /expired|outdated|support/iu);
+  assert.doesNotMatch(chinese, /過期|過時|支援/);
+});

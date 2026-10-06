@@ -77,7 +77,7 @@ The first layer answers:
 4. Which checks completed for each asset?
 5. Which requested work is incomplete or untested?
 
-Findings retain scanner provenance under the product explanation. Cross-engine ordering, grouping, deduplication, localization, and framework references belong to the shared report layer. Observed services appear in their own non-vulnerability section. Formal report terms and technical records appear at the end.
+Findings retain scanner provenance under the product explanation. Each completed check shows its scanner version and last-updated date; scanner age is never reported as expiry or incomplete coverage. Cross-engine ordering, grouping, deduplication, localization, and framework references belong to the shared report layer. Observed services appear in their own non-vulnerability section. Formal report terms and technical records appear at the end.
 
 Terminal runs include completed, completed with gaps, no checks completed, failed, and cancelled outcomes. Runs without a comparable completed check remain visible in Results and Export but are not offered as verification baselines.
 

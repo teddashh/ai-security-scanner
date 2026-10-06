@@ -5393,3 +5393,49 @@ test("a check that can never run does not count against completion in the tested
   // An ordinary failure is unfinished work, so it still counts.
   expectTestedTile(withThird("execution_failed"), "2 of 3 checks completed");
 });
+
+test("a catalog-engine check lists its version and last-updated date", () => {
+  const value = report("complete", {
+    actual: completedCoverage("task-prowler", "prowler"),
+    coverageCounts: counts({ testedComplete: 1 }),
+    technicalDetails: {
+      collapsedByDefault: true,
+      tasks: [{
+        taskId: "task-prowler",
+        targetAssetIds: ["asset-1"],
+        status: "completed",
+        phase: "completed",
+        progressPercent: 100,
+        cleanupDetail: { availability: "unavailable", explanation: "No cleanup detail was recorded." },
+        redactedScannerMessage: { availability: "unavailable", explanation: "No scanner message was recorded." },
+        redactedDiagnosticLog: { availability: "unavailable", explanation: "No diagnostic log was recorded." },
+        evidenceSha256: [],
+        execution: {
+          kind: "catalog_engine",
+          engineId: "prowler",
+          engineVersion: "0.74.0",
+          adapterVersion: "1.0.0",
+          knowledgeDate: "2026-08-24",
+        },
+      }],
+    },
+  });
+  const rowValue = (container: HTMLElement, label: string) =>
+    Array.from(container.querySelectorAll(".report-end-matter dl > div")).find(
+      (row) => row.querySelector("dt")?.textContent === label,
+    )?.querySelector("dd")?.textContent;
+
+  const { container, unmount } = renderReport(value);
+  expect(coverageCard(container, "What was actually tested").textContent)
+    .toContain("Version 0.74.0 · last updated 2026-08-24");
+  expect(rowValue(container, "Scanner version")).toBe("0.74.0");
+  expect(rowValue(container, "Last updated")).toBe("2026-08-24");
+  unmount();
+
+  window.localStorage.setItem(localeStorageKey, "zh-TW");
+  const chinese = renderReport(value);
+  expect(coverageCard(chinese.container, "實際完成的測試").textContent)
+    .toContain("版本 0.74.0 · 最後更新 2026-08-24");
+  expect(rowValue(chinese.container, "掃描工具版本")).toBe("0.74.0");
+  expect(rowValue(chinese.container, "最後更新")).toBe("2026-08-24");
+});

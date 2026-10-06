@@ -49,8 +49,7 @@ const manifest = (
   blockedBy: [],
   compatibilityValid: true,
   providerExecutionProfiles: [],
-  supportUntil: "9999-12-31",
-  supportStatus: "supported",
+  knowledgeDate: "2026-08-24",
   ...overrides,
 });
 
@@ -345,7 +344,7 @@ test("the IT request is neutral copy and the document fallback completes clipboa
   }
 });
 
-test("collapsed capability details preserve exact scope, version, profiles, and support dates", () => {
+test("collapsed capability details preserve exact scope, version, profiles, and last-updated dates", () => {
   const projection = projectSourceCapabilityView({
     provider: "microsoft365",
     source: microsoft365Source,
@@ -359,14 +358,26 @@ test("collapsed capability details preserve exact scope, version, profiles, and 
   expect(details.open).toBe(false);
   expect(detailText).toContain(tenantScope);
   expect(detailText).toContain(`Capability definition ${projection.definitionVersion}`);
+  expect(detailText).not.toContain("Maintained through");
+  expect(detailText).not.toContain("Catalog support date ended");
+  expect(detailText).not.toContain("Maintenance date not declared");
   for (const cell of projection.cells) {
     for (const engine of cell.engines) {
       expect(detailText).toContain(engine.profile);
-      if (engine.id !== "provider-native-discovery" && engine.supportUntil) {
-        expect(detailText).toContain(engine.supportUntil);
+      if (engine.id !== "provider-native-discovery") {
+        expect(detailText).toContain(`Last updated ${engine.knowledgeDate}`);
       }
     }
   }
+
+  cleanup();
+  window.localStorage.setItem(localeStorageKey, "zh-TW");
+  renderPanel();
+  const chinese = capabilityDisclosure().textContent ?? "";
+  expect(chinese).toContain("最後更新 2026-08-24");
+  expect(chinese).not.toContain("維護至");
+  expect(chinese).not.toContain("目錄支援日期");
+  expect(chinese).not.toContain("未宣告維護日期");
 });
 
 test("the connected first layer keeps exact account, permission state, expiry, and primary action", async () => {

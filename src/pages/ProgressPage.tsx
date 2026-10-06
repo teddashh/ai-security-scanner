@@ -18,7 +18,6 @@ import {
 import { scanRequestOutcomeBeginnerSummary } from "../scanRequestOutcomePresentation";
 import { scanRunIdentityPresentation } from "../scanRunIdentityPresentation";
 import { scanRunOverallProgress } from "../scanRunProgress";
-import { engineRunResultKind } from "../checkResultKind";
 import {
   buildScanActivity,
   type ScanActivityEvent,
@@ -534,11 +533,6 @@ const copy = {
   resumeOriginal: { en: "Continue the original scope", zhTW: "繼續原本的範圍" },
   startNewScan: { en: "Start a new scan", zhTW: "開始新的掃描" },
   cancelKeepRecord: { en: "Cancel and keep the record", zhTW: "取消並保留紀錄" },
-  expiredTitle: { en: "Update needed before checking fixes again", zhTW: "再次確認修復前，需要先更新" },
-  expiredBody: {
-    en: "Checks needing newer security knowledge: {count}. Update the scan tools before running a new comparison.",
-    zhTW: "有 {count} 項檢查需要更新資安知識；執行新的前後比較前，請先更新掃描工具。",
-  },
   runIdTitle: { en: "Local scan run ID", zhTW: "本機掃描輪次 ID" },
   processed: { en: "{percent}% processed", zhTW: "已處理 {percent}%" },
   noChecksStarted: { en: "No checks started", zhTW: "沒有檢查開始執行" },
@@ -564,11 +558,9 @@ const copy = {
   lastSaved: { en: "Last saved {time}", zhTW: "最後保存 {time}" },
   overallProgress: { en: "Overall scan progress", zhTW: "整體掃描進度" },
   scanTechnicalDetails: { en: "Scan details and versions", zhTW: "掃描細節與版本" },
-  knowledgeTitle: { en: "Knowledge dates used for this run", zhTW: "這一輪採用的知識日期" },
+  knowledgeTitle: { en: "Scanners last updated", zhTW: "掃描工具最後更新" },
   legacyKnowledge: { en: "Not recorded per scanner in this older case", zhTW: "舊版案件未逐一記錄" },
   caseSnapshot: { en: "Case snapshot {date}", zhTW: "案件快照 {date}" },
-  supportUntil: { en: " · Earliest supported through {date}", zhTW: " · 最早支援至 {date}" },
-  legacySupport: { en: " · Support date not recorded in this older case", zhTW: " · 舊版案件未記錄支援日期" },
   metricsAria: { en: "Scan outcome summary", zhTW: "掃描結果摘要" },
   completed: { en: "Completed", zhTW: "已完成" },
   completedDetail: { en: "Results are ready to review", zhTW: "結果已準備好，可以查看" },
@@ -667,11 +659,8 @@ const copy = {
   commandDigest: { en: "Command digest", zhTW: "命令摘要" },
   knowledgeInput: { en: "Knowledge input", zhTW: "知識輸入" },
   noIndependentVersion: { en: "no separate version", zhTW: "沒有獨立版本" },
-  knowledgeDate: { en: "Knowledge date", zhTW: "知識日期" },
+  knowledgeDate: { en: "Last updated", zhTW: "最後更新" },
   olderNotRecorded: { en: "Not recorded in this older case", zhTW: "舊版案件未記錄" },
-  supportDate: { en: "Support date", zhTW: "支援日期" },
-  expiredReadable: { en: "past support date; history remains readable", zhTW: "已超過支援日期；歷史仍可閱讀" },
-  currentlySupported: { en: "within stated support date", zhTW: "仍在宣告支援日期內" },
   runtime: { en: "Runtime", zhTW: "執行環境" },
   unknownVersion: { en: "version not reported", zhTW: "版本未回報" },
   notRunYet: { en: "Not run", zhTW: "未執行" },
@@ -1243,20 +1232,8 @@ export function ProgressPage({
     0,
     selectedRun.engineRuns.length - completedCheckCount - attentionCheckCount - settledSkippedCount,
   );
-  const today = new Date().toISOString().slice(0, 10);
-  // Only a security check has detection knowledge to update. An inventory
-  // check's past support date stays in the report's coverage and in its
-  // technical details.
-  const expiredSupportEngines = selectedRun.engineRuns.filter((engine) =>
-    engineRunResultKind(engine) === "security_check"
-    && Boolean(engine.knowledgeInput?.supportUntil && engine.knowledgeInput.supportUntil < today),
-  );
   const knowledgeDates = [...new Set(selectedRun.engineRuns
     .map((engine) => engine.knowledgeInput?.knowledgeDate)
-    .filter((value): value is string => Boolean(value)))]
-    .sort();
-  const supportDeadlines = [...new Set(selectedRun.engineRuns
-    .map((engine) => engine.knowledgeInput?.supportUntil)
     .filter((value): value is string => Boolean(value)))]
     .sort();
   const knowledgeRange = knowledgeDates.length === 0
@@ -1469,12 +1446,6 @@ export function ProgressPage({
         </InlineNotice>
       )}
 
-      {expiredSupportEngines.length > 0 && (
-        <InlineNotice tone="warning" title={text(copy.expiredTitle)}>
-          <p>{text(copy.expiredBody, { count: formatNumber(expiredSupportEngines.length) })}</p>
-        </InlineNotice>
-      )}
-
       <section className={`run-overview run-overview--single${blocked || sharedInfrastructureFailure || requestOutcomeSummary ? " run-overview--compact" : ""}`}>
         <div className="run-overview__copy">
           <div className="run-overview__meta">
@@ -1631,12 +1602,7 @@ export function ProgressPage({
           <div><dt>{text(copy.runIdTitle)}</dt><dd><code>{selectedRun.id}</code></dd></div>
           <div><dt>{text(copy.knowledgeTitle)}</dt><dd>{knowledgeRange}</dd></div>
         </dl>
-        <p>
-          {text(copy.caseSnapshot, { date: showDateTime(selectedRun.knowledgeDate) })}
-          {supportDeadlines.length
-            ? text(copy.supportUntil, { date: showPlainDate(supportDeadlines[0]!) })
-            : text(copy.legacySupport)}
-        </p>
+        <p>{text(copy.caseSnapshot, { date: showDateTime(selectedRun.knowledgeDate) })}</p>
         <div className="engine-state-ledger" aria-label={text(copy.ledgerAria)}>
           <span>{text(copy.scannerStates)}</span>
           {engineStates.map((state) => (
@@ -1854,9 +1820,6 @@ export function ProgressPage({
                           ? `${engine.knowledgeInput.identifier} · ${engine.knowledgeInput.version ?? text(copy.noIndependentVersion)} · ${engine.knowledgeInput.pinState}`
                           : text(copy.noneReported)}</dd></div>
                         <div><dt>{text(copy.knowledgeDate)}</dt><dd>{engine.knowledgeInput?.knowledgeDate ? showPlainDate(engine.knowledgeInput.knowledgeDate) : text(copy.olderNotRecorded)}</dd></div>
-                        <div><dt>{text(copy.supportDate)}</dt><dd>{engine.knowledgeInput?.supportUntil
-                          ? `${showPlainDate(engine.knowledgeInput.supportUntil)} · ${engine.knowledgeInput.supportUntil < today ? text(copy.expiredReadable) : text(copy.currentlySupported)}`
-                          : text(copy.olderNotRecorded)}</dd></div>
                         <div><dt>{text(copy.runtime)}</dt><dd>{engine.runtimeProvider ? `${engine.runtimeProvider} ${engine.runtimeVersion ?? text(copy.unknownVersion)}` : text(copy.notRunYet)}</dd></div>
                         <div><dt>{text(copy.runtimeSecurity)}</dt><dd>{engine.runtimeSecurityOptions ?? text(copy.noneReported)}</dd></div>
                         <div><dt>{text(copy.exitCode)}</dt><dd>{engine.exitCode ?? text(copy.noneReported)}</dd></div>

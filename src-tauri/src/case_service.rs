@@ -91,7 +91,7 @@ use crate::workspace_snapshot::{
     WorkspaceSnapshot, WorkspaceSnapshotManifest, WorkspaceSnapshotReference,
 };
 use crate::zap_work_plan::{ZAP_ENGINE_ID, ZAP_PASSIVE_PROFILE_ID, matches_zap_passive_profile};
-use chrono::{DateTime, NaiveDate, Utc};
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -4471,10 +4471,7 @@ impl<'a> CaseService<'a> {
                     cleanup_removed: None,
                     cleanup_detail: None,
                     gateway_refusals: None,
-                    warnings: stale_knowledge_warning(manifest, now)
-                        .into_iter()
-                        .chain(mapping_warning.clone())
-                        .collect(),
+                    warnings: mapping_warning.clone().into_iter().collect(),
                     unattributed: Vec::new(),
                     unevaluated_targets: Vec::new(),
                     security_template_executions: Vec::new(),
@@ -5683,7 +5680,6 @@ impl<'a> CaseService<'a> {
             engine_index: usize,
             execution: PlannedEngineExecution,
             naabu_request: Option<NaabuAttemptRequest>,
-            stale_warning: Option<String>,
             mapping_warning: Option<String>,
             captured_compatibility_warning: Option<String>,
             legacy_request_migration_warning: Option<String>,
@@ -5868,7 +5864,6 @@ impl<'a> CaseService<'a> {
                     candidates.push(ResumeCandidate {
                         engine_index,
                         naabu_request: None,
-                        stale_warning: stale_knowledge_warning(manifest, now),
                         mapping_warning: mapping_warning.clone(),
                         captured_compatibility_warning: None,
                         legacy_request_migration_warning: None,
@@ -6223,7 +6218,6 @@ impl<'a> CaseService<'a> {
             candidates.push(ResumeCandidate {
                 engine_index,
                 naabu_request,
-                stale_warning: stale_knowledge_warning(manifest, now),
                 mapping_warning: mapping_warning.clone(),
                 captured_compatibility_warning,
                 legacy_request_migration_warning,
@@ -6370,11 +6364,6 @@ impl<'a> CaseService<'a> {
             engine_run.status = EngineRunStatus::Queued;
             engine_run.phase = "queued_for_resume".into();
             engine_run.finished_at = None;
-            if let Some(warning) = candidate.stale_warning.as_ref()
-                && !engine_run.warnings.contains(warning)
-            {
-                engine_run.warnings.push(warning.clone());
-            }
             if let Some(warning) = candidate.mapping_warning.as_ref()
                 && !engine_run.warnings.contains(warning)
             {
@@ -10286,11 +10275,7 @@ fn not_executed_run(
         cleanup_removed: None,
         cleanup_detail: None,
         gateway_refusals: None,
-        warnings: manifest
-            .and_then(|value| stale_knowledge_warning(value, now))
-            .into_iter()
-            .chain(mapping_warning)
-            .collect(),
+        warnings: mapping_warning.into_iter().collect(),
         unattributed: Vec::new(),
         unevaluated_targets: Vec::new(),
         security_template_executions: Vec::new(),
@@ -10463,17 +10448,6 @@ fn frozen_scope_grants(grants: &[&ScopeGrant]) -> Vec<ScopeGrant> {
             .then_with(|| left.id.cmp(&right.id))
     });
     snapshots
-}
-
-fn stale_knowledge_warning(manifest: &EngineManifest, as_of: DateTime<Utc>) -> Option<String> {
-    let support_until =
-        NaiveDate::parse_from_str(&manifest.compatibility.support_until, "%Y-%m-%d").ok()?;
-    (support_until < as_of.date_naive()).then(|| {
-        format!(
-            "Engine {} uses knowledge dated {} whose declared support ended {}. Execution retains this explicit stale-knowledge warning; its results must not be presented as current knowledge.",
-            manifest.id, manifest.compatibility.knowledge_date, manifest.compatibility.support_until
-        )
-    })
 }
 
 const CONTROL_MAPPING_UNAVAILABLE_WARNING: &str = "Framework relationships are unavailable for this run because mapping was unavailable during planning.";
@@ -18351,6 +18325,46 @@ fn html_original_report_attachments(
     html
 }
 
+/// Version and last-updated date for one tested-checks row.
+///
+/// Values are escaped here because the caller inserts the line into HTML.
+/// Neither value known means the row header stays the check name alone.
+fn tested_check_version_line(
+    tasks: &[crate::beginner_report::TechnicalTaskDetails],
+    task_id: &str,
+    catalog: &HtmlReportCatalog,
+) -> Option<String> {
+    let task = tasks.iter().find(|task| task.task_id == task_id)?;
+    let crate::beginner_report::TechnicalExecution::CatalogEngine {
+        engine_version,
+        knowledge_date,
+        ..
+    } = &task.execution
+    else {
+        return None;
+    };
+    match (engine_version.as_deref(), knowledge_date.as_deref()) {
+        (Some(version), Some(date)) => Some(format!(
+            "{} {} · {} {}",
+            catalog.text("Version", "版本"),
+            html_escape(version),
+            catalog.text("last updated", "最後更新"),
+            html_escape(date),
+        )),
+        (Some(version), None) => Some(format!(
+            "{} {}",
+            catalog.text("Version", "版本"),
+            html_escape(version),
+        )),
+        (None, Some(date)) => Some(format!(
+            "{} {}",
+            catalog.text("Last updated", "最後更新"),
+            html_escape(date),
+        )),
+        (None, None) => None,
+    }
+}
+
 fn html_report_bytes(
     case: &AssessmentCase,
     run_id: &str,
@@ -18679,12 +18693,21 @@ fn html_report_bytes_with_attachments(
             } else {
                 format!("<tr class=\"tested-detail\"><td colspan=\"5\">{dimensions}</td></tr>")
             };
+            let check_label = html_escape(&readable_dimension(&check.check_id));
+            let check_label = match tested_check_version_line(
+                &report.technical_details.tasks,
+                &check.task_id,
+                &catalog,
+            ) {
+                Some(line) => format!("{check_label}<br><small>{line}</small>"),
+                None => check_label,
+            };
             format!(
                 concat!(
                     "<tr><th scope=\"row\">{}</th><td class=\"tested-state\">{}</td><td>{}</td>",
                     "<td class=\"tested-time\">{}</td><td class=\"tested-time\">{}</td></tr>{}"
                 ),
-                html_escape(&readable_dimension(&check.check_id)),
+                check_label,
                 html_escape(catalog.coverage_status(&check.status)),
                 targets,
                 html_escape(&display_time(check.started_at.as_ref())),
@@ -19641,6 +19664,7 @@ fn html_report_bytes_with_attachments(
                 image_repository,
                 adapter_version,
                 rule_version,
+                knowledge_date,
             } => {
                 let mut values = vec![
                     format!("{} {engine_id}", catalog.text("engine", "引擎")),
@@ -19650,6 +19674,12 @@ fn html_report_bytes_with_attachments(
                     values.push(format!(
                         "{} {value}",
                         catalog.text("engine version", "引擎版本")
+                    ));
+                }
+                if let Some(value) = knowledge_date {
+                    values.push(format!(
+                        "{} {value}",
+                        catalog.text("last updated", "最後更新")
                     ));
                 }
                 if let Some(value) = image_repository {
@@ -38049,6 +38079,41 @@ mod tests {
         )));
         assert!(html.contains(&format!("<td>{action}</td>")));
         assert!(html.contains(&format!("<li><strong>{action}</strong> — <a href=\"#f1\">")));
+    }
+
+    #[test]
+    fn html_tested_check_row_shows_the_scanner_version_and_last_updated_date() {
+        let mut case =
+            case_for_rated_httpx_finding(EngineRunStatus::Completed, None, Some("httpx-task"));
+        let task = &mut case.scan_runs[0].engine_runs[0];
+        task.engine_version = Some("1.6.10".into());
+        task.knowledge_input = Some(EngineKnowledgeInput {
+            kind: crate::domain::KnowledgeInputKind::Embedded,
+            identifier: "httpx probes".into(),
+            version: Some("1.6.10".into()),
+            acquisition_source: None,
+            pin_state: crate::domain::KnowledgePinState::PinnedOrNotApplicable,
+            knowledge_date: Some("2024-03-15".into()),
+            support_until: Some("2020-01-01".into()),
+        });
+
+        let en = html_from_export_case(&case, crate::export::ReportLocale::En);
+        let zh = html_from_export_case(&case, crate::export::ReportLocale::ZhHant);
+
+        assert!(
+            en.contains("<br><small>Version 1.6.10 · last updated 2024-03-15</small>"),
+            "{en}"
+        );
+        assert!(
+            zh.contains("<br><small>版本 1.6.10 · 最後更新 2024-03-15</small>"),
+            "{zh}"
+        );
+        assert!(en.contains("engine version 1.6.10; last updated 2024-03-15"));
+        assert!(zh.contains("引擎版本 1.6.10；最後更新 2024-03-15"));
+        assert!(!en.contains("expired knowledge"));
+        assert!(!en.contains("Support ended"));
+        assert!(!en.contains("stale-knowledge"));
+        assert!(!zh.contains("已過期的偵測知識"));
     }
 
     #[test]

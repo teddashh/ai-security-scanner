@@ -373,6 +373,8 @@ type NativeBeginnerTechnicalExecution =
       image_repository: string | null;
       adapter_version: string;
       rule_version: string | null;
+      /** Absent on reports saved before the field existed. */
+      knowledge_date?: string | null;
     }
   | {
       kind: "built_in_localhost_tcp";
@@ -2173,15 +2175,6 @@ const ENGINE_CATEGORIES: readonly EngineCategory[] = [
 const mapEngineCategory = (value: string): EngineCategory | undefined =>
   ENGINE_CATEGORIES.includes(value as EngineCategory) ? value as EngineCategory : undefined;
 
-const validManifestDate = (value: unknown): string | undefined => {
-  // An unparseable support boundary cannot establish that an engine is supported.
-  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/u.test(value)) return undefined;
-  const parsed = new Date(`${value}T00:00:00Z`);
-  return Number.isFinite(parsed.valueOf()) && parsed.toISOString().slice(0, 10) === value
-    ? value
-    : undefined;
-};
-
 const MANIFEST_STATUSES: Record<EngineManifestStatusWire, EngineManifest["status"]> = {
   integrated: "ready",
   experimental: "not_downloaded",
@@ -2260,8 +2253,6 @@ export const adaptNativeManifest = (manifest: NativeEngineManifest): EngineManif
       ) === index,
     );
   const knowledgeDate = manifest.compatibility?.knowledge_date;
-  const supportUntil = validManifestDate(manifest.compatibility?.support_until);
-  const today = new Date().toISOString().slice(0, 10);
   return {
     id: manifest.id,
     name: manifest.display_name,
@@ -2278,8 +2269,6 @@ export const adaptNativeManifest = (manifest: NativeEngineManifest): EngineManif
     compatibilityValid,
     providerExecutionProfiles,
     knowledgeDate,
-    supportUntil,
-    supportStatus: supportUntil ? (supportUntil < today ? "expired" : "supported") : "unknown",
   };
 };
 
@@ -3015,6 +3004,7 @@ const adaptBeginnerTechnicalExecution = (
     imageRepository: execution.image_repository ?? undefined,
     adapterVersion: execution.adapter_version,
     ruleVersion: execution.rule_version ?? undefined,
+    knowledgeDate: execution.knowledge_date ?? undefined,
   };
   if (execution.kind === "built_in_localhost_tcp") return {
     kind: execution.kind,

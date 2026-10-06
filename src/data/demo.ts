@@ -202,8 +202,6 @@ const manifest = (
     { provider: "gcp", assetKind: "project", profile: "gcp_iam_four_checks_exact_project" },
   ] : [],
   knowledgeDate: "2026-08-24",
-  supportUntil: "2026-11-22",
-  supportStatus: "supported",
 });
 
 export const demoEngineManifests: EngineManifest[] = [

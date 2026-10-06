@@ -114,7 +114,7 @@ catalog only after verifying the new image and its publication evidence.
 
 `knowledge_date` describes the newest knowledge in the exact engine/rule/template/feed/database closure. `support_until` is the last date maintainers claim support for that closure and is normally no more than 90 days later. Historical cases retain their original engine identity and dates.
 
-An expired but still inspectable artifact remains attributable. New execution must show a stale-knowledge warning or mark the engine unavailable according to product policy. A replacement receives a new revision and immutable digest; it never rewrites an existing case.
+An artifact remains attributable whatever its age. A run records and shows the exact scanner version and its `knowledge_date` as the last-updated date. `support_until` is maintenance metadata; it never marks a run's results expired or incomplete. A replacement receives a new revision and immutable digest; it never rewrites an existing case.
 
 Any byte-affecting launcher, Dockerfile, embedded rule/policy, feed, database, or scanner patch change creates a new engine artifact revision. A report-only normalizer change advances the adapter/report version without pretending the upstream engine changed.
 

@@ -7,7 +7,7 @@ import {
   severityMeta,
   workflowMeta,
 } from "../lib";
-import { useI18n, type Locale } from "../i18n";
+import { useI18n, type BilingualTextTranslator, type Locale } from "../i18n";
 import {
   unavailableRunBoundReportCopy,
   unavailableSelectedRunCopy,
@@ -58,6 +58,7 @@ import { isSettledSkippedCheck } from "../settledSkippedChecks";
 import type {
   BeginnerCheckResultKind,
   BeginnerCoverageStatus,
+  BeginnerTechnicalExecution,
   BeginnerInventoryItem,
   BeginnerMasterReport,
   BeginnerNextActionCode,
@@ -747,6 +748,11 @@ const copy = {
   taskEvidence: { en: "Evidence hashes", zhTW: "證據雜湊" },
   taskErrorCode: { en: "Diagnostic code", zhTW: "診斷代碼" },
   taskNoError: { en: "No diagnostic code", zhTW: "沒有診斷代碼" },
+  scannerVersionUpdated: { en: "Version {version} · last updated {date}", zhTW: "版本 {version} · 最後更新 {date}" },
+  scannerVersionOnly: { en: "Version {version}", zhTW: "版本 {version}" },
+  scannerUpdatedOnly: { en: "Last updated {date}", zhTW: "最後更新 {date}" },
+  scannerVersion: { en: "Scanner version", zhTW: "掃描工具版本" },
+  lastUpdated: { en: "Last updated", zhTW: "最後更新" },
   dataWarnings: { en: "Saved-data limitations: {count}", zhTW: "已保存資料的限制：{count} 項" },
   genericExpert: { en: "Security or IT specialist", zhTW: "資安或 IT 專業人員" },
 } as const;
@@ -776,6 +782,19 @@ const reportStageCopy = (stage?: BeginnerReportStage) => {
     case "deep": return copy.stageDeep;
     default: return copy.stageUnknown;
   }
+};
+
+const catalogEngineProvenanceLine = (
+  execution: BeginnerTechnicalExecution | undefined,
+  text: BilingualTextTranslator,
+): string | undefined => {
+  if (execution?.kind !== "catalog_engine") return undefined;
+  const version = execution.engineVersion?.trim();
+  const date = execution.knowledgeDate?.trim();
+  if (version && date) return text(copy.scannerVersionUpdated, { version, date });
+  if (version) return text(copy.scannerVersionOnly, { version });
+  if (date) return text(copy.scannerUpdatedOnly, { date });
+  return undefined;
 };
 
 const testedStatusCopy = (status: BeginnerCoverageStatus) => {
@@ -2074,10 +2093,15 @@ function BeginnerReportOverview({ report, run }: { report: BeginnerMasterReport;
             <ul className="detail-list">
               {testedChecks.map((check) => {
                 const engine = engineByTaskId.get(check.taskId);
+                const provenance = catalogEngineProvenanceLine(
+                  report.technicalDetails.tasks.find((task) => task.taskId === check.taskId)?.execution,
+                  text,
+                );
                 return (
                 <li key={check.taskId}>
                   <strong>{localizedCheckName(check.checkId, locale, engine)}</strong>
                   <span>{text(testedStatusCopy(check.status))}</span>
+                  {provenance && <span>{provenance}</span>}
                   {check.testedDimensions.map((dimension, index) => (
                     <span key={`${dimension.dimension}-${dimension.value}-${index}`}>
                       <span>
@@ -2269,6 +2293,12 @@ function ReportEndMatter({ report, run }: { report: BeginnerMasterReport; run?: 
                     <span>{engineStatusMeta[task.status].label}</span>
                   </div>
                   <dl>
+                    {task.execution.kind === "catalog_engine" && task.execution.engineVersion?.trim() && (
+                      <div><dt>{text(copy.scannerVersion)}</dt><dd>{task.execution.engineVersion.trim()}</dd></div>
+                    )}
+                    {task.execution.kind === "catalog_engine" && task.execution.knowledgeDate?.trim() && (
+                      <div><dt>{text(copy.lastUpdated)}</dt><dd>{task.execution.knowledgeDate.trim()}</dd></div>
+                    )}
                     <div><dt>{text(copy.taskProgress)}</dt><dd>{formatNumber(task.progressPercent)}%</dd></div>
                     <div><dt>{text(copy.taskStatus)}</dt><dd>{engineStatusMeta[task.status].label}</dd></div>
                     <div><dt>{text(copy.taskErrorCode)}</dt><dd><code>{task.errorCode ?? text(copy.taskNoError)}</code></dd></div>

@@ -273,7 +273,6 @@ const projectEngine = (
       name: definition.name,
       profile: definition.profile,
       availability: "available",
-      supportStatus: "unknown",
     };
   }
   const manifest = manifests.find((candidate) => candidate.id === definition.id);
@@ -283,7 +282,6 @@ const projectEngine = (
       name: definition.name,
       profile: definition.profile,
       availability: "unknown",
-      supportStatus: "unknown",
     };
   }
   const expectedPlatform = provider === "microsoft365" ? "m365" : provider;
@@ -294,9 +292,6 @@ const projectEngine = (
     : []).find((contract) =>
     contract.provider === provider && safeProfile(contract.profile),
   )?.profile;
-  const supportStatus = (["supported", "expired", "unknown"] as const).includes(manifest.supportStatus)
-    ? manifest.supportStatus
-    : "unknown";
   return {
     id: definition.id,
     name: definition.name,
@@ -305,8 +300,7 @@ const projectEngine = (
     availability: !providerDeclared || (definition.requiresDeclaredProviderProfile && !declaredProfile)
       ? "unknown"
       : engineAvailability(manifest),
-    supportStatus,
-    supportUntil: safeDate(manifest.supportUntil),
+    knowledgeDate: safeDate(manifest.knowledgeDate),
   };
 };
 

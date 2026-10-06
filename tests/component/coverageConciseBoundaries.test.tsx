@@ -522,8 +522,6 @@ test("an AI project with a selected MCP configuration lists the MCP check it wil
     blockedBy: [],
     compatibilityValid: true,
     providerExecutionProfiles: [],
-    supportUntil: "9999-12-31",
-    supportStatus: "supported",
   };
 
   const { container } = renderRoute({
@@ -1499,7 +1497,7 @@ const zapManifest: EngineManifest = {
   imageDigest: "sha256:781a2bdaea47324e7bab583e2263f21d257b0aee61ed51521a5be45f5f5081ef",
   license: "Apache-2.0", redistribution: "on_demand", platforms: ["external"], supportedProviders: [],
   status: "ready", runnable: true, blockedBy: [], compatibilityValid: true,
-  providerExecutionProfiles: [], supportStatus: "supported",
+  providerExecutionProfiles: [],
 };
 
 for (const locale of ["en", "zh-TW"] as const) {
@@ -1561,7 +1559,7 @@ const agenticManifest: EngineManifest = {
   id: "agentic-radar", name: "Agentic Radar", category: "ai_agent_framework", version: "0.14.1",
   imageDigest: "sha256:synthetic-admission", license: "Apache-2.0", redistribution: "on_demand",
   platforms: ["code"], supportedProviders: [], status: "ready", runnable: true,
-  blockedBy: [], compatibilityValid: true, providerExecutionProfiles: [], supportStatus: "supported",
+  blockedBy: [], compatibilityValid: true, providerExecutionProfiles: [],
 };
 
 for (const locale of ["en", "zh-TW"] as const) {

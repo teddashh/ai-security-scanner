@@ -212,9 +212,8 @@ const copy = {
     unknown: { en: "availability unknown", zhTW: "可用狀態未知" },
   },
   capabilitySupport: {
-    supported: { en: "Maintained through {date}", zhTW: "維護至 {date}" },
-    expired: { en: "Catalog support date ended {date}; capability is not erased", zhTW: "目錄支援日期已於 {date} 結束；能力不因此被抹除" },
-    unknown: { en: "Maintenance date not declared", zhTW: "未宣告維護日期" },
+    known: { en: "Last updated {date}", zhTW: "最後更新 {date}" },
+    unknown: { en: "Last updated date not declared", zhTW: "未宣告最後更新日期" },
   },
   what: { en: "What it is:", zhTW: "這是什麼：" },
   where: { en: "Where to find it:", zhTW: "去哪裡找：" },
@@ -1832,7 +1831,9 @@ export function ProviderAuthorizationPanel({
                           <code>{engine.profile}</code>
                           <small>{text(copy.capabilityAvailability[engine.availability])}</small>
                           {engine.id !== "provider-native-discovery" && (
-                            <small>{text(copy.capabilitySupport[engine.supportStatus], { date: engine.supportUntil ?? "—" })}</small>
+                            <small>{engine.knowledgeDate
+                              ? text(copy.capabilitySupport.known, { date: engine.knowledgeDate })
+                              : text(copy.capabilitySupport.unknown)}</small>
                           )}
                         </li>
                       ))}

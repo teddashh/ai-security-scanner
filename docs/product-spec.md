@@ -248,6 +248,8 @@ Product-authored finding narrative states the result, possible impact, next acti
 
 The asset summary gives every requested asset exactly one beginner-readable state: **problems found**, **no problems in completed checks**, **incomplete or failed**, or **not tested**. A finding linked to multiple assets counts for each affected asset. “No problems” applies only to completed security checks; discovery-only or connection-only work cannot earn that state.
 
+Each completed check names the scanner version that ran and that scanner's last-updated date. Scanner age is disclosure, not a result state: a check is never called expired, and an older scanner never makes a completed check or the report incomplete.
+
 Reachability inventory such as an open port or responding HTTP service appears in a separate **Observed services (not vulnerabilities)** section. It is not counted as a problem, placed in remediation priorities, or given a fix workflow merely because it shares the saved-result pipeline.
 
 That section leads with the number of observed services, affected targets, and

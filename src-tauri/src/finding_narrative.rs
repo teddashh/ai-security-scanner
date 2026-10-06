@@ -3551,9 +3551,28 @@ mod tests {
                     .collect::<String>()
             })
             .collect::<Vec<_>>();
+        // Saved reports can still carry these sentences. Current runs record
+        // the scanner version and knowledge date instead of writing them.
+        let legacy_expiry_sentences = [
+            "This check ran on detection knowledge whose declared support had already ended, so issues published after that date were not tested.",
+            "Treat these results as evidence from expired knowledge, not as current coverage.",
+        ];
+        for legacy in legacy_expiry_sentences {
+            assert!(
+                COVERAGE_GAP_PROSE
+                    .iter()
+                    .any(|(english, _)| *english == legacy),
+                "a saved report can still contain this sentence, so its translation stays: {legacy}"
+            );
+            assert!(
+                joined.iter().all(|source| !source.contains(legacy)),
+                "a current run must not write this expiry sentence: {legacy}"
+            );
+        }
         let orphans = COVERAGE_GAP_PROSE
             .iter()
             .map(|(english, _)| *english)
+            .filter(|english| !legacy_expiry_sentences.contains(english))
             .filter(|english| !joined.iter().any(|source| source.contains(english)))
             .collect::<Vec<_>>();
         assert_eq!(

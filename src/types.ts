@@ -534,8 +534,8 @@ export interface SourceCapabilityEngine {
   profile: string;
   version?: string;
   availability: "available" | "unavailable" | "unknown";
-  supportStatus: "supported" | "expired" | "unknown";
-  supportUntil?: string;
+  /** Catalog knowledge date, YYYY-MM-DD, when the manifest declared one. */
+  knowledgeDate?: string;
 }
 
 export interface SourceCapabilityCell {
@@ -1229,6 +1229,8 @@ export type BeginnerTechnicalExecution =
       imageRepository?: string;
       adapterVersion: string;
       ruleVersion?: string;
+      /** Recorded knowledge input date, YYYY-MM-DD. Absent on older reports. */
+      knowledgeDate?: string;
     }
   | {
       kind: "built_in_localhost_tcp";
@@ -1923,8 +1925,6 @@ export interface EngineManifest {
     profile: string;
   }>;
   knowledgeDate?: string;
-  supportUntil?: string;
-  supportStatus: "supported" | "expired" | "unknown";
 }
 
 export interface CaseWorkspace {

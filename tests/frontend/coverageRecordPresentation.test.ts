@@ -60,9 +60,6 @@ const fillFrame = (frame: string): string => {
   if (frame.includes("frozen authorization evidence")) {
     return frame.replace("{detail}", "grant-1=historical_scope_snapshot_missing");
   }
-  if (frame.startsWith(" Explicit stale-knowledge warning")) {
-    return frame.replace("{}", "scanner knowledge 2026-01-01 (support ended 2026-06-01)");
-  }
   if (frame.startsWith(" Exact built-in localhost TCP attempt")) {
     return frame.replace("{}", "127.0.0.1:443=reachable");
   }
@@ -90,7 +87,7 @@ test("the coverage-detail producer vocabulary was found", () => {
     `found only ${fixedSentences.length} fixed sentences: ${fixedSentences.join(" / ")}`,
   );
   assert.ok(
-    naturalLanguageFormatFrames.length >= 12,
+    naturalLanguageFormatFrames.length >= 11,
     `found only ${naturalLanguageFormatFrames.length} format frames: ${naturalLanguageFormatFrames.join(" / ")}`,
   );
   assert.ok(fixedSentences.some((sentence) => sentence.includes("no scan plan")));

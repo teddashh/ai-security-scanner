@@ -12,7 +12,7 @@ use crate::domain::{
     EngineTaskKind, Id, LocalhostTcpOutcome, ScanPermission, ScanRun, ScopeGrant,
     SourceConnectionStatus, SourceKind, UnevaluatedTargetCause,
 };
-use chrono::{DateTime, NaiveDate, Utc};
+use chrono::{DateTime, Utc};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
@@ -316,7 +316,6 @@ pub fn assess_asset_coverage(
 
     let manifests_by_id = manifest_index(manifests);
     let mut incomplete_reasons = Vec::new();
-    let mut stale_knowledge = Vec::new();
     let mut completed_localhost_attempts = Vec::new();
     for engine_run in &planned_runs {
         if matches!(
@@ -396,32 +395,10 @@ pub fn assess_asset_coverage(
                 "{}=no_security_template_execution_evidence",
                 engine_run.engine_id
             ));
-        } else if let Some(input) = engine_run.knowledge_input.as_ref()
-            && let (Some(knowledge_date), Some(support_until)) = (
-                input.knowledge_date.as_deref(),
-                input.support_until.as_deref(),
-            )
-            && NaiveDate::parse_from_str(support_until, "%Y-%m-%d")
-                .ok()
-                .is_some_and(|date| date < as_of.date_naive())
-        {
-            stale_knowledge.push(format!(
-                "{} knowledge {} (support ended {})",
-                engine_run.engine_id, knowledge_date, support_until
-            ));
         }
     }
 
     if incomplete_reasons.is_empty() {
-        stale_knowledge.sort();
-        let freshness_notice = if stale_knowledge.is_empty() {
-            String::new()
-        } else {
-            format!(
-                " Explicit stale-knowledge warning: {}. Completion proves execution, not current knowledge.",
-                stale_knowledge.join(", ")
-            )
-        };
         let localhost_notice = if completed_localhost_attempts.is_empty() {
             String::new()
         } else {
@@ -445,8 +422,8 @@ pub fn assess_asset_coverage(
         AssetCoverageAssessment {
             status: CoverageStatus::DiscoveredAuthorizedScanned,
             explanation: format!(
-                "{completion_summary} This state is independent of how many findings were reported.{}{}",
-                localhost_notice, freshness_notice
+                "{completion_summary} This state is independent of how many findings were reported.{}",
+                localhost_notice
             ),
             last_run_id: Some(run.id.clone()),
             observed_at,
