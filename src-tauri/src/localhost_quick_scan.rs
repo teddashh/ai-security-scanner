@@ -161,6 +161,7 @@ pub fn prepare_localhost_quick_scan(
         resume_token: None,
         last_execution_report_sha256: None,
         engine_version: None,
+        reported_version: None,
         image_digest: None,
         rule_version: None,
         adapter_version: "built-in".into(),

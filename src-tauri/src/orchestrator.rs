@@ -2183,6 +2183,7 @@ mod tests {
             }),
             source_revision: None,
             engine_version: Some("1".into()),
+            reported_version: None,
             rule_version: Some("rules-1".into()),
             adapter_version: "adapter-1".into(),
             supported_providers: vec![],

@@ -864,6 +864,8 @@ export interface EngineRun {
   category: EngineCategory | "built_in_localhost_tcp" | "unknown";
   /** Absent for product-owned tasks that do not use a catalog engine. */
   version?: string;
+  /** Version the scanner binary reports about itself. Absent on runs planned before this field existed, and on product-owned tasks. */
+  reportedVersion?: string;
   /** Absent for product-owned tasks that do not use a container image. */
   digest?: string;
   taskKind: EngineTaskKind;
@@ -1220,6 +1222,8 @@ export type BeginnerTechnicalExecution =
       kind: "catalog_engine";
       engineId: string;
       engineVersion?: string;
+      /** Version the scanner binary reports about itself. Absent on reports saved before this field existed. */
+      reportedVersion?: string;
       imageDigest?: string;
       commandSha256?: string;
       runtimeProvider?: string;

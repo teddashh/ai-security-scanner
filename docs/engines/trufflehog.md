@@ -4,7 +4,7 @@ Runs TruffleHog's secret detectors over the files of a `repository` snapshot wit
 
 | Item | Value |
 | --- | --- |
-| Upstream | [trufflesecurity/trufflehog](https://github.com/trufflesecurity/trufflehog) revision `3ab759fef4bb5935d4fe9ac68b503d05346b8364` (`source_ref` `main`); the build stamps version `3.97.0` through `-X github.com/trufflesecurity/trufflehog/v3/pkg/version.BuildVersion`. |
+| Upstream | [trufflesecurity/trufflehog](https://github.com/trufflesecurity/trufflehog) revision `3ab759fef4bb5935d4fe9ac68b503d05346b8364` (`source_ref` `main`); the build stamps version `3.97.0` through `-X github.com/trufflesecurity/trufflehog/v3/pkg/version.BuildVersion`. Catalog `reported_version` is `3.97.0`; pinned commit `3ab759f` is 9 commits after `v3.97.0` on `main`. |
 | Image | `ghcr.io/teddashh/ai-security-scanner-engine-trufflehog:3.97.0-3` (`plan_kind: managed_build`, AGPL-3.0; the image carries the source archive and `SOURCE-OFFER.md`). The published digest is pinned in `engines/catalog.json`. |
 | Build inputs | `engines/images/trufflehog/`: `Dockerfile`, `SOURCE-OFFER.md`, `plan.json`, `testdata/README.md` (the smoke workspace). The source archive is `ADD --checksum`-pinned, `go.sum` is SHA-256-checked, then `go mod verify` and `go build -mod=readonly`. The runtime is `FROM scratch`. |
 | Launcher | [Local launcher](local-launcher.md): the `trufflehog` branch of `planInvocation` |

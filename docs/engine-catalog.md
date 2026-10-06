@@ -190,6 +190,7 @@ OCSF and OSCAL are optional export/interchange coordinates, not scanners or secu
 Every runnable entry records:
 
 - official upstream source, exact revision/version, retrieval URL, and immutable digest/checksum;
+- `reported_version` for a source-built engine only: the release version the built scanner binary reports about itself, with no leading `v`;
 - engine, dependency, image, rule/template/feed/database licenses and required notices or source offer;
 - supported input kinds, providers, operating systems, and CPU architectures;
 - truthful capability categories from section 2 and important exclusions;

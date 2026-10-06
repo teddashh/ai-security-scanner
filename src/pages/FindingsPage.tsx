@@ -47,6 +47,7 @@ import {
   localhostTcpBeginnerSummary,
   localhostTestedDimensionValue,
 } from "../localhostTcpPresentation";
+import { scannerVersionLabel } from "../scannerVersionPresentation";
 import {
   isExactBuiltInLocalhostQuickScanEngine,
   isExactBuiltInLocalhostQuickScanRun,
@@ -787,9 +788,15 @@ const reportStageCopy = (stage?: BeginnerReportStage) => {
 const catalogEngineProvenanceLine = (
   execution: BeginnerTechnicalExecution | undefined,
   text: BilingualTextTranslator,
+  locale: Locale,
 ): string | undefined => {
   if (execution?.kind !== "catalog_engine") return undefined;
-  const version = execution.engineVersion?.trim();
+  const version = scannerVersionLabel(
+    execution.engineVersion,
+    execution.reportedVersion,
+    "short",
+    locale,
+  );
   const date = execution.knowledgeDate?.trim();
   if (version && date) return text(copy.scannerVersionUpdated, { version, date });
   if (version) return text(copy.scannerVersionOnly, { version });
@@ -2096,6 +2103,7 @@ function BeginnerReportOverview({ report, run }: { report: BeginnerMasterReport;
                 const provenance = catalogEngineProvenanceLine(
                   report.technicalDetails.tasks.find((task) => task.taskId === check.taskId)?.execution,
                   text,
+                  locale,
                 );
                 return (
                 <li key={check.taskId}>
@@ -2294,7 +2302,7 @@ function ReportEndMatter({ report, run }: { report: BeginnerMasterReport; run?: 
                   </div>
                   <dl>
                     {task.execution.kind === "catalog_engine" && task.execution.engineVersion?.trim() && (
-                      <div><dt>{text(copy.scannerVersion)}</dt><dd>{task.execution.engineVersion.trim()}</dd></div>
+                      <div><dt>{text(copy.scannerVersion)}</dt><dd>{scannerVersionLabel(task.execution.engineVersion, task.execution.reportedVersion, "exact", locale)}</dd></div>
                     )}
                     {task.execution.kind === "catalog_engine" && task.execution.knowledgeDate?.trim() && (
                       <div><dt>{text(copy.lastUpdated)}</dt><dd>{task.execution.knowledgeDate.trim()}</dd></div>

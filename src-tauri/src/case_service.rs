@@ -4430,6 +4430,7 @@ impl<'a> CaseService<'a> {
                     resume_token: Some(planned_resume_token),
                     last_execution_report_sha256: None,
                     engine_version: manifest.engine_version.clone(),
+                    reported_version: manifest.reported_version.clone(),
                     image_digest: manifest
                         .image
                         .as_ref()
@@ -10243,6 +10244,7 @@ fn not_executed_run(
         resume_token: None,
         last_execution_report_sha256: None,
         engine_version: manifest.and_then(|value| value.engine_version.clone()),
+        reported_version: manifest.and_then(|value| value.reported_version.clone()),
         image_digest: image.and_then(|value| value.digest.clone()),
         rule_version: manifest.and_then(|value| value.rule_version.clone()),
         adapter_version: manifest
@@ -18337,13 +18339,22 @@ fn tested_check_version_line(
     let task = tasks.iter().find(|task| task.task_id == task_id)?;
     let crate::beginner_report::TechnicalExecution::CatalogEngine {
         engine_version,
+        reported_version,
         knowledge_date,
         ..
     } = &task.execution
     else {
         return None;
     };
-    match (engine_version.as_deref(), knowledge_date.as_deref()) {
+    let version = engine_version.as_deref().map(|version| {
+        crate::beginner_report::scanner_version_label(
+            version,
+            reported_version.as_deref(),
+            crate::beginner_report::ScannerVersionForm::Short,
+            matches!(catalog.locale, crate::export::ReportLocale::ZhHant),
+        )
+    });
+    match (version.as_deref(), knowledge_date.as_deref()) {
         (Some(version), Some(date)) => Some(format!(
             "{} {} · {} {}",
             catalog.text("Version", "版本"),
@@ -19655,6 +19666,7 @@ fn html_report_bytes_with_attachments(
             crate::beginner_report::TechnicalExecution::CatalogEngine {
                 engine_id,
                 engine_version,
+                reported_version,
                 image_digest,
                 command_sha256,
                 runtime_provider,
@@ -19671,8 +19683,14 @@ fn html_report_bytes_with_attachments(
                     format!("{} {adapter_version}", catalog.text("adapter", "轉換器")),
                 ];
                 if let Some(value) = engine_version {
+                    let label = crate::beginner_report::scanner_version_label(
+                        value,
+                        reported_version.as_deref(),
+                        crate::beginner_report::ScannerVersionForm::Exact,
+                        matches!(catalog.locale, crate::export::ReportLocale::ZhHant),
+                    );
                     values.push(format!(
-                        "{} {value}",
+                        "{} {label}",
                         catalog.text("engine version", "引擎版本")
                     ));
                 }
@@ -27364,6 +27382,7 @@ mod tests {
             }),
             source_revision: Some("b".repeat(40)),
             engine_version: Some("1".into()),
+            reported_version: None,
             rule_version: Some("rules-1".into()),
             adapter_version: "1".into(),
             supported_providers: vec![],
@@ -37775,6 +37794,7 @@ mod tests {
                 resume_token: None,
                 last_execution_report_sha256: None,
                 engine_version: None,
+                reported_version: None,
                 image_digest: None,
                 rule_version: None,
                 adapter_version: "native".into(),
@@ -38114,6 +38134,81 @@ mod tests {
         assert!(!en.contains("Support ended"));
         assert!(!en.contains("stale-knowledge"));
         assert!(!zh.contains("已過期的偵測知識"));
+    }
+
+    #[test]
+    fn html_tested_check_row_shows_a_source_built_scanner_as_its_reported_release() {
+        const COMMIT: &str = "3ab759fef4bb5935d4fe9ac68b503d05346b8364";
+        let mut case =
+            case_for_rated_httpx_finding(EngineRunStatus::Completed, None, Some("httpx-task"));
+        let task = &mut case.scan_runs[0].engine_runs[0];
+        task.engine_version = Some(format!("source@{COMMIT}"));
+        task.reported_version = Some("3.97.0".into());
+        task.knowledge_input = Some(EngineKnowledgeInput {
+            kind: crate::domain::KnowledgeInputKind::Embedded,
+            identifier: "httpx probes".into(),
+            version: Some("1.6.10".into()),
+            acquisition_source: None,
+            pin_state: crate::domain::KnowledgePinState::PinnedOrNotApplicable,
+            knowledge_date: Some("2024-03-15".into()),
+            support_until: Some("2020-01-01".into()),
+        });
+
+        let en = html_from_export_case(&case, crate::export::ReportLocale::En);
+        let zh = html_from_export_case(&case, crate::export::ReportLocale::ZhHant);
+
+        assert!(
+            en.contains(
+                "<br><small>Version 3.97.0 (source 3ab759f) · last updated 2024-03-15</small>"
+            ),
+            "{en}"
+        );
+        assert!(
+            zh.contains("<br><small>版本 3.97.0（source 3ab759f） · 最後更新 2024-03-15</small>"),
+            "{zh}"
+        );
+        assert!(
+            en.contains(&format!("engine version 3.97.0 (source@{COMMIT})")),
+            "{en}"
+        );
+        assert!(
+            zh.contains(&format!("引擎版本 3.97.0（source@{COMMIT}）")),
+            "{zh}"
+        );
+        assert!(!en.contains("Version source@"), "{en}");
+        assert!(!zh.contains("版本 source@"), "{zh}");
+    }
+
+    #[test]
+    fn engine_run_without_reported_version_deserializes_and_serializes_without_the_key() {
+        let run: EngineRun = serde_json::from_value(serde_json::json!({
+            "id": "engine-run-1",
+            "scan_run_id": "run-1",
+            "engine_id": "trufflehog",
+            "asset_ids": ["asset-1"],
+            "status": "completed",
+            "progress_percent": 100,
+            "phase": "complete",
+            "started_at": "2026-08-24T12:00:00Z",
+            "finished_at": "2026-08-24T12:00:01Z",
+            "resume_token": null,
+            "engine_version": "source@3ab759fef4bb5935d4fe9ac68b503d05346b8364",
+            "image_digest": null,
+            "rule_version": null,
+            "adapter_version": "1",
+            "raw_artifact_ids": [],
+            "error_code": null,
+            "error_message": null
+        }))
+        .unwrap();
+        assert_eq!(run.reported_version, None);
+        let encoded = serde_json::to_value(&run).unwrap();
+        assert!(encoded.get("reported_version").is_none());
+
+        let mut recorded = run;
+        recorded.reported_version = Some("3.97.0".into());
+        let encoded = serde_json::to_value(&recorded).unwrap();
+        assert_eq!(encoded["reported_version"], "3.97.0");
     }
 
     #[test]
@@ -41237,6 +41332,7 @@ mod tests {
                 resume_token: None,
                 last_execution_report_sha256: None,
                 engine_version: None,
+                reported_version: None,
                 image_digest: None,
                 rule_version: None,
                 adapter_version: "0.1.0".into(),
@@ -43198,6 +43294,76 @@ mod tests {
             plan.scan_run.ai_system_applicability,
             AiSystemApplicabilityAnswer::Unknown
         );
+    }
+
+    #[test]
+    fn planning_freezes_reported_version_from_the_catalog_manifest() {
+        let fixture = Fixture::new();
+        let case = fixture.create();
+        let (_, asset_id) = fixture.discovered_asset(&case.id, AssetKind::Repository);
+        let service = fixture.service();
+        service
+            .approve_scope(
+                &case.id,
+                ScopeApprovalRequest {
+                    asset_id,
+                    permissions: vec![ScanPermission::LocalArtifactRead],
+                    confirmed_by: "Owner".into(),
+                    expires_at: None,
+                    authorization_reference: None,
+                    notes: None,
+                    external_scope: None,
+                },
+            )
+            .unwrap();
+        let plan = service
+            .plan_scan(
+                &case.id,
+                ScanPlanRequest {
+                    engine_ids: vec!["trufflehog".into(), "gitleaks".into(), "kube-bench".into()],
+                    engine_asset_routes: Vec::new(),
+                },
+            )
+            .unwrap();
+
+        let trufflehog = plan
+            .scan_run
+            .engine_runs
+            .iter()
+            .find(|run| run.engine_id == "trufflehog")
+            .expect("trufflehog run");
+        assert_eq!(trufflehog.status, EngineRunStatus::Queued);
+        assert_eq!(
+            trufflehog.engine_version.as_deref(),
+            Some("source@3ab759fef4bb5935d4fe9ac68b503d05346b8364")
+        );
+        assert_eq!(trufflehog.reported_version.as_deref(), Some("3.97.0"));
+
+        let gitleaks = plan
+            .scan_run
+            .engine_runs
+            .iter()
+            .find(|run| run.engine_id == "gitleaks")
+            .expect("gitleaks run");
+        assert_eq!(gitleaks.status, EngineRunStatus::Queued);
+        assert_eq!(gitleaks.engine_version.as_deref(), Some("8.30.1"));
+        assert_eq!(gitleaks.reported_version, None);
+
+        let kube_bench = plan
+            .scan_run
+            .engine_runs
+            .iter()
+            .find(|run| run.engine_id == "kube-bench")
+            .expect("kube-bench run");
+        assert_eq!(kube_bench.status, EngineRunStatus::NotExecuted);
+        assert_eq!(
+            kube_bench.engine_version.as_deref(),
+            Some("source@9f133cb7509ce1dbedfc860e94474588000e25ac")
+        );
+        assert_eq!(kube_bench.reported_version.as_deref(), Some("0.16.0"));
+        assert!(plan.not_executed.iter().any(|skipped| {
+            skipped.engine_id == "kube-bench" && skipped.engine_run_id == kube_bench.id
+        }));
     }
 
     #[test]
@@ -46059,6 +46225,7 @@ mod tests {
                 resume_token: None,
                 last_execution_report_sha256: None,
                 engine_version: None,
+                reported_version: None,
                 image_digest: None,
                 rule_version: None,
                 adapter_version: "0.1.0".into(),
@@ -46539,6 +46706,7 @@ mod tests {
             resume_token: None,
             last_execution_report_sha256: None,
             engine_version: Some("1".into()),
+            reported_version: None,
             image_digest: Some(format!("sha256:{}", "a".repeat(64))),
             rule_version: None,
             adapter_version: "0.1.0".into(),

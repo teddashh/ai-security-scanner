@@ -5439,3 +5439,69 @@ test("a catalog-engine check lists its version and last-updated date", () => {
   expect(rowValue(chinese.container, "掃描工具版本")).toBe("0.74.0");
   expect(rowValue(chinese.container, "最後更新")).toBe("2026-08-24");
 });
+
+test("a source-built scanner shows its reported version and a short commit", () => {
+  const trufflehogTask = (reportedVersion?: string) => report("complete", {
+    actual: completedCoverage("task-trufflehog", "trufflehog"),
+    coverageCounts: counts({ testedComplete: 1 }),
+    technicalDetails: {
+      collapsedByDefault: true,
+      tasks: [{
+        taskId: "task-trufflehog",
+        targetAssetIds: ["asset-1"],
+        status: "completed",
+        phase: "completed",
+        progressPercent: 100,
+        cleanupDetail: { availability: "unavailable", explanation: "No cleanup detail was recorded." },
+        redactedScannerMessage: { availability: "unavailable", explanation: "No scanner message was recorded." },
+        redactedDiagnosticLog: { availability: "unavailable", explanation: "No diagnostic log was recorded." },
+        evidenceSha256: [],
+        execution: {
+          kind: "catalog_engine",
+          engineId: "trufflehog",
+          engineVersion: "source@3ab759fef4bb5935d4fe9ac68b503d05346b8364",
+          adapterVersion: "1.0.0",
+          ...(reportedVersion ? { reportedVersion } : {}),
+          knowledgeDate: "2026-08-24",
+        },
+      }],
+    },
+  });
+  const rowValue = (container: HTMLElement, label: string) =>
+    Array.from(container.querySelectorAll(".report-end-matter dl > div")).find(
+      (row) => row.querySelector("dt")?.textContent === label,
+    )?.querySelector("dd")?.textContent;
+  const expectSourceVersion = (
+    value: BeginnerMasterReport,
+    list: { en: string; zhTW: string },
+    footer: { en: string; zhTW: string },
+  ) => {
+    const { container, unmount } = renderReport(value);
+    expect(coverageCard(container, "What was actually tested").textContent).toContain(list.en);
+    expect(rowValue(container, "Scanner version")).toBe(footer.en);
+    unmount();
+
+    window.localStorage.setItem(localeStorageKey, "zh-TW");
+    const chinese = renderReport(value);
+    expect(coverageCard(chinese.container, "實際完成的測試").textContent).toContain(list.zhTW);
+    expect(rowValue(chinese.container, "掃描工具版本")).toBe(footer.zhTW);
+    chinese.unmount();
+    window.localStorage.setItem(localeStorageKey, "en");
+  };
+
+  const commit = "3ab759fef4bb5935d4fe9ac68b503d05346b8364";
+  expectSourceVersion(trufflehogTask("3.97.0"), {
+    en: "Version 3.97.0 (source 3ab759f) · last updated 2026-08-24",
+    zhTW: "版本 3.97.0（source 3ab759f） · 最後更新 2026-08-24",
+  }, {
+    en: `3.97.0 (source@${commit})`,
+    zhTW: `3.97.0（source@${commit}）`,
+  });
+  expectSourceVersion(trufflehogTask(), {
+    en: "Version source 3ab759f · last updated 2026-08-24",
+    zhTW: "版本 source 3ab759f · 最後更新 2026-08-24",
+  }, {
+    en: `source@${commit}`,
+    zhTW: `source@${commit}`,
+  });
+});

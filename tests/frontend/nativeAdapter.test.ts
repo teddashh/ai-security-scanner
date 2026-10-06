@@ -1040,6 +1040,77 @@ test("catalog engine knowledge_date maps to knowledgeDate and an absent key stay
   assert.equal(cleared?.kind === "catalog_engine" ? cleared.knowledgeDate : "missing", undefined);
 });
 
+test("catalog engine reported_version maps to reportedVersion and an absent key stays undefined", () => {
+  const executionFor = (reportedVersion: "present" | "null" | "blank" | "absent") => {
+    const fixture = beginnerStatusReportFixture();
+    return adaptBeginnerMasterReport({
+      ...fixture,
+      technical_details: {
+        collapsed_by_default: true,
+        tasks: [{
+          task_id: "task-status",
+          target_asset_ids: ["asset-status"],
+          status: "completed",
+          phase: "completed",
+          progress_percent: 100,
+          started_at: "2026-09-15T11:59:00Z",
+          finished_at: "2026-09-15T12:00:00Z",
+          exit_code: 0,
+          cleanup_removed: null,
+          cleanup_detail: {
+            availability: "recorded",
+            value: "Cleanup outcome recorded.",
+            explanation: "Cleanup outcome was recorded.",
+          },
+          error_code: null,
+          redacted_scanner_message: {
+            availability: "unavailable",
+            value: null,
+            explanation: "No scanner message was retained.",
+          },
+          redacted_diagnostic_log: {
+            availability: "unavailable",
+            value: null,
+            explanation: "No diagnostic log was retained.",
+          },
+          evidence_sha256: [],
+          execution: {
+            kind: "catalog_engine",
+            engine_id: "trufflehog",
+            engine_version: "source@3ab759fef4bb5935d4fe9ac68b503d05346b8364",
+            image_digest: null,
+            command_sha256: null,
+            runtime_provider: null,
+            runtime_version: null,
+            runtime_security_options: null,
+            distribution_mode: null,
+            image_repository: null,
+            adapter_version: "1.0.0",
+            rule_version: null,
+            ...(reportedVersion === "present"
+              ? { reported_version: "3.97.0" }
+              : reportedVersion === "null"
+                ? { reported_version: null }
+                : reportedVersion === "blank"
+                  ? { reported_version: "   " }
+                  : {}),
+          },
+        }],
+      },
+    }).technicalDetails.tasks[0]?.execution;
+  };
+
+  const present = executionFor("present");
+  assert.equal(present?.kind, "catalog_engine");
+  assert.equal(present?.kind === "catalog_engine" ? present.reportedVersion : undefined, "3.97.0");
+  const absent = executionFor("absent");
+  assert.equal(absent?.kind === "catalog_engine" ? absent.reportedVersion : "missing", undefined);
+  const cleared = executionFor("null");
+  assert.equal(cleared?.kind === "catalog_engine" ? cleared.reportedVersion : "missing", undefined);
+  const blank = executionFor("blank");
+  assert.equal(blank?.kind === "catalog_engine" ? blank.reportedVersion : "missing", undefined);
+});
+
 test("beginner coverage gap kinds preserve known values and fail closed to unavailable", () => {
   const known = adaptBeginnerMasterReport(beginnerStatusReportFixture({ gapKind: "failed" }));
   assert.equal(known.coverageGaps[0]?.kind, "failed");
@@ -3434,6 +3505,41 @@ const engineRunFixture = (id: string, status: string) => ({
   raw_artifact_ids: [],
   error_code: status === "failed" ? "execution_failed" : null,
   error_message: status === "failed" ? "bounded test failure" : null,
+});
+
+test("engine run reported_version maps to reportedVersion and an absent key stays undefined", () => {
+  const runFor = (reportedVersion: "present" | "padded" | "null" | "blank" | "absent") => adaptNativeCase(platformCaseFixture({
+    scan_runs: [{
+      id: "run-reported-version",
+      case_id: "case-platforms-1",
+      sequence: 1,
+      created_at: "2026-08-26T00:00:00Z",
+      completed_at: "2026-08-26T00:01:00Z",
+      knowledge_cutoff: "2026-08-24T00:00:00Z",
+      engine_runs: [{
+        ...engineRunFixture("trufflehog", "completed"),
+        ...(reportedVersion === "present"
+          ? { reported_version: "3.97.0" }
+          : reportedVersion === "padded"
+            ? { reported_version: "  3.97.0  " }
+            : reportedVersion === "null"
+              ? { reported_version: null }
+              : reportedVersion === "blank"
+                ? { reported_version: "   " }
+                : {}),
+      }],
+    }],
+  })).runs[0]?.engineRuns[0];
+
+  assert.equal(runFor("present")?.reportedVersion, "3.97.0");
+  assert.equal(runFor("padded")?.reportedVersion, "3.97.0");
+  assert.equal(runFor("absent")?.reportedVersion, undefined);
+  assert.equal(runFor("null")?.reportedVersion, undefined);
+  assert.equal(runFor("blank")?.reportedVersion, undefined);
+
+  const localhost = adaptLocalhostCoverageFixture({ reported_version: "3.97.0" }).runs[0]?.engineRuns[0];
+  assert.equal(localhost?.version, undefined);
+  assert.equal(localhost?.reportedVersion, undefined);
 });
 
 test("engine result artifact counts exclude only backend stream captures and fail closed", () => {

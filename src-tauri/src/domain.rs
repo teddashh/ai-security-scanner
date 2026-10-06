@@ -506,6 +506,11 @@ pub struct EngineManifest {
     pub image: Option<ImageReference>,
     pub source_revision: Option<String>,
     pub engine_version: Option<String>,
+    /// Release version the built scanner binary reports about itself.
+    /// Recorded for an engine whose `engine_version` is `source@<commit>`.
+    /// Absent when `engine_version` is already that release version.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reported_version: Option<String>,
     pub rule_version: Option<String>,
     pub adapter_version: String,
     /// Exact provider identifiers accepted by this release. An empty list
@@ -824,6 +829,11 @@ pub struct EngineRun {
     #[serde(default)]
     pub last_execution_report_sha256: Option<String>,
     pub engine_version: Option<String>,
+    /// Release version the scanner binary reports, frozen from the catalog
+    /// when the run was planned. Absent for engines with a release version
+    /// and for runs planned before it was recorded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reported_version: Option<String>,
     pub image_digest: Option<String>,
     pub rule_version: Option<String>,
     pub adapter_version: String,

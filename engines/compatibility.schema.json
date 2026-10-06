@@ -399,6 +399,7 @@
         },
         "source_revision": { "$ref": "#/$defs/sha1" },
         "engine_version": { "type": "string", "minLength": 1 },
+        "reported_version": { "type": "string", "minLength": 1 },
         "rule_version": { "$ref": "#/$defs/nullableString" },
         "adapter_version": { "type": "string", "minLength": 1 },
         "supported_providers": {

@@ -2412,6 +2412,94 @@ fn every_integrated_engine_lands_in_one_terminal_report() {
                 tested.contains("<tr class=\"tested-detail\"><td colspan=\"5\">"),
                 "a run that proved dimensions of its own lost them"
             );
+            // A scanner built from pinned source shows the release its binary
+            // reports and a short commit here. The full source@ pin stays in
+            // the technical detail.
+            let source_scanners = [
+                (
+                    "trufflehog",
+                    "TruffleHog",
+                    "3.97.0",
+                    "3ab759fef4bb5935d4fe9ac68b503d05346b8364",
+                ),
+                (
+                    "kube-bench",
+                    "kube-bench",
+                    "0.16.0",
+                    "9f133cb7509ce1dbedfc860e94474588000e25ac",
+                ),
+                (
+                    "semgrep",
+                    "Semgrep",
+                    "1.174.0",
+                    "a0c13f304151e531c7e7c00838076211a07a790c",
+                ),
+            ];
+            let mut source_rows = Vec::new();
+            for (engine_id, display, reported, commit) in source_scanners {
+                let check = report
+                    .actual
+                    .checks
+                    .iter()
+                    .find(|check| check.check_id == engine_id)
+                    .unwrap_or_else(|| panic!("{display} check"));
+                let (engine_version, reported_version, knowledge_date) = report
+                    .technical_details
+                    .tasks
+                    .iter()
+                    .find_map(|task| match &task.execution {
+                        TechnicalExecution::CatalogEngine {
+                            engine_version,
+                            reported_version,
+                            knowledge_date,
+                            ..
+                        } if task.task_id == check.task_id => {
+                            Some((engine_version, reported_version, knowledge_date))
+                        }
+                        _ => None,
+                    })
+                    .unwrap_or_else(|| panic!("{display} technical execution"));
+                let pinned = format!("source@{commit}");
+                assert_eq!(
+                    engine_version.as_deref(),
+                    Some(pinned.as_str()),
+                    "{display} engine version"
+                );
+                assert_eq!(
+                    reported_version.as_deref(),
+                    Some(reported),
+                    "{display} reported version"
+                );
+                let knowledge_date = knowledge_date
+                    .as_deref()
+                    .unwrap_or_else(|| panic!("{display} knowledge date"));
+                assert_eq!(knowledge_date, "2026-08-24", "{display} knowledge date");
+                let short_commit = &commit[..7];
+                let short_en = format!("{reported} (source {short_commit})");
+                let exact_en = format!("{reported} (source@{commit})");
+                let row = format!(
+                    "<tr><th scope=\"row\">{display}<br><small>Version {short_en} · last updated {knowledge_date}</small></th>"
+                );
+                assert!(
+                    tested.contains(&row),
+                    "{display} first-layer row lost the short source label: {row}"
+                );
+                assert!(
+                    !tested.contains(&format!("Version source@{commit}")),
+                    "{display} first-layer row still shows the raw source pin"
+                );
+                assert!(
+                    ordered_html.contains(&format!("engine version {exact_en}")),
+                    "{display} technical detail lost the exact source label"
+                );
+                source_rows.push((
+                    display,
+                    format!(
+                        "<tr><th scope=\"row\">{display}<br><small>版本 {reported}（source {short_commit}） · 最後更新 {knowledge_date}</small></th>"
+                    ),
+                    format!("引擎版本 {reported}（source@{commit}）"),
+                ));
+            }
 
             // The same rule, in the one other place the report composes a name
             // around an identifier. This list named six scanners differently
@@ -2647,6 +2735,16 @@ fn every_integrated_engine_lands_in_one_terminal_report() {
                 zh_html.contains(&format!("最後更新 {cloudquery_knowledge_date}")),
                 "the Chinese report omitted CloudQuery's last-updated date"
             );
+            for (display, row, exact) in &source_rows {
+                assert!(
+                    zh_html.contains(row),
+                    "{display} Chinese first-layer row lost the short source label: {row}"
+                );
+                assert!(
+                    zh_html.contains(exact),
+                    "{display} Chinese technical detail lost the exact source label: {exact}"
+                );
+            }
             // The deepest technical block is the report's provenance, not a
             // dumping ground: its headings were translated while the values
             // under them stayed in English. A Chinese reader saw "證據類型:

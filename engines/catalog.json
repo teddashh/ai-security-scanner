@@ -1733,6 +1733,7 @@
     },
     "source_revision": "a0c13f304151e531c7e7c00838076211a07a790c",
     "engine_version": "source@a0c13f304151e531c7e7c00838076211a07a790c",
+    "reported_version": "1.174.0",
     "rule_version": "0f5a85ceab1b82b193d0eaa418784c932d237d68",
     "adapter_version": "0.2.6",
     "supported_asset_kinds": [
@@ -1998,6 +1999,7 @@
     },
     "source_revision": "3ab759fef4bb5935d4fe9ac68b503d05346b8364",
     "engine_version": "source@3ab759fef4bb5935d4fe9ac68b503d05346b8364",
+    "reported_version": "3.97.0",
     "rule_version": "3ab759fef4bb5935d4fe9ac68b503d05346b8364",
     "adapter_version": "0.2.6",
     "supported_asset_kinds": [
@@ -2978,6 +2980,7 @@
     },
     "source_revision": "9f133cb7509ce1dbedfc860e94474588000e25ac",
     "engine_version": "source@9f133cb7509ce1dbedfc860e94474588000e25ac",
+    "reported_version": "0.16.0",
     "rule_version": "9f133cb7509ce1dbedfc860e94474588000e25ac",
     "adapter_version": "0.2.6",
     "supported_asset_kinds": [

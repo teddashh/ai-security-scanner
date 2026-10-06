@@ -694,6 +694,7 @@ mod tests {
             }),
             source_revision: None,
             engine_version: Some("1".into()),
+            reported_version: None,
             rule_version: None,
             adapter_version: "1".into(),
             supported_providers: vec![],

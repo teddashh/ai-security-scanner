@@ -2805,6 +2805,19 @@ for (const engine of Array.isArray(catalog) ? catalog : []) {
   if (!revisionPattern.test(engine.source_revision ?? "")) errors.push(`${label}.source_revision: exact 40-character commit is required`);
   if (engine.source_revision !== engine.provenance?.engine?.source_revision) errors.push(`${label}: top-level and provenance source revisions differ`);
   if (engine.engine_version !== engine.provenance?.engine?.version) errors.push(`${label}: top-level and provenance engine versions differ`);
+  const reportedVersionPattern = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.]+)?$/;
+  const sourceBuiltEngine = typeof engine.engine_version === "string" && engine.engine_version.startsWith("source@");
+  if (sourceBuiltEngine) {
+    if (!Object.hasOwn(engine, "reported_version")) {
+      errors.push(`${label}: source-built engine requires reported_version`);
+    } else if (typeof engine.reported_version !== "string" || !reportedVersionPattern.test(engine.reported_version)) {
+      errors.push(`${label}: reported_version must match ^\\d+\\.\\d+\\.\\d+(?:-[0-9A-Za-z.]+)?$`);
+    } else if (typeof engine.image?.tag === "string" && engine.image.tag !== engine.reported_version && !engine.image.tag.startsWith(`${engine.reported_version}-`)) {
+      errors.push(`${label}: image.tag must equal reported_version or start with ${engine.reported_version}-`);
+    }
+  } else if (Object.hasOwn(engine, "reported_version")) {
+    errors.push(`${label}: reported_version is only valid when engine_version starts with source@`);
+  }
   if (engine.rule_version !== engine.provenance?.rules?.revision) errors.push(`${label}: top-level and provenance rule versions differ`);
   if (engine.adapter_version !== engine.provenance?.adapter?.version) errors.push(`${label}: top-level and provenance adapter versions differ`);
   const compatibilityBlockers = Array.isArray(engine.compatibility?.blocked_by)

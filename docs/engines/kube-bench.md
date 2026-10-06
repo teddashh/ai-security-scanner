@@ -4,7 +4,7 @@ Runs kube-bench's unmodified upstream CIS Kubernetes 1.11 node profile (`--bench
 
 | Item | Value |
 | --- | --- |
-| Upstream | [aquasecurity/kube-bench](https://github.com/aquasecurity/kube-bench) revision `9f133cb7509ce1dbedfc860e94474588000e25ac` (catalog `source_ref` `main`, `engine_version` `source@9f133cb…`). The build stamps `KubeBenchVersion=v0.16.0` through `-ldflags`. |
+| Upstream | [aquasecurity/kube-bench](https://github.com/aquasecurity/kube-bench) revision `9f133cb7509ce1dbedfc860e94474588000e25ac` (catalog `source_ref` `main`, `engine_version` `source@9f133cb…`). The build stamps `KubeBenchVersion=v0.16.0` through `-ldflags`. Catalog `reported_version` is `0.16.0`, with no leading `v`; pinned commit `9f133cb` is 1 commit after `v0.16.0` on `main`. |
 | Image | `ghcr.io/teddashh/ai-security-scanner-engine-kube-bench:0.16.0-4` (`plan_kind: managed_build`, Apache-2.0), linux/amd64 and linux/arm64. The published digest is pinned in `engines/catalog.json`. |
 | Build inputs | `engines/images/kube-bench/`: `Dockerfile`, `cfg/config.yaml`, `SNAPSHOT-PROFILE.md`, `plan.json`, `testdata/` (input marker and a five-file `node-snapshot/`); the shared launcher `engines/images/local-launcher/` (`go.mod`, `main.go`, `main_test.go`) |
 | Launcher | Shared [local launcher](local-launcher.md), `engines/images/local-launcher/main.go`: `planInvocation`, `verifyEngineInputs`, `loadNodeSnapshot`, `validateNodeSnapshot`, `runSnapshotPS`, `runSnapshotStat`, `rewriteSnapshotPaths`, `execute`, `validateEvidence` |

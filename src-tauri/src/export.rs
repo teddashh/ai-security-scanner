@@ -3030,6 +3030,7 @@ mod tests {
                 resume_token: None,
                 last_execution_report_sha256: None,
                 engine_version: Some("1.2.3".into()),
+                reported_version: None,
                 image_digest: Some("sha256:abc".into()),
                 rule_version: Some("2026.08".into()),
                 adapter_version: "1".into(),

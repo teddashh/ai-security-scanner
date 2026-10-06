@@ -1742,6 +1742,7 @@ mod tests {
                 resume_token: None,
                 last_execution_report_sha256: None,
                 engine_version: Some("1".into()),
+                reported_version: None,
                 image_digest: None,
                 rule_version: None,
                 adapter_version: "1".into(),

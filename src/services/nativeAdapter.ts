@@ -234,6 +234,8 @@ interface NativeEngineRun {
   finished_at: string | null;
   resume_token: string | null;
   engine_version: string | null;
+  /** Absent on runs planned before the field existed. */
+  reported_version?: string | null;
   image_digest: string | null;
   rule_version: string | null;
   adapter_version?: string;
@@ -364,6 +366,8 @@ type NativeBeginnerTechnicalExecution =
       kind: "catalog_engine";
       engine_id: string;
       engine_version: string | null;
+      /** Absent on reports saved before the field existed. */
+      reported_version?: string | null;
       image_digest: string | null;
       command_sha256: string | null;
       runtime_provider: string | null;
@@ -1077,6 +1081,12 @@ const exactBoolean = (value: unknown): boolean | undefined =>
 /** Untrusted IPC may send a truthy stand-in; only an exact non-empty string may stand as a retained identifier. */
 const exactNonEmptyString = (value: unknown): value is string =>
   typeof value === "string" && value.length > 0;
+
+/** A missing, null, or whitespace-only reported scanner version stays absent. */
+const reportedScannerVersion = (value: string | null | undefined): string | undefined => {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : undefined;
+};
 
 const canonicalPrivateIpv4Cidr = (value: unknown): { target: string; addressCount: number } | undefined => {
   if (typeof value !== "string" || value.length > 18) return undefined;
@@ -2605,6 +2615,9 @@ export const adaptNativeCase = (
         version: isBuiltInLocalhostTcp
           ? undefined
           : engineRun.engine_version ?? manifest?.version ?? adapterText("Not reported", "未回報"),
+        reportedVersion: isBuiltInLocalhostTcp
+          ? undefined
+          : reportedScannerVersion(engineRun.reported_version),
         digest: isBuiltInLocalhostTcp
           ? undefined
           : engineRun.image_digest ?? manifest?.imageDigest ?? adapterText("No image digest", "未提供映像摘要"),
@@ -2995,6 +3008,7 @@ const adaptBeginnerTechnicalExecution = (
     kind: execution.kind,
     engineId: execution.engine_id,
     engineVersion: execution.engine_version ?? undefined,
+    reportedVersion: reportedScannerVersion(execution.reported_version),
     imageDigest: execution.image_digest ?? undefined,
     commandSha256: execution.command_sha256 ?? undefined,
     runtimeProvider: execution.runtime_provider ?? undefined,

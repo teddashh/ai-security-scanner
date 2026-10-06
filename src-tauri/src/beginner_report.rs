@@ -737,12 +737,19 @@ pub struct TechnicalTaskDetails {
     pub execution: TechnicalExecution,
 }
 
+// One serialized record per check: boxing the catalog-engine variant would add
+// an allocation and reshape every match on it for no measurable saving.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum TechnicalExecution {
     CatalogEngine {
         engine_id: String,
         engine_version: Option<String>,
+        /// Release version the scanner binary reports. Absent on reports saved
+        /// before it was recorded.
+        #[serde(default)]
+        reported_version: Option<String>,
         image_digest: Option<String>,
         command_sha256: Option<String>,
         runtime_provider: Option<String>,
@@ -4524,6 +4531,66 @@ fn project_next_steps(
     steps
 }
 
+/// Which version line a reader sees.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ScannerVersionForm {
+    /// First-layer line: the release and a 7-character commit.
+    Short,
+    /// Technical detail: the release and the full `source@` commit.
+    Exact,
+}
+
+/// The version text for one scanner.
+///
+/// `engine_version` and `reported_version` are trimmed first. When the trimmed
+/// engine version is `source@` plus 7 to 64 lowercase hex digits, the short
+/// form is `{reported} (source {first 7})` in English and
+/// `{reported}（source {first 7}）` in Traditional Chinese, or
+/// `source {first 7}` when no release was recorded. The exact form is
+/// `{reported} (source@{commit})` / `{reported}（source@{commit}）`, or the
+/// stored `source@` value when no release was recorded. Any other engine
+/// version is shown as stored, and `reported_version` is ignored.
+pub(crate) fn scanner_version_label(
+    engine_version: &str,
+    reported_version: Option<&str>,
+    form: ScannerVersionForm,
+    zh_hant: bool,
+) -> String {
+    let engine_version = engine_version.trim();
+    let reported = reported_version
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let Some(commit) = source_built_commit(engine_version) else {
+        return engine_version.to_owned();
+    };
+    let short_commit = &commit[..7];
+    match (form, reported, zh_hant) {
+        (ScannerVersionForm::Short, Some(reported), true) => {
+            format!("{reported}（source {short_commit}）")
+        }
+        (ScannerVersionForm::Short, Some(reported), false) => {
+            format!("{reported} (source {short_commit})")
+        }
+        (ScannerVersionForm::Short, None, _) => format!("source {short_commit}"),
+        (ScannerVersionForm::Exact, Some(reported), true) => {
+            format!("{reported}（source@{commit}）")
+        }
+        (ScannerVersionForm::Exact, Some(reported), false) => {
+            format!("{reported} (source@{commit})")
+        }
+        (ScannerVersionForm::Exact, None, _) => engine_version.to_owned(),
+    }
+}
+
+fn source_built_commit(engine_version: &str) -> Option<&str> {
+    let commit = engine_version.strip_prefix("source@")?;
+    let lowercase_hex = (7..=64).contains(&commit.len())
+        && commit
+            .bytes()
+            .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'));
+    lowercase_hex.then_some(commit)
+}
+
 fn project_technical_details(case: &AssessmentCase, run: &ScanRun) -> TechnicalDetails {
     let mut tasks = run
         .engine_runs
@@ -4541,6 +4608,7 @@ fn project_technical_details(case: &AssessmentCase, run: &ScanRun) -> TechnicalD
                 EngineTaskKind::CatalogEngine => TechnicalExecution::CatalogEngine {
                     engine_id: task.engine_id.clone(),
                     engine_version: task.engine_version.clone(),
+                    reported_version: task.reported_version.clone(),
                     image_digest: task.image_digest.clone(),
                     command_sha256: task.command_sha256.clone(),
                     runtime_provider: task.runtime_provider.clone(),
@@ -5249,6 +5317,7 @@ pub(crate) mod tests {
                 resume_token: None,
                 last_execution_report_sha256: None,
                 engine_version: None,
+                reported_version: None,
                 image_digest: None,
                 rule_version: None,
                 adapter_version: "native".into(),
@@ -5334,6 +5403,7 @@ pub(crate) mod tests {
             resume_token: None,
             last_execution_report_sha256: None,
             engine_version: Some("1.0.0".into()),
+            reported_version: None,
             image_digest: Some("sha256:test".into()),
             rule_version: Some("rules-1".into()),
             adapter_version: "adapter-1".into(),
@@ -6961,6 +7031,130 @@ pub(crate) mod tests {
             TechnicalExecution::CatalogEngine { knowledge_date, .. } => {
                 assert_eq!(knowledge_date, &None);
             }
+            other => panic!("expected a catalog execution, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn scanner_version_label_pairs_a_source_commit_with_the_reported_release() {
+        const COMMIT: &str = "3ab759fef4bb5935d4fe9ac68b503d05346b8364";
+        let source = format!("source@{COMMIT}");
+        let short = super::ScannerVersionForm::Short;
+        let exact = super::ScannerVersionForm::Exact;
+        let label = |engine: &str, reported: Option<&str>, form, zh_hant| {
+            super::scanner_version_label(engine, reported, form, zh_hant)
+        };
+
+        assert_eq!(
+            label(&source, Some("3.97.0"), short, false),
+            "3.97.0 (source 3ab759f)"
+        );
+        assert_eq!(
+            label(&source, Some(" 3.97.0 "), short, true),
+            "3.97.0（source 3ab759f）"
+        );
+        assert_eq!(label(&source, None, short, false), "source 3ab759f");
+        assert_eq!(label(&source, Some("  "), short, true), "source 3ab759f");
+        assert_eq!(
+            label(&source, Some("3.97.0"), exact, false),
+            format!("3.97.0 (source@{COMMIT})")
+        );
+        assert_eq!(
+            label(&source, Some("3.97.0"), exact, true),
+            format!("3.97.0（source@{COMMIT}）")
+        );
+        assert_eq!(label(&source, None, exact, false), source);
+        assert_eq!(label(&source, None, exact, true), source);
+        assert_eq!(
+            label(&format!("  {source}  "), Some("3.97.0"), short, false),
+            "3.97.0 (source 3ab759f)"
+        );
+
+        assert_eq!(label("1.6.10", Some("9.9.9"), short, false), "1.6.10");
+        assert_eq!(label("1.6.10", Some("9.9.9"), exact, true), "1.6.10");
+        assert_eq!(
+            label("source@xyz", Some("3.97.0"), short, false),
+            "source@xyz"
+        );
+        assert_eq!(
+            label("source@xyz", Some("3.97.0"), exact, true),
+            "source@xyz"
+        );
+        assert_eq!(
+            label("source@3AB759F", Some("3.97.0"), short, false),
+            "source@3AB759F"
+        );
+        assert_eq!(
+            label("source@abc123", Some("1.0.0"), exact, false),
+            "source@abc123"
+        );
+        assert_eq!(
+            label("source@3ab759f", Some("3.97.0"), short, false),
+            "3.97.0 (source 3ab759f)"
+        );
+    }
+
+    #[test]
+    fn technical_execution_carries_the_reported_version_from_the_task() {
+        let mut task = catalog_task("trufflehog", EngineRunStatus::Completed);
+        task.engine_version = Some("source@3ab759fef4bb5935d4fe9ac68b503d05346b8364".into());
+        task.reported_version = Some("3.97.0".into());
+        let report =
+            build_beginner_master_report(&case_with_catalog_tasks(vec![task], true), "run-1")
+                .unwrap();
+        match &report.technical_details.tasks[0].execution {
+            TechnicalExecution::CatalogEngine {
+                engine_version,
+                reported_version,
+                ..
+            } => {
+                assert_eq!(
+                    engine_version.as_deref(),
+                    Some("source@3ab759fef4bb5935d4fe9ac68b503d05346b8364")
+                );
+                assert_eq!(reported_version.as_deref(), Some("3.97.0"));
+            }
+            other => panic!("expected a catalog execution, got {other:?}"),
+        }
+
+        let plain = build_beginner_master_report(
+            &case_with_catalog_tasks(
+                vec![catalog_task("plain", EngineRunStatus::Completed)],
+                true,
+            ),
+            "run-1",
+        )
+        .unwrap();
+        match &plain.technical_details.tasks[0].execution {
+            TechnicalExecution::CatalogEngine {
+                reported_version, ..
+            } => assert_eq!(reported_version, &None),
+            other => panic!("expected a catalog execution, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn catalog_engine_execution_without_reported_version_deserializes_to_none() {
+        let report = build_beginner_master_report(
+            &case_with_catalog_tasks(
+                vec![catalog_task("dated", EngineRunStatus::Completed)],
+                true,
+            ),
+            "run-1",
+        )
+        .unwrap();
+        let mut value = serde_json::to_value(&report).unwrap();
+        let execution = value["technical_details"]["tasks"][0]["execution"]
+            .as_object_mut()
+            .expect("catalog execution object");
+        assert_eq!(execution["kind"], "catalog_engine");
+        assert!(execution.get("reported_version").is_some());
+        execution.remove("reported_version");
+        let restored: BeginnerMasterReport = serde_json::from_value(value).unwrap();
+        match &restored.technical_details.tasks[0].execution {
+            TechnicalExecution::CatalogEngine {
+                reported_version, ..
+            } => assert_eq!(reported_version, &None),
             other => panic!("expected a catalog execution, got {other:?}"),
         }
     }

@@ -957,6 +957,7 @@ mod tests {
             resume_token: None,
             last_execution_report_sha256: None,
             engine_version: Some("1.0.0".into()),
+            reported_version: None,
             image_digest: Some(format!("sha256:{}", "a".repeat(64))),
             rule_version: Some("2026.08".into()),
             adapter_version: "1".into(),

@@ -15,6 +15,7 @@ import {
   localhostTcpBeginnerSummary,
   needsFreshLocalhostTcpAttempt,
 } from "../localhostTcpPresentation";
+import { scannerVersionLabel } from "../scannerVersionPresentation";
 import { scanRequestOutcomeBeginnerSummary } from "../scanRequestOutcomePresentation";
 import { scanRunIdentityPresentation } from "../scanRunIdentityPresentation";
 import { scanRunOverallProgress } from "../scanRunProgress";
@@ -1806,7 +1807,7 @@ export function ProgressPage({
                         <div><dt>{text(copy.jobId)}</dt><dd><code>{engine.id}</code></dd></div>
                         <div><dt>{text(copy.engineId)}</dt><dd><code>{engine.engineId}</code></dd></div>
                         <div><dt>{text(copy.categoryCode)}</dt><dd><code>{engine.category}</code></dd></div>
-                        <div><dt>{text(copy.scannerVersion)}</dt><dd>{engine.version}</dd></div>
+                        <div><dt>{text(copy.scannerVersion)}</dt><dd>{scannerVersionLabel(engine.version, engine.reportedVersion, "exact", locale)}</dd></div>
                         <div><dt>{text(copy.imageDigest)}</dt><dd><code>{engine.digest}</code></dd></div>
                         <div><dt>{text(copy.ruleVersion)}</dt><dd>{engine.ruleVersion ?? text(copy.noneReported)}</dd></div>
                         <div><dt>{text(copy.adapter)}</dt><dd>{engine.adapterVersion ?? text(copy.noneReported)}</dd></div>

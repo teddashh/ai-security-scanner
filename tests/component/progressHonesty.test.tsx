@@ -1648,3 +1648,30 @@ test("a check past its catalog support date shows its last-updated date and asks
   expect(chinese.container.textContent).toContain("案件快照");
   expect(lastUpdatedValues(chinese.container, "最後更新")).toEqual([plainDate("zh-TW"), plainDate("zh-TW")]);
 });
+
+test("a source-built scanner shows its reported version and full commit in technical details", () => {
+  const commit = "3ab759fef4bb5935d4fe9ac68b503d05346b8364";
+  const sourceRun = run([
+    engine("trufflehog", "completed", {
+      progress: 100,
+      version: `source@${commit}`,
+      reportedVersion: "3.97.0",
+    }),
+  ], "completed");
+  const scannerVersion = (container: HTMLElement, label: string) =>
+    Array.from(container.querySelectorAll(".engine-provenance dl > div"))
+      .filter((row) => row.querySelector("dt")?.textContent === label)
+      .map((row) => row.querySelector("dd")?.textContent);
+
+  const english = renderProgress(sourceRun);
+  expect(scannerVersion(english.container, "Scanner version")).toEqual([
+    `3.97.0 (source@${commit})`,
+  ]);
+
+  cleanup();
+  window.localStorage.setItem(localeStorageKey, "zh-TW");
+  const chinese = renderProgress(sourceRun);
+  expect(scannerVersion(chinese.container, "掃描工具版本")).toEqual([
+    `3.97.0（source@${commit}）`,
+  ]);
+});
