@@ -308,6 +308,28 @@ test("a moved line stays the same finding in Traditional Chinese", () => {
   );
 });
 
+test("a still-present problem names no scanner or asset, as in English", () => {
+  const assetId = "asset-workspace-source-a7415fd1-9f68-4135-a070-5ed9f7d1f970";
+  assert.equal(
+    verificationDiffExplanation("zh-TW", {
+      explanation: storedExplanation,
+      comparisonStatus: "changed",
+      beforeSeverity: "high",
+      afterSeverity: "high",
+      changeReasons: [
+        {
+          code: "location_moved",
+          engineId: "semgrep",
+          assetId,
+          detail: "location moved from line 19 to line 21 in the same file",
+        },
+        { code: "evidence_changed", engineId: "semgrep", assetId, detail: "evidence hashes changed" },
+      ],
+    }),
+    "仍可觀察到這個問題，但同一個檔案中的位置從第 19 行移到第 21 行；證據雜湊有變更。",
+  );
+});
+
 test("every detail shape authored by the producer is recognized", () => {
   for (const { code, frame } of uniqueDetailShapes) {
     const detail = fillFrame(frame);

@@ -157,11 +157,11 @@ const coordinatePrefixZhTW = (reason: FindingDiffReasonPresentation): string => 
   return coordinates.join("、");
 };
 
-const reasonZhTW = (reason: FindingDiffReasonPresentation): string => {
+const reasonZhTW = (reason: FindingDiffReasonPresentation, withCoordinates: boolean): string => {
   const label = verificationDiffReasonLabelZhTW(reason.code);
   if (!label) return reason.detail;
   const translated = translatedReasonDetailZhTW(reason.code, reason.detail);
-  const prefix = translated?.carriesCoordinate ? "" : coordinatePrefixZhTW(reason);
+  const prefix = withCoordinates && !translated?.carriesCoordinate ? coordinatePrefixZhTW(reason) : "";
   const body = translated?.text ?? `${label}：${reason.detail}`;
   return prefix ? `${prefix}：${body}` : body;
 };
@@ -173,12 +173,15 @@ export const verificationDiffExplanation = (
 ): string => {
   if (locale === "en") return diff.explanation;
 
-  const reasons = (diff.changeReasons ?? []).map(reasonZhTW).join("；");
+  const reasons = (diff.changeReasons ?? []).map((reason) => reasonZhTW(reason, true)).join("；");
   switch (diff.comparisonStatus) {
     case "still_present":
       return "目前掃描再次觀察到相同的指紋、嚴重程度、信心程度、資產、掃描工具與證據。";
-    case "changed":
-      return reasons ? `仍可觀察到這個問題，但${reasons}。` : diff.explanation;
+    case "changed": {
+      // Like the English explanation, a problem that is still observed names no scanner or asset.
+      const changes = (diff.changeReasons ?? []).map((reason) => reasonZhTW(reason, false)).join("；");
+      return changes ? `仍可觀察到這個問題，但${changes}。` : diff.explanation;
+    }
     case "resolved":
       return "目前掃描已針對原始座標，完成版本、知識、對照映射、範圍與目標合約完全可比較的檢查，且未再次出現這個指紋。";
     case "newly_observed":
