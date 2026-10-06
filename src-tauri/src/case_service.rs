@@ -41,16 +41,16 @@ use crate::domain::{
     DeclaredHostScanProfile, DeclaredNetworkProtocol, DeclaredNetworkServiceInput,
     DeclaredNetworkServiceMetadata, DeclaredNetworkServiceScanProfile, DeclaredWebProtocol,
     DeclaredWebServiceInput, DeclaredWebServiceScanProfile, DistributionMode, EngineKnowledgeInput,
-    EngineManifest, EngineRun, EngineRunStatus, EngineTaskKind, Finding, FindingDiffStatus,
-    FindingGroup, FindingGroupAction, FindingGroupEvent, FindingObservation, FindingStatus,
-    FindingWorkflowEvent, Id, LEGACY_NAABU_ATTEMPT_REQUEST_SCHEMA_VERSION,
-    MAX_NAABU_ATTEMPT_REQUESTS, MAX_NAABU_ATTEMPT_RESULTS, MAX_SCAN_REQUEST_ASSET_IDS,
-    MAX_SCAN_REQUEST_ENGINE_IDS, MAX_SCAN_RUN_REPORT_ASSET_SNAPSHOTS, ManifestStatus,
-    NAABU_ATTEMPT_REQUEST_SCHEMA_VERSION, NAABU_ATTEMPT_RESULT_SCHEMA_VERSION, NaabuAttemptRequest,
-    NaabuAttemptResult, OrganizationProfile, RawArtifact, ReportAssetDisposition,
-    ReportAssetSnapshot, ScanPermission, ScanRequestOutcome, ScanRequestOutcomeCode, ScanRun,
-    ScopeGrant, SourceConnectionStatus, SourceKind, VerificationComparison, new_id,
-    valid_azure_subscription_id, valid_gcp_project_id,
+    EngineManifest, EngineRun, EngineRunStatus, EngineTaskKind, Finding, FindingDiff,
+    FindingDiffReasonCode, FindingDiffStatus, FindingFamily, FindingGroup, FindingGroupAction,
+    FindingGroupEvent, FindingObservation, FindingStatus, FindingWorkflowEvent, Id,
+    LEGACY_NAABU_ATTEMPT_REQUEST_SCHEMA_VERSION, MAX_NAABU_ATTEMPT_REQUESTS,
+    MAX_NAABU_ATTEMPT_RESULTS, MAX_SCAN_REQUEST_ASSET_IDS, MAX_SCAN_REQUEST_ENGINE_IDS,
+    MAX_SCAN_RUN_REPORT_ASSET_SNAPSHOTS, ManifestStatus, NAABU_ATTEMPT_REQUEST_SCHEMA_VERSION,
+    NAABU_ATTEMPT_RESULT_SCHEMA_VERSION, NaabuAttemptRequest, NaabuAttemptResult,
+    OrganizationProfile, RawArtifact, ReportAssetDisposition, ReportAssetSnapshot, ScanPermission,
+    ScanRequestOutcome, ScanRequestOutcomeCode, ScanRun, ScopeGrant, SourceConnectionStatus,
+    SourceKind, VerificationComparison, new_id, valid_azure_subscription_id, valid_gcp_project_id,
 };
 use crate::error::{AppError, AppResult};
 use crate::execution_coverage::{
@@ -18898,6 +18898,373 @@ fn tested_check_version_line(
     }
 }
 
+/// `Scan {sequence}` / `第 {sequence} 次掃描`.
+///
+/// `ScanRun` stores no separate label. The desktop names every sequence that
+/// way, and a sequence below 1 keeps the same generated name.
+fn html_scan_run_name(run: &ScanRun, catalog: HtmlReportCatalog) -> String {
+    match catalog.locale {
+        crate::export::ReportLocale::ZhHant => format!("第 {} 次掃描", run.sequence),
+        crate::export::ReportLocale::En => format!("Scan {}", run.sequence),
+    }
+}
+
+/// First 12 characters, except the standard-redaction marker, which is kept whole.
+fn html_snapshot_hash(value: &str) -> String {
+    const REDACTED: &str = "[redacted snapshot hash]";
+    if value == REDACTED {
+        REDACTED.to_owned()
+    } else {
+        value.chars().take(12).collect()
+    }
+}
+
+struct VerificationDiffCounts {
+    resolved: usize,
+    still_present: usize,
+    newly_observed: usize,
+    unable_to_verify: usize,
+    moved: usize,
+}
+
+fn verification_diff_counts(diffs: &[FindingDiff]) -> VerificationDiffCounts {
+    let mut counts = VerificationDiffCounts {
+        resolved: 0,
+        still_present: 0,
+        newly_observed: 0,
+        unable_to_verify: 0,
+        moved: 0,
+    };
+    for diff in diffs {
+        match diff.status {
+            FindingDiffStatus::Resolved => counts.resolved += 1,
+            FindingDiffStatus::StillPresent | FindingDiffStatus::Changed => {
+                counts.still_present += 1;
+                if diff
+                    .reasons
+                    .iter()
+                    .any(|reason| reason.code == FindingDiffReasonCode::LocationMoved)
+                {
+                    counts.moved += 1;
+                }
+            }
+            FindingDiffStatus::NewlyObserved => counts.newly_observed += 1,
+            FindingDiffStatus::UnableToVerify => counts.unable_to_verify += 1,
+        }
+    }
+    counts
+}
+
+fn html_compared_row(
+    diff: &FindingDiff,
+    finding_id: Option<&str>,
+    severity: Option<&crate::domain::Severity>,
+    source: Option<&BeginnerMasterReport>,
+    labels: &BTreeMap<Id, String>,
+    link_from: Option<&BeginnerMasterReport>,
+    catalog: HtmlReportCatalog,
+) -> (String, bool) {
+    let looked_up = source.and_then(|source| {
+        let finding_id = finding_id?;
+        source
+            .findings
+            .iter()
+            .find(|finding| finding.finding_id == finding_id)
+            .map(|finding| (source, finding))
+    });
+    let (title, secret, asset_html) = if let Some((source, finding)) = looked_up {
+        let secret = matches!(
+            finding.family,
+            Some(FindingFamily::Secret | FindingFamily::McpSecret)
+        );
+        (
+            html_problem_title(source, finding, catalog),
+            secret,
+            readable_target_list(&finding.target_asset_ids, labels, catalog),
+        )
+    } else {
+        (
+            diff.fingerprint.clone(),
+            false,
+            readable_target_list(&[], labels, catalog),
+        )
+    };
+    let anchor = link_from.and_then(|report| {
+        let finding_id = finding_id?;
+        html_problem_anchor(report, finding_id)
+    });
+    let title = html_escape(&title);
+    let title = match anchor {
+        Some(anchor) => format!("<a href=\"#{}\">{}</a>", html_escape(&anchor), title),
+        None => title,
+    };
+    let severity = severity
+        .map(|severity| {
+            format!(
+                "<span class=\"pill pill--{}\">{}</span> ",
+                severity_slug(severity),
+                html_escape(&catalog.identifier(&enum_key(severity))),
+            )
+        })
+        .unwrap_or_default();
+    (
+        format!("<li>{severity}{title} <span class=\"finding-asset\">— {asset_html}</span></li>"),
+        secret,
+    )
+}
+
+fn html_local_copy_line(
+    change: &crate::domain::LocalInputChange,
+    labels: &BTreeMap<Id, String>,
+    fallback_labels: &BTreeMap<Id, String>,
+    catalog: HtmlReportCatalog,
+) -> String {
+    let name = labels
+        .get(&change.asset_id)
+        .or_else(|| fallback_labels.get(&change.asset_id))
+        .map(String::as_str)
+        .unwrap_or_else(|| catalog.text("Saved target", "已保存的目標"));
+    let name = html_escape(name);
+    if change.changed {
+        let before = html_escape(&html_snapshot_hash(&change.baseline_sha256));
+        let after = html_escape(&html_snapshot_hash(&change.current_sha256));
+        match catalog.locale {
+            crate::export::ReportLocale::ZhHant => format!("{name}：{before} → {after}"),
+            crate::export::ReportLocale::En => format!("{name}: {before} → {after}"),
+        }
+    } else {
+        let hash = html_escape(&html_snapshot_hash(&change.baseline_sha256));
+        match catalog.locale {
+            crate::export::ReportLocale::ZhHant => {
+                format!("{name}：兩次掃描的檔案相同（{hash}）")
+            }
+            crate::export::ReportLocale::En => {
+                format!("{name}: the same files in both scans ({hash})")
+            }
+        }
+    }
+}
+
+/// What changed since the earlier scan, when this run is the current side of a
+/// saved fix check. Every other run gets an empty string, so its HTML is unchanged.
+fn html_verification_comparison_section(
+    case: &AssessmentCase,
+    exported: &AssessmentCase,
+    run_id: &str,
+    report: &BeginnerMasterReport,
+    target_labels: &BTreeMap<Id, String>,
+    options: &ExportOptions,
+    catalog: HtmlReportCatalog,
+) -> String {
+    let Some(comparison) = case
+        .comparisons
+        .iter()
+        .rev()
+        .find(|comparison| comparison.current_run_id == run_id)
+    else {
+        return String::new();
+    };
+    let Some(baseline_run) = case
+        .scan_runs
+        .iter()
+        .find(|run| run.id == comparison.baseline_run_id)
+    else {
+        return String::new();
+    };
+
+    let baseline_report =
+        beginner_report_for_export(case, &comparison.baseline_run_id, options.redaction).ok();
+    let baseline_labels = baseline_report
+        .as_ref()
+        .map(|baseline| readable_target_labels(baseline, catalog))
+        .unwrap_or_default();
+    let counts = verification_diff_counts(&comparison.diffs);
+    let finished = catalog.format_time(
+        baseline_run
+            .completed_at
+            .as_ref()
+            .unwrap_or(&baseline_run.created_at),
+    );
+    let run_name = html_scan_run_name(baseline_run, catalog);
+    let lead = match catalog.locale {
+        crate::export::ReportLocale::ZhHant => format!("與 {finished} 完成的{run_name}比較。"),
+        crate::export::ReportLocale::En => {
+            format!("Compared with {run_name}, finished {finished}.")
+        }
+    };
+    let number = |value| catalog.format_number(value);
+    let moved_sentence = match catalog.locale {
+        crate::export::ReportLocale::ZhHant => format!(
+            "其中 {} 個仍然存在的問題只是在同一個檔案中換了行號。",
+            number(counts.moved)
+        ),
+        crate::export::ReportLocale::En => format!(
+            "{} of the still-present problems only moved to another line in the same file.",
+            number(counts.moved)
+        ),
+    };
+
+    let mut resolved_rows = String::new();
+    let mut any_secret = false;
+    for diff in comparison
+        .diffs
+        .iter()
+        .filter(|diff| diff.status == FindingDiffStatus::Resolved)
+    {
+        let (row, secret) = html_compared_row(
+            diff,
+            diff.baseline_finding_id.as_deref(),
+            diff.baseline_severity.as_ref(),
+            baseline_report.as_ref(),
+            &baseline_labels,
+            None,
+            catalog,
+        );
+        any_secret |= secret;
+        resolved_rows.push_str(&row);
+    }
+    let mut new_rows = String::new();
+    for diff in comparison
+        .diffs
+        .iter()
+        .filter(|diff| diff.status == FindingDiffStatus::NewlyObserved)
+    {
+        let (row, _) = html_compared_row(
+            diff,
+            diff.current_finding_id.as_deref(),
+            diff.current_severity.as_ref(),
+            Some(report),
+            target_labels,
+            Some(report),
+            catalog,
+        );
+        new_rows.push_str(&row);
+    }
+
+    let local_changes = exported
+        .comparisons
+        .iter()
+        .find(|item| item.id == comparison.id)
+        .map(|item| item.local_input_changes.as_slice())
+        .unwrap_or(comparison.local_input_changes.as_slice());
+    let mut copies = String::new();
+    if !local_changes.is_empty() {
+        copies.push_str(&format!(
+            "<h3>{}</h3><ul>",
+            html_escape(catalog.text("Folder copies compared", "比較的資料夾副本"))
+        ));
+        for change in local_changes {
+            copies.push_str(&format!(
+                "<li>{}</li>",
+                html_local_copy_line(change, target_labels, &baseline_labels, catalog)
+            ));
+        }
+        copies.push_str("</ul>");
+    }
+    let run_ids = format!(
+        "<div><dt>{}</dt><dd><code>{}</code></dd></div><div><dt>{}</dt><dd><code>{}</code></dd></div>",
+        html_escape(catalog.text("Before-fix scan", "修復前掃描")),
+        html_escape(&comparison.baseline_run_id),
+        html_escape(catalog.text("After-fix check", "修復後複驗")),
+        html_escape(&comparison.current_run_id),
+    );
+
+    let mut html = format!(
+        concat!(
+            "<section class=\"verification-comparison\"><h2>{}</h2><p>{}</p>",
+            "<div class=\"kpi-row\">{}</div>"
+        ),
+        html_escape(catalog.text("Compared with the earlier scan", "與先前掃描的比較")),
+        html_escape(&lead),
+        html_kpi_tiles(
+            &[
+                (
+                    catalog.text("No longer observed", "這次沒有再看到"),
+                    counts.resolved,
+                    "complete",
+                ),
+                (
+                    catalog.text("Still present", "仍然存在"),
+                    counts.still_present,
+                    "problems",
+                ),
+                (
+                    catalog.text("New", "新出現"),
+                    counts.newly_observed,
+                    "partial"
+                ),
+                (
+                    catalog.text("Verification incomplete", "驗證未完成"),
+                    counts.unable_to_verify,
+                    "partial",
+                ),
+            ],
+            catalog,
+        ),
+    );
+    if counts.moved > 0 {
+        html.push_str(&format!("<p>{}</p>", html_escape(&moved_sentence)));
+    }
+    if !comparison.complete {
+        let issue_count = match catalog.locale {
+            crate::export::ReportLocale::ZhHant => format!(
+                "需要處理的掃描工具／目標比較：{}",
+                number(comparison.completeness_issues.len())
+            ),
+            crate::export::ReportLocale::En => format!(
+                "Scanner/target comparisons needing attention: {}",
+                number(comparison.completeness_issues.len())
+            ),
+        };
+        html.push_str(&format!(
+            "<p><strong>{}</strong></p><p>{}</p><p>{}</p>",
+            html_escape(catalog.text(
+                "Verification comparison incomplete",
+                "複驗比對未完成"
+            )),
+            html_escape(catalog.text(
+                "Some scanner/target comparisons were incomplete or used different comparison inputs. Affected findings stay under Verification incomplete and are not counted as fixed.",
+                "部分掃描工具／目標的比較未完成，或使用了不同的比較條件；受影響的問題會保留在「驗證未完成」，不會算成已修復。",
+            )),
+            html_escape(&issue_count),
+        ));
+    }
+    if !resolved_rows.is_empty() {
+        html.push_str(&format!(
+            "<h3>{}</h3><ul>{}</ul><p>{}</p>",
+            html_escape(catalog.text("No longer observed", "這次沒有再看到")),
+            resolved_rows,
+            html_escape(catalog.text(
+                "The same completed check no longer found this problem. Review the new evidence, then close it.",
+                "相同檢查已完成，且沒有再找到這個問題；查看新證據後即可關閉。",
+            )),
+        ));
+    }
+    if !new_rows.is_empty() {
+        html.push_str(&format!(
+            "<h3>{}</h3><ul>{}</ul>",
+            html_escape(catalog.text("New", "新出現")),
+            new_rows,
+        ));
+    }
+    if any_secret {
+        html.push_str(&format!(
+            "<p>{}</p>",
+            html_escape(catalog.text(
+                "A secret removed from the files can still be read from version history and copies made earlier. Revoke or rotate it.",
+                "從檔案移除的機密仍可能留在版本紀錄與先前的副本中，請撤銷或更換它。",
+            )),
+        ));
+    }
+    html.push_str(&format!(
+        "<details class=\"technical\"><summary><strong>{}</strong></summary><dl>{}</dl>{}</details></section>",
+        html_escape(catalog.text("Scan run IDs", "掃描輪次 ID")),
+        run_ids,
+        copies,
+    ));
+    html
+}
+
 fn html_report_bytes(
     case: &AssessmentCase,
     run_id: &str,
@@ -21061,6 +21428,15 @@ fn html_report_bytes_with_attachments(
         &report,
         report_counts,
         problem_count,
+        catalog,
+    ));
+    document.push_str(&html_verification_comparison_section(
+        case,
+        &exported,
+        run_id,
+        &report,
+        &target_labels,
+        options,
         catalog,
     ));
     document.push_str(&html_severity_profile(&report, catalog));
@@ -48327,5 +48703,811 @@ mod tests {
         assert_eq!(zh.gap_after("Unrecognised."), " ");
         assert_eq!(zh.gap_after("狀況"), " ");
         assert_eq!(en.gap_after("狀況。"), " ");
+    }
+
+    const FIX_CHECK_ASSET: &str = "private-folder-alpha";
+    const FIX_CHECK_TOKEN_TITLE: &str = "Token file in private-folder-alpha";
+    const FIX_CHECK_LOCKFILE_TITLE: &str = "Outdated lockfile & notes";
+    const FIX_CHECK_MOVED_TITLE: &str = "Still here after the move";
+    const FIX_CHECK_CHANGED_TITLE: &str = "Still here but changed";
+    const FIX_CHECK_NEW_TITLE: &str = "New debug endpoint";
+    const FIX_CHECK_SECRET_NOTE: &str = "A secret removed from the files can still be read from version history and copies made earlier. Revoke or rotate it.";
+    const FIX_CHECK_SECRET_NOTE_ZH: &str =
+        "從檔案移除的機密仍可能留在版本紀錄與先前的副本中，請撤銷或更換它。";
+
+    fn fix_check_time(value: &str) -> DateTime<Utc> {
+        value.parse().expect("rfc3339")
+    }
+
+    fn fix_check_asset() -> Asset {
+        Asset {
+            id: "asset-folder".into(),
+            kind: AssetKind::FileSystem,
+            name: FIX_CHECK_ASSET.into(),
+            provider: None,
+            region: None,
+            identifiers: vec![],
+            discovered_from: vec![],
+            candidate: false,
+            owner_confirmed: true,
+            internet_exposed: None,
+            contains_sensitive_data: None,
+            metadata: BTreeMap::new(),
+        }
+    }
+
+    fn fix_check_run(
+        case_id: &str,
+        id: &str,
+        sequence: u32,
+        created_at: DateTime<Utc>,
+        completed_at: Option<DateTime<Utc>>,
+        asset: &Asset,
+    ) -> ScanRun {
+        ScanRun {
+            id: id.into(),
+            case_id: case_id.into(),
+            sequence,
+            created_at,
+            completed_at,
+            request_outcome: None,
+            report_asset_snapshots: vec![ReportAssetSnapshot {
+                asset: asset.clone(),
+                disposition: ReportAssetDisposition::RequestedForScan,
+            }],
+            knowledge_cutoff: created_at,
+            ai_system_applicable: false,
+            ai_system_applicability: Default::default(),
+            ai_generated_artifact: Default::default(),
+            verification_baseline_run_id: None,
+            scope_grant_ids: vec![],
+            scope_grant_snapshots: vec![],
+            engine_admission_issues: Vec::new(),
+            engine_runs: vec![],
+        }
+    }
+
+    struct FixCheckFinding<'a> {
+        id: &'a str,
+        run_id: &'a str,
+        fingerprint: &'a str,
+        title: &'a str,
+        severity: Severity,
+        priority: u8,
+        family: Option<FindingFamily>,
+        observed_at: DateTime<Utc>,
+    }
+
+    fn fix_check_finding(case_id: &str, spec: FixCheckFinding<'_>) -> Finding {
+        Finding {
+            family: spec.family,
+            severity_basis_code: None,
+            confidence_basis_code: None,
+            context_factors: Vec::new(),
+            id: spec.id.into(),
+            case_id: case_id.into(),
+            first_seen_run_id: spec.run_id.into(),
+            last_seen_run_id: spec.run_id.into(),
+            fingerprint: spec.fingerprint.into(),
+            title: spec.title.into(),
+            plain_language_summary: "A retained finding needs review.".into(),
+            possible_impact: "The affected asset may remain exposed.".into(),
+            severity: spec.severity,
+            confidence: Confidence::High,
+            priority: spec.priority,
+            priority_reasons: vec![],
+            asset_ids: vec!["asset-folder".into()],
+            evidence: vec![Evidence {
+                id: format!("evidence-{}", spec.id),
+                finding_id: spec.id.into(),
+                run_id: spec.run_id.into(),
+                engine_run_id: None,
+                kind: EvidenceKind::Configuration,
+                engine_id: "test-engine".into(),
+                scanner_details: None,
+                source_rule: None,
+                result_pointer_sha256: None,
+                observed_at: spec.observed_at,
+                summary: "Retained evidence".into(),
+                location: None,
+                artifact_id: format!("artifact-{}", spec.id),
+                artifact_sha256: "b".repeat(64),
+                pointer: None,
+                redacted: false,
+            }],
+            control_references: vec![],
+            recommendation: "Apply the scanner-provided correction.".into(),
+            verification_guidance: "Rerun the same check.".into(),
+            rollback_considerations: None,
+            official_references: vec![],
+            recommended_expert_type: "Security reviewer".into(),
+            status: FindingStatus::Unreviewed,
+            tags: vec![],
+        }
+    }
+
+    fn fix_check_observation(
+        finding: &Finding,
+        run_id: &str,
+        observed_at: DateTime<Utc>,
+    ) -> FindingObservation {
+        FindingObservation {
+            id: format!("observation-{run_id}-{}", finding.id),
+            run_id: run_id.into(),
+            finding_id: finding.id.clone(),
+            fingerprint: finding.fingerprint.clone(),
+            asset_ids: finding.asset_ids.clone(),
+            engine_ids: vec!["test-engine".into()],
+            severity: finding.severity.clone(),
+            confidence: finding.confidence.clone(),
+            evidence_hashes: vec!["b".repeat(64)],
+            observed_at,
+            finding_snapshot: Some(finding.clone()),
+        }
+    }
+
+    fn fix_check_diff(
+        fingerprint: &str,
+        baseline_finding_id: Option<&str>,
+        current_finding_id: Option<&str>,
+        status: FindingDiffStatus,
+        baseline_severity: Option<Severity>,
+        current_severity: Option<Severity>,
+        moved: bool,
+    ) -> FindingDiff {
+        FindingDiff {
+            fingerprint: fingerprint.into(),
+            baseline_finding_id: baseline_finding_id.map(str::to_owned),
+            current_finding_id: current_finding_id.map(str::to_owned),
+            status,
+            explanation: "compared".into(),
+            baseline_severity,
+            current_severity,
+            evidence_changed: false,
+            reasons: if moved {
+                vec![crate::domain::FindingDiffReason {
+                    code: FindingDiffReasonCode::LocationMoved,
+                    engine_id: Some("test-engine".into()),
+                    asset_id: Some("asset-folder".into()),
+                    detail: "line 10 is now line 40".into(),
+                }]
+            } else {
+                Vec::new()
+            },
+        }
+    }
+
+    /// Two finished runs and two saved comparisons. The later `created_at`
+    /// record is pushed first, so a time sort would select it; the report
+    /// must use the last record whose current run is this one.
+    fn fix_check_case(secret_family: Option<FindingFamily>) -> AssessmentCase {
+        let case_id = "case-fix-check";
+        let baseline_created = fix_check_time("2026-10-01T15:00:00Z");
+        let baseline_finished = fix_check_time("2026-10-01T15:04:05Z");
+        let current_finished = fix_check_time("2026-10-06T16:00:00Z");
+        let asset = fix_check_asset();
+        let mut case = AssessmentCase::new(
+            "Fix check project".into(),
+            OrganizationProfile {
+                organization_name: "Example Co".into(),
+                employee_range: "1-10".into(),
+                data_classes: vec![DataClass::General],
+                notes: None,
+            },
+        );
+        case.id = case_id.into();
+        case.assets.push(asset.clone());
+        case.scan_runs.push(fix_check_run(
+            case_id,
+            "run-before",
+            1,
+            baseline_created,
+            Some(baseline_finished),
+            &asset,
+        ));
+        case.scan_runs.push(fix_check_run(
+            case_id,
+            "run-after",
+            2,
+            current_finished,
+            Some(current_finished),
+            &asset,
+        ));
+
+        let secret = fix_check_finding(
+            case_id,
+            FixCheckFinding {
+                id: "finding-secret",
+                run_id: "run-before",
+                fingerprint: "fp-secret",
+                title: FIX_CHECK_TOKEN_TITLE,
+                severity: Severity::High,
+                priority: 70,
+                family: secret_family,
+                observed_at: baseline_finished,
+            },
+        );
+        let lockfile = fix_check_finding(
+            case_id,
+            FixCheckFinding {
+                id: "finding-lockfile",
+                run_id: "run-before",
+                fingerprint: "fp-lockfile",
+                title: FIX_CHECK_LOCKFILE_TITLE,
+                severity: Severity::Medium,
+                priority: 60,
+                family: Some(FindingFamily::SourceCode),
+                observed_at: baseline_finished,
+            },
+        );
+        let moved = fix_check_finding(
+            case_id,
+            FixCheckFinding {
+                id: "finding-moved",
+                run_id: "run-before",
+                fingerprint: "fp-moved",
+                title: FIX_CHECK_MOVED_TITLE,
+                severity: Severity::Low,
+                priority: 40,
+                family: Some(FindingFamily::SourceCode),
+                observed_at: baseline_finished,
+            },
+        );
+        let changed = fix_check_finding(
+            case_id,
+            FixCheckFinding {
+                id: "finding-changed",
+                run_id: "run-before",
+                fingerprint: "fp-changed",
+                title: FIX_CHECK_CHANGED_TITLE,
+                severity: Severity::Medium,
+                priority: 30,
+                family: Some(FindingFamily::SourceCode),
+                observed_at: baseline_finished,
+            },
+        );
+        let new_finding = fix_check_finding(
+            case_id,
+            FixCheckFinding {
+                id: "finding-new",
+                run_id: "run-after",
+                fingerprint: "fp-new",
+                title: FIX_CHECK_NEW_TITLE,
+                severity: Severity::Critical,
+                priority: 100,
+                family: Some(FindingFamily::SourceCode),
+                observed_at: current_finished,
+            },
+        );
+        for finding in [&secret, &lockfile, &moved, &changed] {
+            case.finding_observations.push(fix_check_observation(
+                finding,
+                "run-before",
+                baseline_finished,
+            ));
+        }
+        for finding in [&moved, &changed, &new_finding] {
+            case.finding_observations.push(fix_check_observation(
+                finding,
+                "run-after",
+                current_finished,
+            ));
+        }
+        case.findings
+            .extend([secret, lockfile, moved, changed, new_finding]);
+
+        let selected_diffs = vec![
+            fix_check_diff(
+                "fp-secret",
+                Some("finding-secret"),
+                None,
+                FindingDiffStatus::Resolved,
+                Some(Severity::High),
+                None,
+                false,
+            ),
+            fix_check_diff(
+                "fp-lockfile",
+                Some("finding-lockfile"),
+                None,
+                FindingDiffStatus::Resolved,
+                Some(Severity::Medium),
+                None,
+                false,
+            ),
+            fix_check_diff(
+                "fp-moved",
+                Some("finding-moved"),
+                Some("finding-moved"),
+                FindingDiffStatus::StillPresent,
+                Some(Severity::Low),
+                Some(Severity::Low),
+                true,
+            ),
+            fix_check_diff(
+                "fp-changed",
+                Some("finding-changed"),
+                Some("finding-changed"),
+                FindingDiffStatus::Changed,
+                Some(Severity::Medium),
+                Some(Severity::Medium),
+                false,
+            ),
+            fix_check_diff(
+                "fp-new",
+                None,
+                Some("finding-new"),
+                FindingDiffStatus::NewlyObserved,
+                None,
+                Some(Severity::Critical),
+                false,
+            ),
+        ];
+        let baseline_hash = "0123456789abcdef".repeat(4);
+        let current_hash = "fedcba9876543210".repeat(4);
+        let copies = vec![
+            crate::domain::LocalInputChange {
+                asset_id: "asset-folder".into(),
+                baseline_sha256: baseline_hash,
+                current_sha256: current_hash,
+                changed: true,
+            },
+            crate::domain::LocalInputChange {
+                asset_id: "asset-folder".into(),
+                baseline_sha256: "a".repeat(64),
+                current_sha256: "a".repeat(64),
+                changed: false,
+            },
+        ];
+        case.comparisons.push(VerificationComparison {
+            id: "comparison-stale".into(),
+            case_id: case_id.into(),
+            baseline_run_id: "run-before".into(),
+            current_run_id: "run-after".into(),
+            created_at: fix_check_time("2026-10-06T12:00:00Z"),
+            diffs: vec![fix_check_diff(
+                "stale-comparison-fingerprint",
+                None,
+                None,
+                FindingDiffStatus::Resolved,
+                Some(Severity::Low),
+                None,
+                false,
+            )],
+            complete: true,
+            completeness_issues: Vec::new(),
+            local_input_changes: vec![crate::domain::LocalInputChange {
+                asset_id: "asset-folder".into(),
+                baseline_sha256: "f".repeat(64),
+                current_sha256: "f".repeat(64),
+                changed: true,
+            }],
+        });
+        case.comparisons.push(VerificationComparison {
+            id: "comparison-selected".into(),
+            case_id: case_id.into(),
+            baseline_run_id: "run-before".into(),
+            current_run_id: "run-after".into(),
+            created_at: fix_check_time("2026-10-06T10:00:00Z"),
+            diffs: selected_diffs,
+            complete: true,
+            completeness_issues: Vec::new(),
+            local_input_changes: copies,
+        });
+        case
+    }
+
+    fn html_for_run(
+        case: &AssessmentCase,
+        run_id: &str,
+        redaction: RedactionProfile,
+        locale: crate::export::ReportLocale,
+    ) -> String {
+        String::from_utf8(
+            html_report_bytes(
+                case,
+                run_id,
+                &ExportOptions {
+                    redaction,
+                    include_raw_artifacts: false,
+                    locale,
+                },
+            )
+            .expect("html export"),
+        )
+        .expect("utf-8 html")
+    }
+
+    fn verification_comparison_section(html: &str) -> &str {
+        const START: &str = "<section class=\"verification-comparison\">";
+        let start = html
+            .find(START)
+            .unwrap_or_else(|| panic!("comparison section missing from {html}"));
+        let rest = &html[start..];
+        let end = rest
+            .find("</section>")
+            .expect("comparison section is closed");
+        &rest[..end + "</section>".len()]
+    }
+
+    fn assert_in_order(haystack: &str, needles: &[&str]) {
+        let mut search_from = 0usize;
+        for needle in needles {
+            let found = haystack[search_from..]
+                .find(needle)
+                .unwrap_or_else(|| panic!("missing {needle} in {haystack}"));
+            search_from += found + needle.len();
+        }
+    }
+
+    #[test]
+    fn html_fix_check_report_states_what_changed_since_the_earlier_scan() {
+        let case = fix_check_case(Some(FindingFamily::Secret));
+        let english = html_for_run(
+            &case,
+            "run-after",
+            RedactionProfile::None,
+            crate::export::ReportLocale::En,
+        );
+        let chinese = html_for_run(
+            &case,
+            "run-after",
+            RedactionProfile::None,
+            crate::export::ReportLocale::ZhHant,
+        );
+        let english_section = verification_comparison_section(&english);
+        let chinese_section = verification_comparison_section(&chinese);
+        println!("EN SECTION:\n{english_section}");
+        println!("ZH SECTION:\n{chinese_section}");
+
+        let summary_at = english
+            .find("<section class=\"executive-summary\">")
+            .expect("in short");
+        let after_summary = &english[summary_at..];
+        let summary_close =
+            after_summary.find("</section>").expect("in short closes") + "</section>".len();
+        assert!(
+            after_summary[summary_close..]
+                .starts_with("<section class=\"verification-comparison\">")
+        );
+        let section_at = english.find(english_section).expect("section");
+        assert!(
+            english[section_at + english_section.len()..]
+                .starts_with("<section class=\"severity-profile\">")
+        );
+
+        assert_in_order(
+            english_section,
+            &[
+                "<h2>Compared with the earlier scan</h2>",
+                "<p>Compared with Scan 1, finished 2026-10-01 15:04:05 UTC.</p>",
+                concat!(
+                    "<div class=\"kpi-row\">",
+                    "<div class=\"kpi kpi--complete\"><span class=\"kpi__value\">2</span><span class=\"kpi__label\">No longer observed</span></div>",
+                    "<div class=\"kpi kpi--problems\"><span class=\"kpi__value\">2</span><span class=\"kpi__label\">Still present</span></div>",
+                    "<div class=\"kpi kpi--partial\"><span class=\"kpi__value\">1</span><span class=\"kpi__label\">New</span></div>",
+                    "<div class=\"kpi kpi--quiet\"><span class=\"kpi__value\">0</span><span class=\"kpi__label\">Verification incomplete</span></div>",
+                    "</div>"
+                ),
+                "<p>1 of the still-present problems only moved to another line in the same file.</p>",
+                "<h3>No longer observed</h3>",
+                "<span class=\"pill pill--high\">High</span> Token file in private-folder-alpha <span class=\"finding-asset\">— private-folder-alpha</span>",
+                "<span class=\"pill pill--medium\">Medium</span> Outdated lockfile &amp; notes <span class=\"finding-asset\">— private-folder-alpha</span>",
+                "The same completed check no longer found this problem. Review the new evidence, then close it.",
+                "<h3>New</h3>",
+                "<span class=\"pill pill--critical\">Critical</span> <a href=\"#f1\">New debug endpoint</a> <span class=\"finding-asset\">— private-folder-alpha</span>",
+                FIX_CHECK_SECRET_NOTE,
+                "<details class=\"technical\"><summary><strong>Scan run IDs</strong></summary>",
+                "<dt>Before-fix scan</dt><dd><code>run-before</code></dd>",
+                "<dt>After-fix check</dt><dd><code>run-after</code></dd>",
+                "<h3>Folder copies compared</h3>",
+                "private-folder-alpha: 0123456789ab → fedcba987654",
+                "private-folder-alpha: the same files in both scans (aaaaaaaaaaaa)",
+            ],
+        );
+        assert_in_order(
+            chinese_section,
+            &[
+                "<h2>與先前掃描的比較</h2>",
+                "<p>與 2026年10月01日 15:04:05 UTC 完成的第 1 次掃描比較。</p>",
+                concat!(
+                    "<div class=\"kpi-row\">",
+                    "<div class=\"kpi kpi--complete\"><span class=\"kpi__value\">2</span><span class=\"kpi__label\">這次沒有再看到</span></div>",
+                    "<div class=\"kpi kpi--problems\"><span class=\"kpi__value\">2</span><span class=\"kpi__label\">仍然存在</span></div>",
+                    "<div class=\"kpi kpi--partial\"><span class=\"kpi__value\">1</span><span class=\"kpi__label\">新出現</span></div>",
+                    "<div class=\"kpi kpi--quiet\"><span class=\"kpi__value\">0</span><span class=\"kpi__label\">驗證未完成</span></div>",
+                    "</div>"
+                ),
+                "<p>其中 1 個仍然存在的問題只是在同一個檔案中換了行號。</p>",
+                "<h3>這次沒有再看到</h3>",
+                "<span class=\"pill pill--high\">高</span> Token file in private-folder-alpha <span class=\"finding-asset\">— private-folder-alpha</span>",
+                "<span class=\"pill pill--medium\">中</span> Outdated lockfile &amp; notes <span class=\"finding-asset\">— private-folder-alpha</span>",
+                "相同檢查已完成，且沒有再找到這個問題；查看新證據後即可關閉。",
+                "<h3>新出現</h3>",
+                "<span class=\"pill pill--critical\">嚴重</span> <a href=\"#f1\">New debug endpoint</a>",
+                FIX_CHECK_SECRET_NOTE_ZH,
+                "<summary><strong>掃描輪次 ID</strong></summary>",
+                "<dt>修復前掃描</dt><dd><code>run-before</code></dd>",
+                "<dt>修復後複驗</dt><dd><code>run-after</code></dd>",
+                "<h3>比較的資料夾副本</h3>",
+                "private-folder-alpha：0123456789ab → fedcba987654",
+                "private-folder-alpha：兩次掃描的檔案相同（aaaaaaaaaaaa）",
+            ],
+        );
+        for section in [english_section, chinese_section] {
+            assert!(!section.contains(FIX_CHECK_MOVED_TITLE), "{section}");
+            assert!(!section.contains(FIX_CHECK_CHANGED_TITLE), "{section}");
+            assert!(
+                !section.contains("stale-comparison-fingerprint"),
+                "{section}"
+            );
+            assert!(!section.contains("ffffffffffff"), "{section}");
+            assert!(!section.contains("0123456789abcdef"), "{section}");
+            assert!(!section.contains("fedcba9876543210"), "{section}");
+            assert!(!section.contains("aaaaaaaaaaaaa"), "{section}");
+            assert!(
+                !section.contains("<details class=\"technical\" open"),
+                "{section}"
+            );
+            assert!(
+                !section.contains("Verification comparison incomplete"),
+                "{section}"
+            );
+            assert!(!section.contains("複驗比對未完成"), "{section}");
+            assert!(
+                !section.contains(
+                    "The same rule still finds this problem in the same file; only its line moved."
+                ),
+                "{section}"
+            );
+        }
+        assert!(english.contains(FIX_CHECK_MOVED_TITLE));
+        assert!(english.contains(FIX_CHECK_CHANGED_TITLE));
+    }
+
+    #[test]
+    fn html_fix_check_comparison_is_absent_unless_this_run_is_the_saved_current_run() {
+        let case = fix_check_case(Some(FindingFamily::Secret));
+        let baseline = html_for_run(
+            &case,
+            "run-before",
+            RedactionProfile::None,
+            crate::export::ReportLocale::En,
+        );
+        let mut cleared = case.clone();
+        cleared.comparisons.clear();
+        let baseline_without_comparison = html_for_run(
+            &cleared,
+            "run-before",
+            RedactionProfile::None,
+            crate::export::ReportLocale::En,
+        );
+        assert_eq!(baseline, baseline_without_comparison);
+        assert!(!baseline.contains("Compared with the earlier scan"));
+        assert!(!baseline.contains("與先前掃描的比較"));
+
+        let current = html_for_run(
+            &case,
+            "run-after",
+            RedactionProfile::None,
+            crate::export::ReportLocale::En,
+        );
+        let current_without_comparison = html_for_run(
+            &cleared,
+            "run-after",
+            RedactionProfile::None,
+            crate::export::ReportLocale::En,
+        );
+        assert_ne!(current, current_without_comparison);
+        assert!(!current_without_comparison.contains("Compared with the earlier scan"));
+        assert!(!current_without_comparison.contains("verification-comparison"));
+
+        let mut missing_baseline = case.clone();
+        missing_baseline
+            .comparisons
+            .last_mut()
+            .expect("selected comparison")
+            .baseline_run_id = "missing-run".into();
+        let missing = html_for_run(
+            &missing_baseline,
+            "run-after",
+            RedactionProfile::None,
+            crate::export::ReportLocale::En,
+        );
+        assert_eq!(missing, current_without_comparison);
+        assert!(!missing.contains("stale-comparison-fingerprint"));
+        assert!(!missing.contains(FIX_CHECK_TOKEN_TITLE));
+    }
+
+    #[test]
+    fn html_fix_check_report_says_when_the_comparison_is_incomplete() {
+        let mut case = fix_check_case(Some(FindingFamily::Secret));
+        {
+            let comparison = case.comparisons.last_mut().expect("selected comparison");
+            comparison.complete = false;
+            comparison
+                .completeness_issues
+                .push(crate::domain::FindingDiffReason {
+                    code: FindingDiffReasonCode::CoordinateNotCompleted,
+                    engine_id: Some("test-engine".into()),
+                    asset_id: Some("asset-folder".into()),
+                    detail: "RAW-COMPLETENESS-DETAIL".into(),
+                });
+        }
+        let english = html_for_run(
+            &case,
+            "run-after",
+            RedactionProfile::None,
+            crate::export::ReportLocale::En,
+        );
+        let chinese = html_for_run(
+            &case,
+            "run-after",
+            RedactionProfile::None,
+            crate::export::ReportLocale::ZhHant,
+        );
+        let english_section = verification_comparison_section(&english);
+        let chinese_section = verification_comparison_section(&chinese);
+        assert!(english_section.contains("<strong>Verification comparison incomplete</strong>"));
+        assert!(english_section.contains(
+            "Some scanner/target comparisons were incomplete or used different comparison inputs. Affected findings stay under Verification incomplete and are not counted as fixed."
+        ));
+        assert!(english_section.contains("Scanner/target comparisons needing attention: 1"));
+        assert!(chinese_section.contains("<strong>複驗比對未完成</strong>"));
+        assert!(chinese_section.contains(
+            "部分掃描工具／目標的比較未完成，或使用了不同的比較條件；受影響的問題會保留在「驗證未完成」，不會算成已修復。"
+        ));
+        assert!(chinese_section.contains("需要處理的掃描工具／目標比較：1"));
+        assert!(english_section.contains(
+            "<span class=\"kpi__value\">0</span><span class=\"kpi__label\">Verification incomplete</span>"
+        ));
+        assert!(!english.contains("RAW-COMPLETENESS-DETAIL"));
+        assert!(!chinese.contains("RAW-COMPLETENESS-DETAIL"));
+        assert!(!english.contains("Scanner mappings changed between these scans"));
+    }
+
+    #[test]
+    fn html_fix_check_report_redacts_resolved_titles_and_folder_hashes() {
+        let case = fix_check_case(Some(FindingFamily::Secret));
+        let plain = html_for_run(
+            &case,
+            "run-after",
+            RedactionProfile::None,
+            crate::export::ReportLocale::En,
+        );
+        let redacted = html_for_run(
+            &case,
+            "run-after",
+            RedactionProfile::Standard,
+            crate::export::ReportLocale::En,
+        );
+        let plain_section = verification_comparison_section(&plain);
+        let redacted_section = verification_comparison_section(&redacted);
+        assert!(plain_section.contains(FIX_CHECK_TOKEN_TITLE));
+        assert!(plain_section.contains("private-folder-alpha: 0123456789ab → fedcba987654"));
+        assert!(!plain_section.contains("[redacted snapshot hash]"));
+        assert!(redacted_section.contains(
+            "<span class=\"pill pill--high\">High</span> Token file in Asset 1 <span class=\"finding-asset\">— Asset 1</span>"
+        ));
+        assert!(
+            redacted_section
+                .contains("Asset 1: [redacted snapshot hash] → [redacted snapshot hash]")
+        );
+        assert!(
+            redacted_section
+                .contains("Asset 1: the same files in both scans ([redacted snapshot hash])")
+        );
+        assert!(!redacted_section.contains(FIX_CHECK_ASSET));
+        assert!(!redacted_section.contains("0123456789ab"));
+        assert!(!redacted_section.contains("fedcba987654"));
+        assert!(!redacted_section.contains("[redacted sn →"));
+        assert!(!redacted.contains(FIX_CHECK_ASSET));
+        assert!(redacted_section.contains("Outdated lockfile &amp; notes"));
+
+        let redacted_zh = html_for_run(
+            &case,
+            "run-after",
+            RedactionProfile::Standard,
+            crate::export::ReportLocale::ZhHant,
+        );
+        let redacted_zh_section = verification_comparison_section(&redacted_zh);
+        assert!(redacted_zh_section.contains("Token file in Asset 1"));
+        assert!(
+            redacted_zh_section
+                .contains("Asset 1：[redacted snapshot hash] → [redacted snapshot hash]")
+        );
+        assert!(!redacted_zh_section.contains(FIX_CHECK_ASSET));
+    }
+
+    #[test]
+    fn html_fix_check_report_omits_the_secret_sentence_unless_a_resolved_item_is_a_secret() {
+        let source = fix_check_case(Some(FindingFamily::SourceCode));
+        for locale in [
+            crate::export::ReportLocale::En,
+            crate::export::ReportLocale::ZhHant,
+        ] {
+            let html = html_for_run(&source, "run-after", RedactionProfile::None, locale);
+            let section = verification_comparison_section(&html);
+            assert!(
+                section.contains("Outdated lockfile &amp; notes"),
+                "{section}"
+            );
+            assert!(!section.contains(FIX_CHECK_SECRET_NOTE), "{section}");
+            assert!(!section.contains(FIX_CHECK_SECRET_NOTE_ZH), "{section}");
+        }
+
+        let mcp = fix_check_case(Some(FindingFamily::McpSecret));
+        let english = html_for_run(
+            &mcp,
+            "run-after",
+            RedactionProfile::None,
+            crate::export::ReportLocale::En,
+        );
+        let chinese = html_for_run(
+            &mcp,
+            "run-after",
+            RedactionProfile::None,
+            crate::export::ReportLocale::ZhHant,
+        );
+        assert!(verification_comparison_section(&english).contains(FIX_CHECK_SECRET_NOTE));
+        assert!(verification_comparison_section(&chinese).contains(FIX_CHECK_SECRET_NOTE_ZH));
+    }
+
+    #[test]
+    fn html_fix_check_report_falls_back_when_the_resolved_finding_or_baseline_report_is_unavailable()
+     {
+        let mut missing_finding = fix_check_case(Some(FindingFamily::Secret));
+        {
+            let diff = missing_finding
+                .comparisons
+                .last_mut()
+                .expect("selected comparison")
+                .diffs
+                .iter_mut()
+                .find(|diff| diff.fingerprint == "fp-secret")
+                .expect("secret diff");
+            diff.baseline_finding_id = Some("missing-finding".into());
+            diff.fingerprint = "fp-fallback-title".into();
+        }
+        let missing_html = html_for_run(
+            &missing_finding,
+            "run-after",
+            RedactionProfile::None,
+            crate::export::ReportLocale::En,
+        );
+        let missing_section = verification_comparison_section(&missing_html);
+        assert!(missing_section.contains(
+            "<span class=\"pill pill--high\">High</span> fp-fallback-title <span class=\"finding-asset\">"
+        ));
+        assert!(!missing_html.contains(FIX_CHECK_TOKEN_TITLE));
+        assert!(missing_section.contains("Outdated lockfile &amp; notes"));
+
+        let mut unavailable = fix_check_case(Some(FindingFamily::Secret));
+        unavailable
+            .scan_runs
+            .iter_mut()
+            .find(|run| run.id == "run-before")
+            .expect("baseline run")
+            .completed_at = None;
+        let unavailable_html = html_for_run(
+            &unavailable,
+            "run-after",
+            RedactionProfile::None,
+            crate::export::ReportLocale::En,
+        );
+        let unavailable_section = verification_comparison_section(&unavailable_html);
+        assert!(
+            unavailable_section
+                .contains("<p>Compared with Scan 1, finished 2026-10-01 15:00:00 UTC.</p>")
+        );
+        assert!(unavailable_section.contains(
+            "<span class=\"pill pill--high\">High</span> fp-secret <span class=\"finding-asset\">"
+        ));
+        assert!(unavailable_section.contains(
+            "<span class=\"pill pill--medium\">Medium</span> fp-lockfile <span class=\"finding-asset\">"
+        ));
+        assert!(!unavailable_html.contains(FIX_CHECK_TOKEN_TITLE));
+        assert!(!unavailable_html.contains("Outdated lockfile"));
+        assert!(!unavailable_section.contains(FIX_CHECK_SECRET_NOTE));
     }
 }
