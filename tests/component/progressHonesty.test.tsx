@@ -1583,3 +1583,57 @@ test.each([
     expect(container.querySelector('a[href="#findings"]')).toBeNull();
   },
 );
+
+test.each([
+  ["en", "This scan partly completed", "This scan has stopped", "Results from the completed checks are saved and ready to review."],
+  ["zh-TW", "這次掃描部分完成", "這次掃描已停止", "已完成檢查的結果已保存，可以開始查看"],
+] as const)(
+  "a %s partial terminal run says the scan partly completed",
+  (locale, title, stoppedTitle, body) => {
+    window.localStorage.setItem(localeStorageKey, locale);
+    const { container } = renderProgress(run([
+      engine("finished-check", "completed", { progress: 100 }),
+      engine("unfinished-check", "partial"),
+    ], "partial"));
+
+    const activity = container.querySelector(".scan-activity__current");
+    expect(activity?.textContent).toContain(title);
+    expect(activity?.textContent).toContain(body);
+    expect(container.textContent).not.toContain(stoppedTitle);
+  },
+);
+
+test("an expired inventory check does not ask for a knowledge update", () => {
+  const expiredKnowledge = {
+    kind: "embedded" as const,
+    identifier: "pinned-catalog",
+    pinState: "pinned_or_not_applicable" as const,
+    knowledgeDate: "2023-01-10",
+    supportUntil: "2023-04-10",
+  };
+  const catalog = { kind: "catalog_engine" as const };
+  const inventoryOnly = renderProgress(run([
+    engine("cloudquery", "completed", {
+      progress: 100,
+      taskKind: catalog,
+      knowledgeInput: expiredKnowledge,
+    }),
+  ], "completed"));
+  expect(inventoryOnly.container.textContent).not.toContain("Update needed before checking fixes again");
+
+  cleanup();
+  const withSecurityCheck = renderProgress(run([
+    engine("cloudquery", "completed", {
+      progress: 100,
+      taskKind: catalog,
+      knowledgeInput: expiredKnowledge,
+    }),
+    engine("prowler", "completed", {
+      progress: 100,
+      taskKind: catalog,
+      knowledgeInput: expiredKnowledge,
+    }),
+  ], "completed"));
+  expect(withSecurityCheck.container.textContent).toContain("Update needed before checking fixes again");
+  expect(withSecurityCheck.container.textContent).toContain("Checks needing newer security knowledge: 1.");
+});

@@ -167,7 +167,7 @@ test("a gateway preparation failure is a stopped pre-scanner attempt, never a fi
 
   assert.equal(activity.state, "gateway_preparation_failed");
   assert.ok(activity.events.some((event) => event.code === "gateway_preparation_failed"));
-  assert.ok(activity.events.some((event) => event.code === "run_stopped"));
+  assert.ok(activity.events.some((event) => event.code === "run_failed"));
   assert.ok(activity.events.some((event) => event.code === "check_attempts_started"));
   assert.ok(!activity.events.some((event) => event.code === "checks_completed"));
   assert.ok(!activity.events.some((event) => event.code === "run_completed"));
@@ -189,16 +189,69 @@ test("terminal activity counts each outcome instead of calling every check finis
   }));
   const codes = new Set(activity.events.map((event) => event.code));
 
+  assert.equal(activity.state, "partly_completed");
   for (const code of [
     "checks_completed",
     "checks_failed",
     "checks_partly_completed",
     "checks_cancelled",
     "checks_not_started",
-    "run_stopped",
+    "run_partly_completed",
   ] as const) assert.ok(codes.has(code), code);
   assert.ok(!codes.has("run_completed"));
+  assert.ok(!codes.has("run_stopped"));
+  assert.ok(!codes.has("run_failed"));
 });
+
+test("a failed run and a cancelled run keep different terminal states", () => {
+  const finishedAt = "2026-08-26T13:06:00Z";
+  const failed = buildScanActivity(run({
+    status: "failed",
+    finishedAt,
+    engineRuns: [engine({ status: "failed", finishedAt })],
+  }));
+  assert.equal(failed.state, "failed");
+  assert.ok(failed.events.some((event) => event.code === "run_failed"));
+  assert.ok(!failed.events.some((event) => event.code === "run_stopped"));
+  assert.ok(!failed.events.some((event) => event.code === "run_partly_completed"));
+
+  const cancelled = buildScanActivity(run({
+    status: "cancelled",
+    finishedAt,
+    engineRuns: [engine({ status: "cancelled", finishedAt })],
+  }));
+  assert.equal(cancelled.state, "stopped");
+  assert.ok(cancelled.events.some((event) => event.code === "run_stopped"));
+  assert.ok(!cancelled.events.some((event) => event.code === "run_failed"));
+  assert.ok(!cancelled.events.some((event) => event.code === "run_partly_completed"));
+});
+
+for (const [status, engineStatus, terminalEvent] of [
+  ["partial", "partial", "run_partly_completed"],
+  ["failed", "failed", "run_failed"],
+  ["cancelled", "cancelled", "run_stopped"],
+] as const) {
+  test(`a gateway preparation failure stays a preparation failure when the run is ${status}`, () => {
+    const finishedAt = "2026-08-26T13:02:00Z";
+    const activity = buildScanActivity(run({
+      status,
+      progress: 0,
+      finishedAt,
+      engineRuns: [engine({
+        status: engineStatus,
+        progress: 0,
+        phase: "failed",
+        finishedAt,
+        failureKind: "gateway_preparation_failed",
+      })],
+    }));
+
+    assert.equal(activity.state, "gateway_preparation_failed");
+    assert.ok(activity.events.some((event) => event.code === "gateway_preparation_failed"));
+    assert.ok(activity.events.some((event) => event.code === terminalEvent), terminalEvent);
+    assert.ok(!activity.events.some((event) => event.code === "run_completed"));
+  });
+}
 
 test("first-layer activity identifies the active check but never carries scanner output or target ids", () => {
   const serialized = JSON.stringify(buildScanActivity(run()));

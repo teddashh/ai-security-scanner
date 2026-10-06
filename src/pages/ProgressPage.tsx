@@ -18,6 +18,7 @@ import {
 import { scanRequestOutcomeBeginnerSummary } from "../scanRequestOutcomePresentation";
 import { scanRunIdentityPresentation } from "../scanRunIdentityPresentation";
 import { scanRunOverallProgress } from "../scanRunProgress";
+import { engineRunResultKind } from "../checkResultKind";
 import {
   buildScanActivity,
   type ScanActivityEvent,
@@ -432,6 +433,17 @@ const copy = {
         zhTW: "準備新的專用連線並重試檢查。",
       },
     },
+    partly_completed: {
+      title: { en: "This scan partly completed", zhTW: "這次掃描部分完成" },
+      body: {
+        en: "Results from the completed checks are saved and ready to review. Open each unfinished check and follow its next action.",
+        zhTW: "已完成檢查的結果已保存，可以開始查看；請開啟每項未完成的檢查並執行下一步。",
+      },
+    },
+    failed: {
+      title: { en: "This scan failed", zhTW: "這次掃描失敗" },
+      body: { en: "Open each unfinished check and follow its next action.", zhTW: "開啟每項未完成的檢查並執行下一步。" },
+    },
     stopped: {
       title: { en: "This scan has stopped", zhTW: "這次掃描已停止" },
       body: { en: "Open each unfinished check and follow its next action.", zhTW: "開啟每項未完成的檢查並執行下一步。" },
@@ -452,6 +464,8 @@ const copy = {
     },
     run_completed: { en: "Scan completed", zhTW: "掃描已完成" },
     run_no_checks_completed: { en: "No checks completed", zhTW: "沒有完成任何檢查" },
+    run_partly_completed: { en: "Scan partly completed", zhTW: "掃描部分完成" },
+    run_failed: { en: "Scan failed", zhTW: "掃描失敗" },
     run_stopped: { en: "Scan stopped", zhTW: "掃描已停止" },
     run_paused: { en: "Scan paused", zhTW: "掃描已暫停" },
   },
@@ -1203,6 +1217,11 @@ export function ProgressPage({
   const settledSkippedCount = selectedRun.engineRuns.filter(isSettledSkippedCheck).length;
   const incompleteCount = stateCounts.partial + stateCounts.failed + (stateCounts.not_executed - settledSkippedCount) + stateCounts.cancelled + unevaluatedCompletedCheckCount;
   const incompleteNoticeVisible = !savedPlanAfterRestart && !blocked && !sharedInfrastructureFailure && incompleteCount > 0;
+  // The failed and cancelled bodies repeat the incomplete notice. The
+  // partly-completed body also says the finished checks are ready to review,
+  // which that notice does not, so it stays visible.
+  const suppressActivityBody = (activity?.state === "stopped" || activity?.state === "failed")
+    && incompleteNoticeVisible;
   const terminalCount = terminalEngineStates.reduce((sum, state) => sum + stateCounts[state], 0);
   const completedAssetCount = Math.min(selectedRun.totalAssetCount, selectedRun.coveredAssetCount);
   const uncoveredAssetCount = Math.max(0, selectedRun.totalAssetCount - completedAssetCount);
@@ -1225,8 +1244,12 @@ export function ProgressPage({
     selectedRun.engineRuns.length - completedCheckCount - attentionCheckCount - settledSkippedCount,
   );
   const today = new Date().toISOString().slice(0, 10);
+  // Only a security check has detection knowledge to update. An inventory
+  // check's past support date stays in the report's coverage and in its
+  // technical details.
   const expiredSupportEngines = selectedRun.engineRuns.filter((engine) =>
-    Boolean(engine.knowledgeInput?.supportUntil && engine.knowledgeInput.supportUntil < today),
+    engineRunResultKind(engine) === "security_check"
+    && Boolean(engine.knowledgeInput?.supportUntil && engine.knowledgeInput.supportUntil < today),
   );
   const knowledgeDates = [...new Set(selectedRun.engineRuns
     .map((engine) => engine.knowledgeInput?.knowledgeDate)
@@ -1560,7 +1583,7 @@ export function ProgressPage({
               {savedPlanAfterRestart
                 ? <p>{text(copy.savedPlanReady)}</p>
                 : (!activity.active || activity.stale)
-                  && !(activity.state === "stopped" && incompleteNoticeVisible)
+                  && !suppressActivityBody
                   && <p>{text(copy.activityStates[activity.state].body)}</p>}
               <span>{text(copy.lastProgress)} · {showDateTime(activity.lastProgressAt)}</span>
               {activity.activeCheckNames.length > 0 && (

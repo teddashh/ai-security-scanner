@@ -412,6 +412,10 @@ test("progress has a bilingual event log before and during every scan route", as
     "項檢查在完成前停止",
     "Scan stopped",
     "掃描已停止",
+    "Scan partly completed",
+    "掃描部分完成",
+    "Scan failed",
+    "掃描失敗",
     "Private scan connection failed",
     "專用掃描連線失敗",
   ]) assert.ok(progress.includes(copy), copy);

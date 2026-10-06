@@ -53,6 +53,7 @@ import {
 } from "../localhostQuickScan";
 import { scanRequestOutcomeBeginnerSummary } from "../scanRequestOutcomePresentation";
 import { scanRunIdentityPresentation } from "../scanRunIdentityPresentation";
+import { legacyCheckResultKind } from "../checkResultKind";
 import { isSettledSkippedCheck } from "../settledSkippedChecks";
 import type {
   BeginnerCheckResultKind,
@@ -1147,17 +1148,6 @@ const partialReportActionDestination = (
   return actionableStep
     ? assetActionDestination(actionableStep.code, "incomplete_failed") ?? "scope"
     : "scope";
-};
-
-/** Conservative fallback for reports saved before `resultKind` was frozen. */
-const legacyCheckResultKind = (
-  checkId: string,
-): "security_check" | "inventory" | "connectivity" => {
-  const normalized = checkId.trim().toLocaleLowerCase("en-US");
-  if (normalized.startsWith("native localhost tcp check on ")) return "connectivity";
-  if (["cloudquery", "steampipe", "syft", "naabu", "httpx", "agentic-radar"].some((engine) =>
-    normalized === engine || normalized.startsWith(`${engine}-`))) return "inventory";
-  return "security_check";
 };
 
 const checkResultKind = (

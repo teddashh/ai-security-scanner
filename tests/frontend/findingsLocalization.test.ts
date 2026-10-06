@@ -58,8 +58,13 @@ test("problem grouping, review decisions, evidence, and navigation remain wired"
   assert.doesNotMatch(source, /交給人員評估的方向/u);
 });
 
-test("the legacy result-kind fallback keeps every inventory engine out of clean security results", () => {
-  const fallback = regionFrom(source, "const legacyCheckResultKind", 12);
+test("the legacy result-kind fallback keeps every inventory engine out of clean security results", async () => {
+  const classification = await readFile(
+    new URL("../../src/checkResultKind.ts", import.meta.url),
+    "utf8",
+  );
+  const fallback = regionFrom(classification, "const INVENTORY_ENGINE_IDS", 16);
+  assert.match(source, /legacyCheckResultKind\(check\.checkId\)/u);
   for (const engine of ["cloudquery", "steampipe", "syft", "naabu", "httpx", "agentic-radar"]) {
     assert.match(fallback, new RegExp(`"${engine}"`, "u"), engine);
   }

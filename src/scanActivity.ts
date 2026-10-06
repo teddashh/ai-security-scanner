@@ -11,6 +11,8 @@ export type ScanActivityState =
   | "completed"
   | "no_checks_completed"
   | "gateway_preparation_failed"
+  | "partly_completed"
+  | "failed"
   | "stopped";
 
 export type ScanActivityEventCode =
@@ -25,6 +27,8 @@ export type ScanActivityEventCode =
   | "gateway_preparation_failed"
   | "run_completed"
   | "run_no_checks_completed"
+  | "run_partly_completed"
+  | "run_failed"
   | "run_stopped"
   | "run_paused";
 
@@ -111,6 +115,8 @@ const activityState = (run: ScanRun): ScanActivityState => {
     if (run.engineRuns.some((engine) => engine.failureKind === "gateway_preparation_failed")) {
       return "gateway_preparation_failed";
     }
+    if (run.status === "partial") return "partly_completed";
+    if (run.status === "failed") return "failed";
     return "stopped";
   }
   if (run.status === "paused") return "paused";
@@ -223,7 +229,13 @@ export const buildScanActivity = (
           occurredAt: run.finishedAt,
         }
       : undefined,
-    run.finishedAt && run.status !== "completed" && run.status !== "no_checks_completed"
+    run.finishedAt && run.status === "partial"
+      ? { id: `run_partly_completed-${run.finishedAt}`, code: "run_partly_completed", occurredAt: run.finishedAt }
+      : undefined,
+    run.finishedAt && run.status === "failed"
+      ? { id: `run_failed-${run.finishedAt}`, code: "run_failed", occurredAt: run.finishedAt }
+      : undefined,
+    run.finishedAt && run.status === "cancelled"
       ? { id: `run_stopped-${run.finishedAt}`, code: "run_stopped", occurredAt: run.finishedAt }
       : undefined,
   ];
