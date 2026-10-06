@@ -19045,6 +19045,54 @@ fn html_local_copy_line(
     }
 }
 
+/// Index of each first-layer problem in the order `problem_findings` lists it.
+fn problem_finding_positions(report: &BeginnerMasterReport) -> BTreeMap<&str, usize> {
+    report
+        .problem_findings()
+        .into_iter()
+        .enumerate()
+        .map(|(index, finding)| (finding.finding_id.as_str(), index))
+        .collect()
+}
+
+/// One status's rows in the report's own order.
+///
+/// A grouped finding takes its representative's position in `problem_findings`,
+/// the same place `html_problem_anchor` uses. A finding that is not in that
+/// list, including a fingerprint fallback, sorts after every finding that is.
+/// Equal positions keep diff order.
+fn ordered_comparison_rows<'a>(
+    diffs: &'a [FindingDiff],
+    status: FindingDiffStatus,
+    report: Option<&BeginnerMasterReport>,
+    finding_id_of: impl Fn(&FindingDiff) -> Option<&str>,
+) -> Vec<&'a FindingDiff> {
+    let positions = report.map(problem_finding_positions);
+    let mut rows = diffs
+        .iter()
+        .filter(|diff| diff.status == status)
+        .collect::<Vec<_>>();
+    rows.sort_by(|left, right| {
+        let position = |diff: &FindingDiff| {
+            let report = report?;
+            let positions = positions.as_ref()?;
+            let finding_id = finding_id_of(diff)?;
+            let anchor_id = report
+                .problem_group(finding_id)
+                .map(|group| group.representative_finding_id.as_str())
+                .unwrap_or(finding_id);
+            positions.get(anchor_id).copied()
+        };
+        match (position(left), position(right)) {
+            (Some(left_at), Some(right_at)) => left_at.cmp(&right_at),
+            (Some(_), None) => std::cmp::Ordering::Less,
+            (None, Some(_)) => std::cmp::Ordering::Greater,
+            (None, None) => std::cmp::Ordering::Equal,
+        }
+    });
+    rows
+}
+
 /// What changed since the earlier scan, when this run is the current side of a
 /// saved fix check. Every other run gets an empty string, so its HTML is unchanged.
 fn html_verification_comparison_section(
@@ -19106,11 +19154,12 @@ fn html_verification_comparison_section(
 
     let mut resolved_rows = String::new();
     let mut any_secret = false;
-    for diff in comparison
-        .diffs
-        .iter()
-        .filter(|diff| diff.status == FindingDiffStatus::Resolved)
-    {
+    for diff in ordered_comparison_rows(
+        &comparison.diffs,
+        FindingDiffStatus::Resolved,
+        baseline_report.as_ref(),
+        |diff| diff.baseline_finding_id.as_deref(),
+    ) {
         let (row, secret) = html_compared_row(
             diff,
             diff.baseline_finding_id.as_deref(),
@@ -19124,11 +19173,12 @@ fn html_verification_comparison_section(
         resolved_rows.push_str(&row);
     }
     let mut new_rows = String::new();
-    for diff in comparison
-        .diffs
-        .iter()
-        .filter(|diff| diff.status == FindingDiffStatus::NewlyObserved)
-    {
+    for diff in ordered_comparison_rows(
+        &comparison.diffs,
+        FindingDiffStatus::NewlyObserved,
+        Some(report),
+        |diff| diff.current_finding_id.as_deref(),
+    ) {
         let (row, _) = html_compared_row(
             diff,
             diff.current_finding_id.as_deref(),
@@ -19240,13 +19290,6 @@ fn html_verification_comparison_section(
             )),
         ));
     }
-    if !new_rows.is_empty() {
-        html.push_str(&format!(
-            "<h3>{}</h3><ul>{}</ul>",
-            html_escape(catalog.text("New", "新出現")),
-            new_rows,
-        ));
-    }
     if any_secret {
         html.push_str(&format!(
             "<p>{}</p>",
@@ -19254,6 +19297,13 @@ fn html_verification_comparison_section(
                 "A secret removed from the files can still be read from version history and copies made earlier. Revoke or rotate it.",
                 "從檔案移除的機密仍可能留在版本紀錄與先前的副本中，請撤銷或更換它。",
             )),
+        ));
+    }
+    if !new_rows.is_empty() {
+        html.push_str(&format!(
+            "<h3>{}</h3><ul>{}</ul>",
+            html_escape(catalog.text("New", "新出現")),
+            new_rows,
         ));
     }
     html.push_str(&format!(
@@ -49140,6 +49190,36 @@ mod tests {
         }
     }
 
+    fn comparison_list<'a>(section: &'a str, heading: &str) -> &'a str {
+        let rest = section
+            .split_once(heading)
+            .unwrap_or_else(|| panic!("missing {heading} in {section}"))
+            .1;
+        let rest = rest
+            .split_once("<ul>")
+            .unwrap_or_else(|| panic!("missing list after {heading} in {section}"))
+            .1;
+        rest.split_once("</ul>")
+            .unwrap_or_else(|| panic!("unclosed list after {heading} in {section}"))
+            .0
+    }
+
+    fn set_fix_check_severity(case: &mut AssessmentCase, finding_id: &str, severity: Severity) {
+        for finding in &mut case.findings {
+            if finding.id == finding_id {
+                finding.severity = severity.clone();
+            }
+        }
+        for observation in &mut case.finding_observations {
+            if observation.finding_id == finding_id {
+                observation.severity = severity.clone();
+                if let Some(snapshot) = &mut observation.finding_snapshot {
+                    snapshot.severity = severity.clone();
+                }
+            }
+        }
+    }
+
     #[test]
     fn html_fix_check_report_states_what_changed_since_the_earlier_scan() {
         let case = fix_check_case(Some(FindingFamily::Secret));
@@ -49194,9 +49274,9 @@ mod tests {
                 "<span class=\"pill pill--high\">High</span> Token file in private-folder-alpha <span class=\"finding-asset\">— private-folder-alpha</span>",
                 "<span class=\"pill pill--medium\">Medium</span> Outdated lockfile &amp; notes <span class=\"finding-asset\">— private-folder-alpha</span>",
                 "The same completed check no longer found this problem. Review the new evidence, then close it.",
+                FIX_CHECK_SECRET_NOTE,
                 "<h3>New</h3>",
                 "<span class=\"pill pill--critical\">Critical</span> <a href=\"#f1\">New debug endpoint</a> <span class=\"finding-asset\">— private-folder-alpha</span>",
-                FIX_CHECK_SECRET_NOTE,
                 "<details class=\"technical\"><summary><strong>Scan run IDs</strong></summary>",
                 "<dt>Before-fix scan</dt><dd><code>run-before</code></dd>",
                 "<dt>After-fix check</dt><dd><code>run-after</code></dd>",
@@ -49223,9 +49303,9 @@ mod tests {
                 "<span class=\"pill pill--high\">高</span> Token file in private-folder-alpha <span class=\"finding-asset\">— private-folder-alpha</span>",
                 "<span class=\"pill pill--medium\">中</span> Outdated lockfile &amp; notes <span class=\"finding-asset\">— private-folder-alpha</span>",
                 "相同檢查已完成，且沒有再找到這個問題；查看新證據後即可關閉。",
+                FIX_CHECK_SECRET_NOTE_ZH,
                 "<h3>新出現</h3>",
                 "<span class=\"pill pill--critical\">嚴重</span> <a href=\"#f1\">New debug endpoint</a>",
-                FIX_CHECK_SECRET_NOTE_ZH,
                 "<summary><strong>掃描輪次 ID</strong></summary>",
                 "<dt>修復前掃描</dt><dd><code>run-before</code></dd>",
                 "<dt>修復後複驗</dt><dd><code>run-after</code></dd>",
@@ -49509,5 +49589,254 @@ mod tests {
         assert!(!unavailable_html.contains(FIX_CHECK_TOKEN_TITLE));
         assert!(!unavailable_html.contains("Outdated lockfile"));
         assert!(!unavailable_section.contains(FIX_CHECK_SECRET_NOTE));
+    }
+
+    #[test]
+    fn html_fix_check_report_lists_changes_in_the_report_order() {
+        let mut case = fix_check_case(Some(FindingFamily::Secret));
+        // The baseline report lists the Critical finding first (priority 70,
+        // then the Low finding at priority 60). Diff order is the reverse,
+        // and the two unmatched rows have no report position.
+        set_fix_check_severity(&mut case, "finding-secret", Severity::Critical);
+        set_fix_check_severity(&mut case, "finding-lockfile", Severity::Low);
+        case.comparisons
+            .iter_mut()
+            .find(|comparison| comparison.id == "comparison-selected")
+            .expect("selected comparison")
+            .diffs = vec![
+            fix_check_diff(
+                "fp-unmatched-first",
+                None,
+                None,
+                FindingDiffStatus::Resolved,
+                None,
+                None,
+                false,
+            ),
+            fix_check_diff(
+                "fp-unmatched-second",
+                None,
+                None,
+                FindingDiffStatus::Resolved,
+                None,
+                None,
+                false,
+            ),
+            fix_check_diff(
+                "fp-lockfile",
+                Some("finding-lockfile"),
+                None,
+                FindingDiffStatus::Resolved,
+                Some(Severity::Low),
+                None,
+                false,
+            ),
+            fix_check_diff(
+                "fp-secret",
+                Some("finding-secret"),
+                None,
+                FindingDiffStatus::Resolved,
+                Some(Severity::Critical),
+                None,
+                false,
+            ),
+            fix_check_diff(
+                "fp-new-unmatched",
+                None,
+                None,
+                FindingDiffStatus::NewlyObserved,
+                None,
+                None,
+                false,
+            ),
+            fix_check_diff(
+                "fp-moved",
+                Some("finding-moved"),
+                Some("finding-moved"),
+                FindingDiffStatus::NewlyObserved,
+                Some(Severity::Low),
+                Some(Severity::Low),
+                false,
+            ),
+            fix_check_diff(
+                "fp-new",
+                None,
+                Some("finding-new"),
+                FindingDiffStatus::NewlyObserved,
+                None,
+                Some(Severity::Critical),
+                false,
+            ),
+        ];
+
+        let html = html_for_run(
+            &case,
+            "run-after",
+            RedactionProfile::None,
+            crate::export::ReportLocale::En,
+        );
+        let section = verification_comparison_section(&html);
+        let resolved = comparison_list(section, "<h3>No longer observed</h3>");
+        let new = comparison_list(section, "<h3>New</h3>");
+        assert_eq!(resolved.matches("<li>").count(), 4, "{resolved}");
+        assert_eq!(new.matches("<li>").count(), 3, "{new}");
+        assert_in_order(
+            section,
+            &[
+                "<h3>No longer observed</h3>",
+                "<span class=\"pill pill--critical\">Critical</span> Token file in private-folder-alpha",
+                "<span class=\"pill pill--low\">Low</span> Outdated lockfile &amp; notes",
+                "fp-unmatched-first",
+                "fp-unmatched-second",
+                "The same completed check no longer found this problem. Review the new evidence, then close it.",
+                FIX_CHECK_SECRET_NOTE,
+                "<h3>New</h3>",
+                "<span class=\"pill pill--critical\">Critical</span> <a href=\"#f1\">New debug endpoint</a>",
+                "<span class=\"pill pill--low\">Low</span> <a href=\"#f2\">Still here after the move</a>",
+                "fp-new-unmatched",
+            ],
+        );
+    }
+
+    #[test]
+    fn html_fix_check_report_places_a_grouped_finding_with_its_representative() {
+        let mut case = crate::report_problem_groups::tests::approved_case();
+        let report = build_beginner_master_report(&case, "run-1").expect("baseline report");
+        let ordered = report.problem_findings();
+        let group = report
+            .problem_groups
+            .iter()
+            .find(|group| {
+                let mut severities = group
+                    .finding_ids
+                    .iter()
+                    .filter_map(|id| {
+                        report
+                            .findings
+                            .iter()
+                            .find(|finding| &finding.finding_id == id)
+                            .map(|finding| finding.severity.clone())
+                    })
+                    .collect::<Vec<_>>();
+                severities.sort();
+                severities.dedup();
+                severities.len() >= 2
+                    && ordered
+                        .iter()
+                        .any(|finding| finding.finding_id == group.representative_finding_id)
+            })
+            .expect("a problem group whose members do not share one severity");
+        let mut members = group
+            .finding_ids
+            .iter()
+            .filter_map(|id| {
+                report
+                    .findings
+                    .iter()
+                    .find(|finding| &finding.finding_id == id)
+            })
+            .collect::<Vec<_>>();
+        members.sort_by(|left, right| left.severity.cmp(&right.severity));
+        let lower = members[0];
+        let higher = members[members.len() - 1];
+        let representative_at = ordered
+            .iter()
+            .position(|finding| finding.finding_id == group.representative_finding_id)
+            .expect("representative");
+        let later = ordered
+            .iter()
+            .enumerate()
+            .find(|(index, finding)| {
+                *index > representative_at && report.problem_group(&finding.finding_id).is_none()
+            })
+            .map(|(_, finding)| finding)
+            .expect("an ungrouped finding after the group");
+        assert_ne!(lower.finding_id, group.representative_finding_id);
+        assert_ne!(lower.severity, higher.severity);
+        assert!(
+            ordered
+                .iter()
+                .all(|finding| finding.finding_id != lower.finding_id),
+            "the lower-severity member is ordered only through its representative"
+        );
+
+        let lower_id = lower.finding_id.clone();
+        let lower_severity = lower.severity.clone();
+        let higher_id = higher.finding_id.clone();
+        let higher_severity = higher.severity.clone();
+        let later_id = later.finding_id.clone();
+        let later_severity = later.severity.clone();
+        let later_title = later.title.clone();
+        let group_title = group.title_english();
+        // Diff order is the later finding, then the lower-severity member, then
+        // the higher-severity member. The two members share the representative's
+        // earlier position and keep this relative order.
+        case.comparisons.push(VerificationComparison {
+            id: "comparison-groups".into(),
+            case_id: case.id.clone(),
+            baseline_run_id: "run-1".into(),
+            current_run_id: "run-1".into(),
+            created_at: case.scan_runs[0].created_at,
+            diffs: vec![
+                fix_check_diff(
+                    "fp-later",
+                    Some(&later_id),
+                    None,
+                    FindingDiffStatus::Resolved,
+                    Some(later_severity.clone()),
+                    None,
+                    false,
+                ),
+                fix_check_diff(
+                    "fp-lower",
+                    Some(&lower_id),
+                    None,
+                    FindingDiffStatus::Resolved,
+                    Some(lower_severity.clone()),
+                    None,
+                    false,
+                ),
+                fix_check_diff(
+                    "fp-higher",
+                    Some(&higher_id),
+                    None,
+                    FindingDiffStatus::Resolved,
+                    Some(higher_severity.clone()),
+                    None,
+                    false,
+                ),
+            ],
+            complete: true,
+            completeness_issues: Vec::new(),
+            local_input_changes: Vec::new(),
+        });
+
+        let html = html_for_run(
+            &case,
+            "run-1",
+            RedactionProfile::None,
+            crate::export::ReportLocale::En,
+        );
+        let section = verification_comparison_section(&html);
+        assert_eq!(
+            comparison_list(section, "<h3>No longer observed</h3>")
+                .matches("<li>")
+                .count(),
+            3,
+            "{section}"
+        );
+        let catalog = HtmlReportCatalog::new(crate::export::ReportLocale::En);
+        let marker = |severity: &Severity, title: &str| {
+            format!(
+                "<span class=\"pill pill--{}\">{}</span> {}",
+                severity_slug(severity),
+                html_escape(&catalog.identifier(&enum_key(severity))),
+                html_escape(title),
+            )
+        };
+        let lower_row = marker(&lower_severity, &group_title);
+        let higher_row = marker(&higher_severity, &group_title);
+        let later_row = marker(&later_severity, &later_title);
+        assert_in_order(section, &[&lower_row, &higher_row, &later_row]);
     }
 }
