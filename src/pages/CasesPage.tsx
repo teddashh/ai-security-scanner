@@ -10,6 +10,7 @@ import {
 } from "../caseForm";
 import { caseDisplayLabels, caseIdentityPresentation } from "../caseIdentityPresentation";
 import { Icon } from "../components/Icon";
+import { LocalFolderRecheck } from "../components/LocalFolderRecheck";
 import { EmptyState, InlineNotice, MetricCard, PageHeader } from "../components/Shared";
 import { StatusPill } from "../components/StatusPill";
 import { loadStoredDemoCases } from "../data/demo";
@@ -29,6 +30,7 @@ import {
   type InternalHostInputError,
   type InternalHostPortsError,
 } from "../internalHostProfile";
+import type { LocalFolderRecheckRow } from "../localFolderRecheck";
 import { scanRunIdentityPresentation } from "../scanRunIdentityPresentation";
 import { isNeverStartedScanRun } from "../freshScanSelection";
 import { isTerminalResultRun, isVerificationBaselineRun } from "../runLifecycle.ts";
@@ -100,6 +102,8 @@ export interface CasesPageProps {
   onSelectVerificationBaseline: (runId: string) => void;
   onStartRescan: (baselineRunId: string) => Promise<void>;
   onOpenVerification: () => void;
+  folderRecheckRows?: readonly LocalFolderRecheckRow[];
+  onChooseFolderAgain?: (assetId: string) => void;
 }
 
 const pageCopy = {
@@ -353,6 +357,7 @@ const pageCopy = {
   },
   handleActiveFirst: { en: "Handle the active run first", zhTW: "先處理未結束的掃描" },
   startVerification: { en: "Start a new check from this baseline", zhTW: "以這次結果開始複驗" },
+  gate: { en: "Choose each folder again first.", zhTW: "請先重新選擇每個資料夾。" },
   unknownZeroTitle: { en: "Add a source to start finding your systems", zhTW: "先加入資料來源，才能開始找出系統" },
   unknownZero: {
     en: "Source status: not connected. Open scan setup and connect the source.",
@@ -644,6 +649,8 @@ export function CasesPage({
   onSelectVerificationBaseline,
   onStartRescan,
   onOpenVerification,
+  folderRecheckRows = [],
+  onChooseFolderAgain = () => {},
 }: CasesPageProps) {
   const { locale, t, text, formatDateTime, formatNumber } = useI18n();
   const displayedCaseLabels = caseDisplayLabels(cases, locale, formatDateTime);
@@ -736,6 +743,7 @@ export function CasesPage({
   const verificationBaselineRuns = runs.filter(isVerificationBaselineRun);
   const activeRun = runs.find((run) => ["queued", "running", "paused"].includes(run.status));
   const selectedVerificationBaseline = verificationBaselineRuns.find((run) => run.id === verificationBaselineRunId);
+  const folderRecheckReady = folderRecheckRows.every((row) => row.state !== "choose_again");
   const additionalPlatforms = selectedDefinition
     ? platformIds.filter((platform) => !selectedDefinition.suggestedPlatforms.includes(platform))
     : platformIds;
@@ -1799,11 +1807,16 @@ export function CasesPage({
               ? text(pageCopy.baselineSelected)
               : text(pageCopy.baselineChoose)}</small>
           </label>
+          {folderRecheckRows.length > 0 && !activeRun && (
+            <LocalFolderRecheck rows={folderRecheckRows} busy={busy} onChooseAgain={onChooseFolderAgain} />
+          )}
           <div className="form-actions">
             <p>{activeRun
               ? text(pageCopy.activeRun, { label: scanRunIdentityPresentation(activeRun, locale) })
-              : text(pageCopy.verificationOutcome)}</p>
-            <button className="button button--primary" type="button" disabled={busy || Boolean(activeRun) || !selectedVerificationBaseline} onClick={() => selectedVerificationBaseline && void onStartRescan(selectedVerificationBaseline.id)}>
+              : !folderRecheckReady
+                ? text(pageCopy.gate)
+                : text(pageCopy.verificationOutcome)}</p>
+            <button className="button button--primary" type="button" disabled={busy || Boolean(activeRun) || !selectedVerificationBaseline || !folderRecheckReady} onClick={() => selectedVerificationBaseline && void onStartRescan(selectedVerificationBaseline.id)}>
               <Icon name="refresh" size={17} />
               {text(busy ? pageCopy.creating : activeRun ? pageCopy.handleActiveFirst : pageCopy.startVerification)}
             </button>

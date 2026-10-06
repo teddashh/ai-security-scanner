@@ -322,6 +322,8 @@ enum SourceCommand {
     DiscoverFromArtifact(SourceArtifactArgs),
     /// Copy one explicitly selected local directory into a bounded read-only snapshot.
     AttachWorkspace(SourceAttachWorkspaceArgs),
+    /// Copy the folder again into a new read-only snapshot for an existing local asset.
+    RefreshWorkspace(SourceRefreshWorkspaceArgs),
     /// List bounded artifact parsers and whether the desktop can capture their provider pages live.
     Connectors,
 }
@@ -384,6 +386,17 @@ struct SourceAttachWorkspaceArgs {
     path: PathBuf,
     #[arg(long, value_enum)]
     profile: WorkspaceInputProfileArg,
+}
+
+#[derive(Debug, Args)]
+struct SourceRefreshWorkspaceArgs {
+    #[arg(long)]
+    case_id: String,
+    #[arg(long)]
+    asset_id: String,
+    /// Absolute path to a directory explicitly selected by the user.
+    #[arg(long, value_name = "PATH")]
+    path: PathBuf,
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -1711,6 +1724,16 @@ fn execute_source(
             )?;
             print_value(&output, json_output)?;
         }
+        SourceCommand::RefreshWorkspace(args) => {
+            let output = refresh_workspace_source(
+                service,
+                artifact_root,
+                &args.case_id,
+                &args.asset_id,
+                &args.path,
+            )?;
+            print_value(&output, json_output)?;
+        }
         SourceCommand::Connectors => {
             // Listing static connector descriptors never ingests or reads an
             // artifact, so it does not need to create a synthetic case root.
@@ -1783,6 +1806,69 @@ fn attach_workspace_source(
         "asset_id": asset_id,
         "asset_kind": asset_kind,
         "snapshot_sha256": snapshot_sha256,
+    }))
+}
+
+fn refresh_workspace_source(
+    service: &CaseService<'_>,
+    artifact_root: &Path,
+    case_id: &str,
+    asset_id: &str,
+    selected_path: &Path,
+) -> AppResult<Value> {
+    if !selected_path.is_absolute() {
+        return Err(AppError::InvalidRequest(
+            "the working-tree selection must be an explicit absolute directory".into(),
+        ));
+    }
+    let case = service.show_case(case_id)?;
+    if case.is_demo || case.status == CaseStatus::Archived {
+        return Err(AppError::NotAuthorized(
+            "demo or archived cases cannot refresh working-tree snapshots".into(),
+        ));
+    }
+    let (source_id, profile) = service.workspace_refresh_target(case_id, asset_id)?;
+    let snapshot = create_workspace_snapshot_with_profile(
+        artifact_root,
+        case_id,
+        &source_id,
+        selected_path,
+        profile,
+        WorkspaceSnapshotLimits::default(),
+    )?;
+    let snapshot_sha256 = snapshot.reference.sha256.clone();
+    let resolved_selected_path = selected_path.canonicalize().map_err(|error| {
+        AppError::InvalidRequest(format!(
+            "selected working-tree directory could not be resolved for output: {error}"
+        ))
+    })?;
+    // Re-resolve through the persisted reference before it enters the case.
+    // This exercises the same no-symlink/hash boundary used by execution.
+    resolve_workspace_snapshot(artifact_root, case_id, &snapshot.reference)?;
+    let updated = service.refresh_workspace_snapshot(case_id, asset_id, snapshot)?;
+    let asset = updated
+        .assets
+        .iter()
+        .find(|asset| asset.id == asset_id)
+        .ok_or_else(|| AppError::Internal("refreshed workspace asset disappeared".into()))?;
+    let previous_sha256 = asset
+        .metadata
+        .get("workspace_snapshot_previous_sha256")
+        .and_then(Value::as_str)
+        .ok_or_else(|| {
+            AppError::Internal("refreshed workspace asset has no previous snapshot hash".into())
+        })?;
+    let change = asset
+        .metadata
+        .get("workspace_snapshot_change")
+        .cloned()
+        .unwrap_or(Value::Null);
+    Ok(json!({
+        "asset_id": asset_id,
+        "path": resolved_selected_path,
+        "previous_sha256": previous_sha256,
+        "snapshot_sha256": snapshot_sha256,
+        "change": change,
     }))
 }
 
@@ -5177,6 +5263,28 @@ mod tests {
                 }
             ));
         }
+    }
+
+    #[test]
+    fn parses_workspace_refresh() {
+        let cli = Cli::try_parse_from([
+            "ai-security-scanner",
+            "source",
+            "refresh-workspace",
+            "--case-id",
+            "case-1",
+            "--asset-id",
+            "asset-1",
+            "--path",
+            "/selected/input",
+        ])
+        .expect("workspace refresh CLI");
+        assert!(matches!(
+            cli.command,
+            Command::Source {
+                command: SourceCommand::RefreshWorkspace(_)
+            }
+        ));
     }
 
     fn managed_qualification_preflight() -> RuntimePreflight {

@@ -2318,6 +2318,139 @@ test("native verification diffs retain their five-way status and structured reas
   }]);
 });
 
+const snapshotSha = (character: string) => character.repeat(64);
+
+const folderAsset = (id: string, metadata: Record<string, unknown>) => ({
+  id,
+  kind: "repository",
+  name: id,
+  provider: null,
+  region: null,
+  identifiers: [],
+  discovered_from: [],
+  candidate: false,
+  owner_confirmed: true,
+  metadata,
+});
+
+test("native local folder copies and comparison hashes keep only well-typed values", () => {
+  const workspace = adaptNativeCase(platformCaseFixture({
+    assets: [
+      folderAsset("kept", {
+        workspace_snapshot_sha256: snapshotSha("a"),
+        workspace_snapshot_saved_at: "2026-10-06T01:02:03Z",
+        workspace_snapshot_previous_sha256: snapshotSha("b"),
+        workspace_snapshot_change: { changed: 2, added: 1, removed: 0, unchanged: 4 },
+      }),
+      folderAsset("partial", {
+        workspace_snapshot_sha256: snapshotSha("c"),
+        workspace_snapshot_saved_at: 12,
+        workspace_snapshot_previous_sha256: null,
+        workspace_snapshot_change: { changed: 1, added: "2", removed: 0, unchanged: 0 },
+      }),
+      folderAsset("redacted-previous", {
+        workspace_snapshot_sha256: snapshotSha("d"),
+        workspace_snapshot_previous_sha256: "[redacted snapshot hash]",
+        workspace_snapshot_change: { changed: 0, added: 0, removed: 0, unchanged: 9 },
+      }),
+      folderAsset("uppercase", {
+        workspace_snapshot_sha256: "A".repeat(64),
+        workspace_snapshot_saved_at: "2026-10-06T01:02:03Z",
+      }),
+      folderAsset("short", { workspace_snapshot_sha256: "a".repeat(63) }),
+    ],
+    comparisons: [{
+      id: "comparison-copies",
+      baseline_run_id: "run-before",
+      current_run_id: "run-after",
+      created_at: "2026-10-06T02:00:00Z",
+      complete: true,
+      diffs: [],
+      local_input_changes: [
+        {
+          asset_id: "kept",
+          baseline_sha256: snapshotSha("a"),
+          current_sha256: snapshotSha("e"),
+          changed: true,
+        },
+        {
+          asset_id: "redacted",
+          baseline_sha256: "[redacted snapshot hash]",
+          current_sha256: "[redacted snapshot hash]",
+          changed: false,
+        },
+        { asset_id: 4, baseline_sha256: snapshotSha("a"), current_sha256: snapshotSha("e"), changed: true },
+        { asset_id: "bad-flag", baseline_sha256: snapshotSha("a"), current_sha256: snapshotSha("e"), changed: "true" },
+        null,
+        { asset_id: "missing" },
+      ],
+    }],
+  }));
+
+  assert.deepEqual(workspace.assets.find((asset) => asset.id === "kept")?.localCopy, {
+    sha256: snapshotSha("a"),
+    savedAt: "2026-10-06T01:02:03Z",
+    previousSha256: snapshotSha("b"),
+    change: { changed: 2, added: 1, removed: 0, unchanged: 4 },
+  });
+  assert.deepEqual(workspace.assets.find((asset) => asset.id === "partial")?.localCopy, {
+    sha256: snapshotSha("c"),
+  });
+  assert.deepEqual(workspace.assets.find((asset) => asset.id === "redacted-previous")?.localCopy, {
+    sha256: snapshotSha("d"),
+    previousSha256: "[redacted snapshot hash]",
+    change: { changed: 0, added: 0, removed: 0, unchanged: 9 },
+  });
+  assert.equal(workspace.assets.find((asset) => asset.id === "uppercase")?.localCopy, undefined);
+  assert.equal(workspace.assets.find((asset) => asset.id === "short")?.localCopy, undefined);
+  assert.deepEqual(workspace.verification?.localInputChanges, [
+    {
+      assetId: "kept",
+      baselineSha256: snapshotSha("a"),
+      currentSha256: snapshotSha("e"),
+      changed: true,
+    },
+    {
+      assetId: "redacted",
+      baselineSha256: "[redacted snapshot hash]",
+      currentSha256: "[redacted snapshot hash]",
+      changed: false,
+    },
+  ]);
+
+  for (const change of [
+    { changed: -1, added: 0, removed: 0, unchanged: 0 },
+    { changed: 1.5, added: 0, removed: 0, unchanged: 0 },
+    { changed: 1, added: 0, removed: 0 },
+    { changed: true, added: 0, removed: 0, unchanged: 0 },
+    null,
+    [1, 0, 0, 0],
+  ]) {
+    const dropped = adaptNativeCase(platformCaseFixture({
+      assets: [folderAsset("repo", {
+        workspace_snapshot_sha256: snapshotSha("f"),
+        workspace_snapshot_change: change,
+      })],
+    }));
+    assert.equal(dropped.assets[0]?.localCopy?.sha256, snapshotSha("f"));
+    assert.equal(dropped.assets[0]?.localCopy?.change, undefined);
+  }
+
+  for (const localInputChanges of [[], { asset_id: "kept" }, undefined]) {
+    const omitted = adaptNativeCase(platformCaseFixture({
+      comparisons: [{
+        id: "comparison-omitted",
+        baseline_run_id: "run-before",
+        current_run_id: "run-after",
+        created_at: "2026-10-06T02:00:00Z",
+        diffs: [],
+        ...(localInputChanges === undefined ? {} : { local_input_changes: localInputChanges }),
+      }],
+    }));
+    assert.equal(Object.hasOwn(omitted.verification ?? {}, "localInputChanges"), false);
+  }
+});
+
 test("native sources expose only an exact non-secret provider binding", () => {
   const workspace = adaptNativeCase(platformCaseFixture({
     data_sources: [{

@@ -862,6 +862,11 @@ pub struct EngineRun {
     /// semantically identical re-approval remains comparable.
     #[serde(default)]
     pub scope_contract_sha256: Option<String>,
+    /// The scope contract without the local-copy content hashes, used only to
+    /// decide whether two runs' coordinates are comparable. Execution and
+    /// resume keep using `scope_contract_sha256`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub comparison_scope_sha256: Option<String>,
     /// Exact grants bound to a per-grant Greenbone or ZAP execution. Other engines
     /// and legacy runs retain their original combined grant contract.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1954,6 +1959,7 @@ pub enum FindingDiffReasonCode {
     EvidenceChanged,
     AffectedAssetsChanged,
     ObservingEnginesChanged,
+    LocationMoved,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -2003,6 +2009,19 @@ pub struct VerificationComparison {
     /// produced a finding and the fingerprint diff is therefore empty.
     #[serde(default)]
     pub completeness_issues: Vec<FindingDiffReason>,
+    /// Workspace copies compared for assets both runs completed. Empty when a
+    /// run did not freeze a workspace snapshot.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub local_input_changes: Vec<LocalInputChange>,
+}
+
+/// One local folder whose earlier scan copy and current copy were compared.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct LocalInputChange {
+    pub asset_id: Id,
+    pub baseline_sha256: String,
+    pub current_sha256: String,
+    pub changed: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

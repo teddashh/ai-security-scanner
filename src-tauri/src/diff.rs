@@ -1,10 +1,13 @@
 use crate::domain::{
-    AssessmentCase, Confidence, EngineRun, EngineRunStatus, FindingDiff, FindingDiffReason,
-    FindingDiffReasonCode, FindingDiffStatus, FindingObservation, Id, KnowledgeInputKind,
-    KnowledgePinState, ScanRun, Severity, VerificationComparison, new_id,
+    AssessmentCase, Confidence, EngineRun, EngineRunStatus, Finding, FindingDiff,
+    FindingDiffReason, FindingDiffReasonCode, FindingDiffStatus, FindingObservation, Id,
+    KnowledgeInputKind, KnowledgePinState, LocalInputChange, ScanRun, Severity,
+    VerificationComparison, new_id,
 };
 use crate::error::{AppError, AppResult};
 use chrono::{DateTime, Utc};
+use serde_json::Value;
+use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 
 /// Compare the observations from two runs in the same case.
@@ -71,7 +74,7 @@ pub fn compare_case_runs_at(
         .cloned()
         .collect::<BTreeSet<_>>();
 
-    let diffs = fingerprints
+    let mut diffs = fingerprints
         .into_iter()
         .map(|fingerprint| {
             compare_fingerprint(
@@ -83,6 +86,8 @@ pub fn compare_case_runs_at(
             )
         })
         .collect::<Vec<_>>();
+    pair_moved_locations(&mut diffs, &baseline, &current);
+    diffs.sort_by(|left, right| left.fingerprint.cmp(&right.fingerprint));
 
     let mut completeness_issues = run_completeness_issues(baseline_run, current_run);
     for diff in &diffs {
@@ -117,6 +122,7 @@ pub fn compare_case_runs_at(
         diffs,
         complete: completeness_issues.is_empty(),
         completeness_issues,
+        local_input_changes: compared_local_input_changes(baseline_run, current_run),
     })
 }
 
@@ -174,6 +180,7 @@ struct AggregatedObservation {
     severity: Severity,
     confidence: Confidence,
     evidence_hashes: BTreeSet<String>,
+    finding_snapshot: Option<Finding>,
 }
 
 fn aggregate_observations<'a>(
@@ -187,6 +194,7 @@ fn aggregate_observations<'a>(
             .and_modify(|aggregate| {
                 if observation.finding_id < aggregate.finding_id {
                     aggregate.finding_id = observation.finding_id.clone();
+                    aggregate.finding_snapshot = observation.finding_snapshot.clone();
                 }
                 aggregate
                     .asset_ids
@@ -211,6 +219,7 @@ fn aggregate_observations<'a>(
                 severity: observation.severity.clone(),
                 confidence: observation.confidence.clone(),
                 evidence_hashes: observation.evidence_hashes.iter().cloned().collect(),
+                finding_snapshot: observation.finding_snapshot.clone(),
             });
     }
 
@@ -250,55 +259,7 @@ fn compare_fingerprint(
                     comparability_issues,
                 )
             } else {
-                let mut changes = Vec::<FindingDiffReason>::new();
-                if baseline.severity != current.severity {
-                    changes.push(reason(
-                        FindingDiffReasonCode::SeverityChanged,
-                        None,
-                        None,
-                        format!(
-                            "severity changed from {} to {}",
-                            severity_name(&baseline.severity),
-                            severity_name(&current.severity)
-                        ),
-                    ));
-                }
-                if baseline.evidence_hashes != current.evidence_hashes {
-                    changes.push(reason(
-                        FindingDiffReasonCode::EvidenceChanged,
-                        None,
-                        None,
-                        "evidence hashes changed".into(),
-                    ));
-                }
-                if baseline.confidence != current.confidence {
-                    changes.push(reason(
-                        FindingDiffReasonCode::ConfidenceChanged,
-                        None,
-                        None,
-                        format!(
-                            "confidence changed from {} to {}",
-                            confidence_name(&baseline.confidence),
-                            confidence_name(&current.confidence)
-                        ),
-                    ));
-                }
-                if baseline.asset_ids != current.asset_ids {
-                    changes.push(reason(
-                        FindingDiffReasonCode::AffectedAssetsChanged,
-                        None,
-                        None,
-                        "affected assets changed".into(),
-                    ));
-                }
-                if baseline.engine_ids != current.engine_ids {
-                    changes.push(reason(
-                        FindingDiffReasonCode::ObservingEnginesChanged,
-                        None,
-                        None,
-                        "observing engines changed".into(),
-                    ));
-                }
+                let changes = observation_change_reasons(baseline, current);
 
                 if changes.is_empty() {
                     (
@@ -576,10 +537,20 @@ fn engine_identity_issues(
         return issues;
     }
 
+    let (baseline_scope, current_scope) = match (
+        baseline.comparison_scope_sha256.as_ref(),
+        current.comparison_scope_sha256.as_ref(),
+    ) {
+        (Some(baseline_scope), Some(current_scope)) => (Some(baseline_scope), Some(current_scope)),
+        _ => (
+            baseline.scope_contract_sha256.as_ref(),
+            current.scope_contract_sha256.as_ref(),
+        ),
+    };
     compare_identity_field(
         &mut issues,
-        baseline.scope_contract_sha256.as_ref(),
-        current.scope_contract_sha256.as_ref(),
+        baseline_scope,
+        current_scope,
         FindingDiffReasonCode::ScopeContractChanged,
         engine_id,
         asset_id,
@@ -845,6 +816,336 @@ fn reason_details(reasons: &[FindingDiffReason]) -> String {
         .join("; ")
 }
 
+fn observation_change_reasons(
+    baseline: &AggregatedObservation,
+    current: &AggregatedObservation,
+) -> Vec<FindingDiffReason> {
+    let mut changes = Vec::<FindingDiffReason>::new();
+    if baseline.severity != current.severity {
+        changes.push(reason(
+            FindingDiffReasonCode::SeverityChanged,
+            None,
+            None,
+            format!(
+                "severity changed from {} to {}",
+                severity_name(&baseline.severity),
+                severity_name(&current.severity)
+            ),
+        ));
+    }
+    if baseline.evidence_hashes != current.evidence_hashes {
+        changes.push(reason(
+            FindingDiffReasonCode::EvidenceChanged,
+            None,
+            None,
+            "evidence hashes changed".into(),
+        ));
+    }
+    if baseline.confidence != current.confidence {
+        changes.push(reason(
+            FindingDiffReasonCode::ConfidenceChanged,
+            None,
+            None,
+            format!(
+                "confidence changed from {} to {}",
+                confidence_name(&baseline.confidence),
+                confidence_name(&current.confidence)
+            ),
+        ));
+    }
+    if baseline.asset_ids != current.asset_ids {
+        changes.push(reason(
+            FindingDiffReasonCode::AffectedAssetsChanged,
+            None,
+            None,
+            "affected assets changed".into(),
+        ));
+    }
+    if baseline.engine_ids != current.engine_ids {
+        changes.push(reason(
+            FindingDiffReasonCode::ObservingEnginesChanged,
+            None,
+            None,
+            "observing engines changed".into(),
+        ));
+    }
+    changes
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct LocationPairKey {
+    engine_ids: BTreeSet<String>,
+    asset_ids: BTreeSet<Id>,
+    source_rules: BTreeSet<String>,
+    file_key: String,
+}
+
+struct LocationPairCandidate {
+    fingerprint: String,
+    line: Option<u64>,
+    column: Option<u64>,
+}
+
+fn pair_moved_locations(
+    diffs: &mut Vec<FindingDiff>,
+    baseline: &BTreeMap<String, AggregatedObservation>,
+    current: &BTreeMap<String, AggregatedObservation>,
+) {
+    let mut resolved: BTreeMap<LocationPairKey, Vec<LocationPairCandidate>> = BTreeMap::new();
+    let mut newly: BTreeMap<LocationPairKey, Vec<LocationPairCandidate>> = BTreeMap::new();
+    for diff in diffs.iter() {
+        let (resolved_side, observations) = match diff.status {
+            FindingDiffStatus::Resolved => (true, baseline),
+            FindingDiffStatus::NewlyObserved => (false, current),
+            _ => continue,
+        };
+        let Some(aggregate) = observations.get(&diff.fingerprint) else {
+            continue;
+        };
+        let Some((key, line, column)) = location_pair_key(aggregate) else {
+            continue;
+        };
+        let candidate = LocationPairCandidate {
+            fingerprint: diff.fingerprint.clone(),
+            line,
+            column,
+        };
+        if resolved_side {
+            resolved.entry(key).or_default().push(candidate);
+        } else {
+            newly.entry(key).or_default().push(candidate);
+        }
+    }
+
+    let mut remove_fingerprints = BTreeSet::new();
+    let mut replacements = Vec::new();
+    for (key, mut baseline_side) in resolved {
+        let Some(mut current_side) = newly.remove(&key) else {
+            continue;
+        };
+        baseline_side.sort_by(location_pair_order);
+        current_side.sort_by(location_pair_order);
+        let paired = baseline_side.len().min(current_side.len());
+        for index in 0..paired {
+            let baseline_candidate = &baseline_side[index];
+            let current_candidate = &current_side[index];
+            let Some(baseline_diff) = diffs
+                .iter()
+                .find(|diff| diff.fingerprint == baseline_candidate.fingerprint)
+            else {
+                continue;
+            };
+            let Some(current_diff) = diffs
+                .iter()
+                .find(|diff| diff.fingerprint == current_candidate.fingerprint)
+            else {
+                continue;
+            };
+            let Some(baseline_observation) = baseline.get(&baseline_candidate.fingerprint) else {
+                continue;
+            };
+            let Some(current_observation) = current.get(&current_candidate.fingerprint) else {
+                continue;
+            };
+            remove_fingerprints.insert(baseline_candidate.fingerprint.clone());
+            remove_fingerprints.insert(current_candidate.fingerprint.clone());
+            replacements.push(moved_location_diff(
+                &key,
+                baseline_diff,
+                current_diff,
+                baseline_observation,
+                current_observation,
+                baseline_candidate.line,
+                current_candidate.line,
+            ));
+        }
+    }
+    diffs.retain(|diff| !remove_fingerprints.contains(&diff.fingerprint));
+    diffs.extend(replacements);
+}
+
+fn location_pair_order(left: &LocationPairCandidate, right: &LocationPairCandidate) -> Ordering {
+    left.line
+        .cmp(&right.line)
+        .then_with(|| left.column.cmp(&right.column))
+        .then_with(|| left.fingerprint.cmp(&right.fingerprint))
+}
+
+fn moved_location_diff(
+    key: &LocationPairKey,
+    baseline_diff: &FindingDiff,
+    current_diff: &FindingDiff,
+    baseline: &AggregatedObservation,
+    current: &AggregatedObservation,
+    baseline_line: Option<u64>,
+    current_line: Option<u64>,
+) -> FindingDiff {
+    let mut reasons = vec![reason(
+        FindingDiffReasonCode::LocationMoved,
+        singular(key.engine_ids.iter()),
+        singular(key.asset_ids.iter()),
+        location_moved_detail(baseline_line, current_line),
+    )];
+    reasons.extend(observation_change_reasons(baseline, current));
+    FindingDiff {
+        fingerprint: current_diff.fingerprint.clone(),
+        baseline_finding_id: baseline_diff.baseline_finding_id.clone(),
+        current_finding_id: current_diff.current_finding_id.clone(),
+        status: FindingDiffStatus::Changed,
+        explanation: format!(
+            "The finding remains observable, but {}.",
+            reason_details(&reasons)
+        ),
+        baseline_severity: baseline_diff.baseline_severity.clone(),
+        current_severity: current_diff.current_severity.clone(),
+        evidence_changed: baseline.evidence_hashes != current.evidence_hashes,
+        reasons,
+    }
+}
+
+fn singular<'a>(values: impl Iterator<Item = &'a String>) -> Option<&'a str> {
+    let mut values = values;
+    let first = values.next()?;
+    values.next().is_none().then_some(first.as_str())
+}
+
+fn location_moved_detail(baseline_line: Option<u64>, current_line: Option<u64>) -> String {
+    match (baseline_line, current_line) {
+        (Some(baseline_line), Some(current_line)) => format!(
+            "location moved from line {baseline_line} to line {current_line} in the same file"
+        ),
+        _ => "location moved within the same file".into(),
+    }
+}
+
+fn location_pair_key(
+    aggregate: &AggregatedObservation,
+) -> Option<(LocationPairKey, Option<u64>, Option<u64>)> {
+    let snapshot = aggregate.finding_snapshot.as_ref()?;
+    if snapshot.evidence.is_empty() {
+        return None;
+    }
+    let mut source_rules = BTreeSet::new();
+    let mut file_keys = BTreeSet::new();
+    for evidence in &snapshot.evidence {
+        let rule = evidence.source_rule.as_deref()?;
+        let location = evidence.location.as_deref()?;
+        let (file_key, _, _, has_coordinate) = split_location(location);
+        if !has_coordinate {
+            return None;
+        }
+        source_rules.insert(rule.to_owned());
+        file_keys.insert(file_key);
+    }
+    if file_keys.len() != 1 {
+        return None;
+    }
+    let first_location = snapshot.evidence.first()?.location.as_deref()?;
+    let (_, line, column, _) = split_location(first_location);
+    Some((
+        LocationPairKey {
+            engine_ids: aggregate.engine_ids.clone(),
+            asset_ids: aggregate.asset_ids.clone(),
+            source_rules,
+            file_key: file_keys.into_iter().next()?,
+        },
+        line,
+        column,
+    ))
+}
+
+/// File key plus the first line and column. Coordinate segments are only those
+/// after the first colon, so a path component is left intact.
+fn split_location(location: &str) -> (String, Option<u64>, Option<u64>, bool) {
+    let mut parts = location.split(':');
+    let mut kept = Vec::new();
+    if let Some(first) = parts.next() {
+        kept.push(first.to_owned());
+    }
+    let mut line = None;
+    let mut column = None;
+    let mut has_coordinate = false;
+    for segment in parts {
+        if let Some(value) = coordinate_value(segment, "line=") {
+            has_coordinate = true;
+            if line.is_none() {
+                line = Some(value);
+            }
+            continue;
+        }
+        if let Some(value) = coordinate_value(segment, "column=") {
+            has_coordinate = true;
+            if column.is_none() {
+                column = Some(value);
+            }
+            continue;
+        }
+        kept.push(segment.to_owned());
+    }
+    (kept.join(":"), line, column, has_coordinate)
+}
+
+fn coordinate_value(segment: &str, prefix: &str) -> Option<u64> {
+    let value = segment.strip_prefix(prefix)?;
+    if value.is_empty() || !value.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    value.parse().ok()
+}
+
+fn compared_local_input_changes(
+    baseline_run: &ScanRun,
+    current_run: &ScanRun,
+) -> Vec<LocalInputChange> {
+    if baseline_run.report_asset_snapshots.is_empty()
+        || current_run.report_asset_snapshots.is_empty()
+    {
+        return Vec::new();
+    }
+    let completed = |run: &ScanRun| {
+        run.engine_runs
+            .iter()
+            .filter(|engine_run| engine_run.status == EngineRunStatus::Completed)
+            .flat_map(|engine_run| engine_run.asset_ids.iter().cloned())
+            .collect::<BTreeSet<_>>()
+    };
+    let shared = completed(baseline_run)
+        .intersection(&completed(current_run))
+        .cloned()
+        .collect::<Vec<_>>();
+    let mut changes = Vec::new();
+    for asset_id in shared {
+        let Some(baseline_sha256) = frozen_workspace_sha(baseline_run, &asset_id) else {
+            continue;
+        };
+        let Some(current_sha256) = frozen_workspace_sha(current_run, &asset_id) else {
+            continue;
+        };
+        changes.push(LocalInputChange {
+            changed: baseline_sha256 != current_sha256,
+            asset_id,
+            baseline_sha256,
+            current_sha256,
+        });
+    }
+    changes.sort_by(|left, right| left.asset_id.cmp(&right.asset_id));
+    changes
+}
+
+fn frozen_workspace_sha(run: &ScanRun, asset_id: &str) -> Option<String> {
+    run.report_asset_snapshots.iter().find_map(|snapshot| {
+        if snapshot.asset.id != asset_id {
+            return None;
+        }
+        snapshot
+            .asset
+            .metadata
+            .get("workspace_snapshot_sha256")
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+    })
+}
+
 fn valid_sha256_hex(value: &str) -> bool {
     value.len() == 64 && value.chars().all(|character| character.is_ascii_hexdigit())
 }
@@ -878,9 +1179,10 @@ fn confidence_name(confidence: &Confidence) -> &'static str {
 mod tests {
     use super::*;
     use crate::domain::{
-        DataClass, DistributionMode, EngineKnowledgeInput, EngineRun, FindingObservation,
-        KnowledgeInputKind, KnowledgePinState, OrganizationProfile, ScanPermission, ScanRun,
-        ScopeGrant,
+        Asset, AssetKind, DataClass, DistributionMode, EngineKnowledgeInput, EngineRun, Evidence,
+        EvidenceKind, Finding, FindingObservation, FindingStatus, KnowledgeInputKind,
+        KnowledgePinState, LocalInputChange, OrganizationProfile, ReportAssetDisposition,
+        ReportAssetSnapshot, ScanPermission, ScanRun, ScopeGrant,
     };
     use chrono::TimeZone;
 
@@ -978,6 +1280,7 @@ mod tests {
                 support_until: Some("2026-11-22".into()),
             }),
             scope_contract_sha256: Some("d".repeat(64)),
+            comparison_scope_sha256: None,
             execution_scope_grant_ids: None,
             naabu_work_plan: None,
             naabu_attempt_requests: Vec::new(),
@@ -1314,5 +1617,530 @@ mod tests {
                 .iter()
                 .any(|reason| reason.code == FindingDiffReasonCode::ScopeContractChanged)
         );
+    }
+
+    #[test]
+    fn workspace_comparison_hash_keeps_a_refreshed_copy_comparable() {
+        let mut case = fixture();
+        let comparison_hash = "f".repeat(64);
+        case.scan_runs[0].engine_runs[0].comparison_scope_sha256 = Some(comparison_hash.clone());
+        case.scan_runs[1].engine_runs[0].comparison_scope_sha256 = Some(comparison_hash);
+        case.scan_runs[1].engine_runs[0].scope_contract_sha256 = Some("e".repeat(64));
+        case.finding_observations = vec![observation("baseline", "gone", Severity::High, "a")];
+
+        let comparison = compare_case_runs(&case, "baseline", "current").unwrap();
+
+        assert!(comparison.complete);
+        assert!(comparison.local_input_changes.is_empty());
+        assert_eq!(comparison.diffs.len(), 1);
+        assert_eq!(comparison.diffs[0].status, FindingDiffStatus::Resolved);
+        assert!(
+            comparison.diffs[0]
+                .reasons
+                .iter()
+                .all(|reason| { reason.code != FindingDiffReasonCode::ScopeContractChanged })
+        );
+    }
+
+    #[test]
+    fn workspace_comparison_hash_absent_on_the_baseline_stays_scope_contract_changed() {
+        let mut case = fixture();
+        case.scan_runs[1].engine_runs[0].comparison_scope_sha256 = Some("f".repeat(64));
+        case.scan_runs[1].engine_runs[0].scope_contract_sha256 = Some("e".repeat(64));
+        case.finding_observations = vec![observation("baseline", "gone", Severity::High, "a")];
+
+        let comparison = compare_case_runs(&case, "baseline", "current").unwrap();
+        let diff = &comparison.diffs[0];
+
+        assert!(!comparison.complete);
+        assert_eq!(diff.status, FindingDiffStatus::UnableToVerify);
+        assert!(diff.reasons.iter().any(|reason| {
+            reason.code == FindingDiffReasonCode::ScopeContractChanged
+                && reason.detail == "scope, permission, or target contract changed"
+        }));
+    }
+
+    #[test]
+    fn workspace_location_moved_pairs_line_19_with_line_23() {
+        let mut case = fixture();
+        case.finding_observations = vec![
+            located_observation(
+                "baseline",
+                "at-19",
+                Severity::Low,
+                "baseline-evidence",
+                "generic-api-key",
+                "config/example.env:line=19",
+                "asset-a",
+                "engine-a",
+            ),
+            located_observation(
+                "current",
+                "at-23",
+                Severity::High,
+                "current-evidence",
+                "generic-api-key",
+                "config/example.env:line=23",
+                "asset-a",
+                "engine-a",
+            ),
+        ];
+
+        let comparison = compare_case_runs(&case, "baseline", "current").unwrap();
+
+        assert_eq!(comparison.diffs.len(), 1);
+        let diff = &comparison.diffs[0];
+        assert_eq!(diff.fingerprint, "at-23");
+        assert_eq!(diff.status, FindingDiffStatus::Changed);
+        assert_eq!(diff.baseline_finding_id.as_deref(), Some("finding-at-19"));
+        assert_eq!(diff.current_finding_id.as_deref(), Some("finding-at-23"));
+        assert_eq!(diff.baseline_severity, Some(Severity::Low));
+        assert_eq!(diff.current_severity, Some(Severity::High));
+        assert!(diff.evidence_changed);
+        assert_eq!(
+            diff.reasons
+                .iter()
+                .map(|reason| reason.code.clone())
+                .collect::<Vec<_>>(),
+            vec![
+                FindingDiffReasonCode::LocationMoved,
+                FindingDiffReasonCode::SeverityChanged,
+                FindingDiffReasonCode::EvidenceChanged,
+            ]
+        );
+        assert_eq!(diff.reasons[0].engine_id.as_deref(), Some("engine-a"));
+        assert_eq!(diff.reasons[0].asset_id.as_deref(), Some("asset-a"));
+        assert_eq!(
+            diff.reasons[0].detail,
+            "location moved from line 19 to line 23 in the same file"
+        );
+        assert_eq!(
+            diff.explanation,
+            "The finding remains observable, but location moved from line 19 to line 23 in the same file; severity changed from low to high; evidence hashes changed."
+        );
+    }
+
+    #[test]
+    fn workspace_same_rule_findings_pair_in_line_order_and_a_third_stays_new() {
+        let mut case = fixture();
+        case.finding_observations = vec![
+            located_observation(
+                "baseline",
+                "b-line-10",
+                Severity::Low,
+                "same-hash",
+                "generic-api-key",
+                "notes.txt:line=10",
+                "asset-a",
+                "engine-a",
+            ),
+            located_observation(
+                "baseline",
+                "a-line-40",
+                Severity::Low,
+                "same-hash",
+                "generic-api-key",
+                "notes.txt:line=40",
+                "asset-a",
+                "engine-a",
+            ),
+            located_observation(
+                "current",
+                "z-line-15",
+                Severity::Low,
+                "same-hash",
+                "generic-api-key",
+                "notes.txt:line=15",
+                "asset-a",
+                "engine-a",
+            ),
+            located_observation(
+                "current",
+                "m-line-45",
+                Severity::Low,
+                "same-hash",
+                "generic-api-key",
+                "notes.txt:line=45",
+                "asset-a",
+                "engine-a",
+            ),
+            located_observation(
+                "current",
+                "c-line-90",
+                Severity::Low,
+                "same-hash",
+                "generic-api-key",
+                "notes.txt:line=90",
+                "asset-a",
+                "engine-a",
+            ),
+        ];
+
+        let comparison = compare_case_runs(&case, "baseline", "current").unwrap();
+        let by_fingerprint = comparison
+            .diffs
+            .iter()
+            .map(|diff| (diff.fingerprint.as_str(), diff))
+            .collect::<BTreeMap<_, _>>();
+
+        assert_eq!(by_fingerprint.len(), 3);
+        assert!(!by_fingerprint.contains_key("b-line-10"));
+        assert!(!by_fingerprint.contains_key("a-line-40"));
+        let first = by_fingerprint["z-line-15"];
+        assert_eq!(first.status, FindingDiffStatus::Changed);
+        assert_eq!(
+            first.baseline_finding_id.as_deref(),
+            Some("finding-b-line-10")
+        );
+        assert_eq!(
+            first.reasons[0].detail,
+            "location moved from line 10 to line 15 in the same file"
+        );
+        let second = by_fingerprint["m-line-45"];
+        assert_eq!(second.status, FindingDiffStatus::Changed);
+        assert_eq!(
+            second.baseline_finding_id.as_deref(),
+            Some("finding-a-line-40")
+        );
+        assert_eq!(
+            second.reasons[0].detail,
+            "location moved from line 40 to line 45 in the same file"
+        );
+        let extra = by_fingerprint["c-line-90"];
+        assert_eq!(extra.status, FindingDiffStatus::NewlyObserved);
+        assert!(extra.baseline_finding_id.is_none());
+        assert!(
+            comparison
+                .diffs
+                .windows(2)
+                .all(|pair| { pair[0].fingerprint <= pair[1].fingerprint })
+        );
+    }
+
+    #[test]
+    fn workspace_location_pairing_stays_within_one_file_rule_asset_and_engine() {
+        let mut case = fixture();
+        for run in &mut case.scan_runs {
+            run.engine_runs[0].asset_ids = vec!["asset-a".into(), "asset-b".into()];
+            let mut other_engine = run.engine_runs[0].clone();
+            other_engine.id = format!("{}-engine-b", other_engine.id);
+            other_engine.engine_id = "engine-b".into();
+            other_engine.asset_ids = vec!["asset-a".into()];
+            run.engine_runs.push(other_engine);
+        }
+        case.finding_observations = vec![
+            located_observation(
+                "baseline",
+                "file-left",
+                Severity::Low,
+                "hash",
+                "rule-file",
+                "left.txt:line=4",
+                "asset-a",
+                "engine-a",
+            ),
+            located_observation(
+                "current",
+                "file-right",
+                Severity::Low,
+                "hash",
+                "rule-file",
+                "right.txt:line=4",
+                "asset-a",
+                "engine-a",
+            ),
+            located_observation(
+                "baseline",
+                "rule-left",
+                Severity::Low,
+                "hash",
+                "rule-one",
+                "shared.txt:line=4",
+                "asset-a",
+                "engine-a",
+            ),
+            located_observation(
+                "current",
+                "rule-right",
+                Severity::Low,
+                "hash",
+                "rule-two",
+                "shared.txt:line=4",
+                "asset-a",
+                "engine-a",
+            ),
+            located_observation(
+                "baseline",
+                "asset-left",
+                Severity::Low,
+                "hash",
+                "rule-asset",
+                "shared.txt:line=8",
+                "asset-a",
+                "engine-a",
+            ),
+            located_observation(
+                "current",
+                "asset-right",
+                Severity::Low,
+                "hash",
+                "rule-asset",
+                "shared.txt:line=8",
+                "asset-b",
+                "engine-a",
+            ),
+            located_observation(
+                "baseline",
+                "engine-left",
+                Severity::Low,
+                "hash",
+                "rule-engine",
+                "shared.txt:line=11",
+                "asset-a",
+                "engine-a",
+            ),
+            located_observation(
+                "current",
+                "engine-right",
+                Severity::Low,
+                "hash",
+                "rule-engine",
+                "shared.txt:line=11",
+                "asset-a",
+                "engine-b",
+            ),
+            observation("baseline", "no-snapshot-base", Severity::Low, "hash"),
+            observation("current", "no-snapshot-current", Severity::Low, "hash"),
+            located_observation(
+                "baseline",
+                "no-coord-base",
+                Severity::Low,
+                "hash",
+                "rule-nocoord",
+                "plain.txt",
+                "asset-a",
+                "engine-a",
+            ),
+            located_observation(
+                "current",
+                "no-coord-current",
+                Severity::Low,
+                "hash",
+                "rule-nocoord",
+                "plain.txt:commit=abcdef",
+                "asset-a",
+                "engine-a",
+            ),
+            located_observation(
+                "baseline",
+                "column-base",
+                Severity::Low,
+                "hash",
+                "rule-column",
+                "columns.txt:column=2",
+                "asset-a",
+                "engine-a",
+            ),
+            located_observation(
+                "current",
+                "column-current",
+                Severity::Low,
+                "hash",
+                "rule-column",
+                "columns.txt:column=9",
+                "asset-a",
+                "engine-a",
+            ),
+        ];
+
+        let comparison = compare_case_runs(&case, "baseline", "current").unwrap();
+        let by_fingerprint = comparison
+            .diffs
+            .iter()
+            .map(|diff| (diff.fingerprint.as_str(), diff.status.clone()))
+            .collect::<BTreeMap<_, _>>();
+
+        for fingerprint in [
+            "file-left",
+            "rule-left",
+            "asset-left",
+            "engine-left",
+            "no-snapshot-base",
+            "no-coord-base",
+        ] {
+            assert_eq!(
+                by_fingerprint[fingerprint],
+                FindingDiffStatus::Resolved,
+                "{fingerprint}"
+            );
+        }
+        for fingerprint in [
+            "file-right",
+            "rule-right",
+            "asset-right",
+            "engine-right",
+            "no-snapshot-current",
+            "no-coord-current",
+        ] {
+            assert_eq!(
+                by_fingerprint[fingerprint],
+                FindingDiffStatus::NewlyObserved,
+                "{fingerprint}"
+            );
+        }
+        assert!(!by_fingerprint.contains_key("column-base"));
+        let moved = comparison
+            .diffs
+            .iter()
+            .find(|diff| diff.fingerprint == "column-current")
+            .unwrap();
+        assert_eq!(moved.status, FindingDiffStatus::Changed);
+        assert_eq!(moved.reasons.len(), 1);
+        assert_eq!(moved.reasons[0].code, FindingDiffReasonCode::LocationMoved);
+        assert_eq!(
+            moved.reasons[0].detail,
+            "location moved within the same file"
+        );
+    }
+
+    #[test]
+    fn workspace_local_input_changes_list_changed_and_unchanged_copies() {
+        let untouched = compare_case_runs(&fixture(), "baseline", "current").unwrap();
+        assert!(untouched.local_input_changes.is_empty());
+
+        let mut case = fixture();
+        let baseline_a = "a".repeat(64);
+        let current_a = "b".repeat(64);
+        let shared_b = "c".repeat(64);
+        for run in &mut case.scan_runs {
+            run.engine_runs[0].asset_ids =
+                vec!["asset-a".into(), "asset-b".into(), "asset-d".into()];
+        }
+        case.scan_runs[0].report_asset_snapshots = vec![
+            frozen_workspace_asset("asset-b", &shared_b),
+            frozen_workspace_asset("asset-a", &baseline_a),
+            frozen_workspace_asset("asset-c", &"d".repeat(64)),
+            frozen_workspace_asset_without_sha("asset-d"),
+        ];
+        case.scan_runs[1].report_asset_snapshots = vec![
+            frozen_workspace_asset("asset-a", &current_a),
+            frozen_workspace_asset("asset-b", &shared_b),
+            frozen_workspace_asset("asset-c", &"e".repeat(64)),
+            frozen_workspace_asset_without_sha("asset-d"),
+        ];
+
+        let comparison = compare_case_runs(&case, "baseline", "current").unwrap();
+        assert_eq!(
+            comparison.local_input_changes,
+            vec![
+                LocalInputChange {
+                    asset_id: "asset-a".into(),
+                    baseline_sha256: baseline_a,
+                    current_sha256: current_a,
+                    changed: true,
+                },
+                LocalInputChange {
+                    asset_id: "asset-b".into(),
+                    baseline_sha256: shared_b.clone(),
+                    current_sha256: shared_b,
+                    changed: false,
+                },
+            ]
+        );
+
+        case.scan_runs[1].report_asset_snapshots.clear();
+        let missing_freeze = compare_case_runs(&case, "baseline", "current").unwrap();
+        assert!(missing_freeze.local_input_changes.is_empty());
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn located_observation(
+        run_id: &str,
+        fingerprint: &str,
+        severity: Severity,
+        hash: &str,
+        rule: &str,
+        location: &str,
+        asset_id: &str,
+        engine_id: &str,
+    ) -> FindingObservation {
+        let mut observation = observation(run_id, fingerprint, severity.clone(), hash);
+        observation.asset_ids = vec![asset_id.into()];
+        observation.engine_ids = vec![engine_id.into()];
+        observation.finding_snapshot = Some(Finding {
+            family: None,
+            severity_basis_code: None,
+            confidence_basis_code: None,
+            context_factors: Vec::new(),
+            id: observation.finding_id.clone(),
+            case_id: "case-1".into(),
+            first_seen_run_id: run_id.into(),
+            last_seen_run_id: run_id.into(),
+            fingerprint: fingerprint.into(),
+            title: "Scanner observation".into(),
+            plain_language_summary: "Scanner observation".into(),
+            possible_impact: "Possible impact requires review.".into(),
+            severity: severity.clone(),
+            confidence: crate::domain::Confidence::High,
+            priority: 40,
+            priority_reasons: Vec::new(),
+            asset_ids: vec![asset_id.into()],
+            evidence: vec![Evidence {
+                id: format!("evidence-{fingerprint}"),
+                finding_id: observation.finding_id.clone(),
+                run_id: run_id.into(),
+                engine_run_id: Some(format!("engine-run-{run_id}")),
+                kind: EvidenceKind::SourceCode,
+                engine_id: engine_id.into(),
+                scanner_details: None,
+                source_rule: Some(rule.into()),
+                result_pointer_sha256: None,
+                observed_at: observation.observed_at,
+                summary: "Scanner observation".into(),
+                location: Some(location.into()),
+                artifact_id: "artifact".into(),
+                artifact_sha256: hash.into(),
+                pointer: None,
+                redacted: true,
+            }],
+            control_references: Vec::new(),
+            recommendation: "Ask a qualified reviewer.".into(),
+            verification_guidance: "Rerun after an approved change.".into(),
+            rollback_considerations: None,
+            official_references: Vec::new(),
+            recommended_expert_type: "Security reviewer".into(),
+            status: FindingStatus::Unreviewed,
+            tags: Vec::new(),
+        });
+        observation
+    }
+
+    fn frozen_workspace_asset(id: &str, sha256: &str) -> ReportAssetSnapshot {
+        let mut snapshot = frozen_workspace_asset_without_sha(id);
+        snapshot.asset.metadata.insert(
+            "workspace_snapshot_sha256".into(),
+            Value::String(sha256.to_owned()),
+        );
+        snapshot
+    }
+
+    fn frozen_workspace_asset_without_sha(id: &str) -> ReportAssetSnapshot {
+        ReportAssetSnapshot {
+            asset: Asset {
+                id: id.into(),
+                kind: AssetKind::Repository,
+                name: id.into(),
+                provider: None,
+                region: None,
+                identifiers: Vec::new(),
+                discovered_from: Vec::new(),
+                candidate: false,
+                owner_confirmed: true,
+                internet_exposed: None,
+                contains_sensitive_data: None,
+                metadata: BTreeMap::new(),
+            },
+            disposition: ReportAssetDisposition::RequestedForScan,
+        }
     }
 }

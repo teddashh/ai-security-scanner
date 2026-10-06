@@ -1,0 +1,68 @@
+.local-folder-recheck {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.local-folder-recheck > .field > span {
+  font-size: 0.84rem;
+}
+
+.local-folder-recheck > .form-actions {
+  align-items: center;
+  margin-top: 0;
+  padding-top: 10px;
+  gap: 12px;
+}
+
+.local-folder-recheck > .form-actions:first-of-type {
+  border-top: 0;
+  padding-top: 0;
+}
+
+.local-folder-recheck__copy {
+  display: flex;
+  min-width: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.local-folder-recheck__copy strong {
+  color: var(--ink);
+  font-size: 0.84rem;
+}
+
+.local-folder-recheck__copy p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.78rem;
+  line-height: 1.4;
+}
+
+.local-folder-recheck .inline-notice {
+  margin: 0;
+}
+
+.local-folder-recheck-gate {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.78rem;
+  line-height: 1.45;
+}
+
+.empty-state p.local-folder-recheck-gate,
+.page-header__actions .local-folder-recheck-gate {
+  margin: 0;
+  max-width: 36rem;
+}
+
+.local-folder-copies {
+  margin: 8px 0 0;
+  padding-left: 1.1rem;
+}
+
+.local-folder-copies li + li {
+  margin-top: 4px;
+}

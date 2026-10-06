@@ -409,6 +409,7 @@ pub fn run() {
             commands::cleanup_provider_bootstrap,
             commands::list_provider_bootstrap_cleanup,
             commands::attach_workspace_snapshot,
+            commands::refresh_workspace_snapshot,
             commands::select_mcp_configuration,
             commands::select_agentic_framework,
             commands::configure_model_endpoint,

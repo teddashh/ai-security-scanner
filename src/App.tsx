@@ -6,6 +6,7 @@ import { Icon } from "./components/Icon";
 import { RuntimeSetupAssistant } from "./components/RuntimeSetupAssistant";
 import { EmptyState, InlineNotice } from "./components/Shared";
 import { useI18n, type BilingualText } from "./i18n";
+import { localFolderRecheckRows } from "./localFolderRecheck";
 import { CasesPage } from "./pages/CasesPage";
 import { CoveragePage } from "./pages/CoveragePage";
 import { ExportPage } from "./pages/ExportPage";
@@ -156,6 +157,7 @@ const busyActionCopy = {
   rescan: { en: "the follow-up scan", zhTW: "複驗掃描" },
   "connect-source": { en: "source connection", zhTW: "連接資料來源" },
   "attach-workspace": { en: "local-file attachment", zhTW: "附加本機檔案" },
+  "refresh-workspace": { en: "the folder copy", zhTW: "資料夾副本" },
   discovery: { en: "asset discovery", zhTW: "盤點資產" },
   scope: { en: "permission confirmation", zhTW: "確認授權範圍" },
   "localhost-quick-scan": { en: "testing a local service connection", zhTW: "測試本機服務連線" },
@@ -210,6 +212,12 @@ const nonExecutionActionToastCopy = {
     acceptedDetail: { en: "Private copy verified. Review the checks, then start.", zhTW: "私密副本已驗證；請確認掃描項目後開始。" },
     failedTitle: { en: "Project was not prepared", zhTW: "專案尚未準備完成" },
     failedDetail: { en: "Choose the local project again.", zhTW: "請重新選擇本機專案。" },
+  },
+  "refresh-workspace": {
+    acceptedTitle: { en: "Folder copied again", zhTW: "已重新複製資料夾" },
+    acceptedDetail: { en: "Check fixes will read this copy.", zhTW: "確認修復會讀取這份副本。" },
+    failedTitle: { en: "Folder was not copied", zhTW: "資料夾尚未複製" },
+    failedDetail: { en: "Choose the folder again.", zhTW: "請重新選擇資料夾。" },
   },
   scope: {
     acceptedTitle: { en: "Scan access saved", zhTW: "掃描許可已儲存" },
@@ -2231,6 +2239,22 @@ export default function App() {
   };
 
   const currentCaseId = workspace?.case.id ?? selectedCase?.id;
+  const chooseFolderAgain = async (assetId: string) => {
+    if (!currentCaseId) return;
+    const selectedPath = await scannerService.chooseWorkspaceDirectory();
+    if (!selectedPath) return;
+    await executeAction("refresh-workspace", () => scannerService.refreshWorkspaceSnapshot({
+      caseId: currentCaseId,
+      assetId,
+      selectedPath,
+    }));
+  };
+  const folderRecheck = localFolderRecheckRows({
+    assets: workspace?.assets ?? [],
+    sources: workspace?.sources ?? [],
+    runs: workspace?.runs ?? [],
+    baselineRunId: verificationBaselineRunId,
+  });
   const selectedRun = selectedReportRunId === undefined
     ? workspace?.runs[0]
     : workspace?.runs.find((run) => run.id === selectedReportRunId);
@@ -2437,7 +2461,7 @@ export default function App() {
           latestRun={workspace?.runs[0]}
           runs={workspace?.runs ?? []}
           verificationBaselineRunId={verificationBaselineRunId}
-          busy={["create", "create-local", "seed-demo", "archive-case", "delete-case", "delete-artifacts", "rescan"].includes(busyAction ?? "")}
+          busy={["create", "create-local", "seed-demo", "archive-case", "delete-case", "delete-artifacts", "rescan", "refresh-workspace"].includes(busyAction ?? "")}
           preparingLocalSnapshot={busyAction === "create-local"}
           nativeMode={scannerService.isNative()}
           artifactCleanupPlan={artifactCleanupPlan}
@@ -2473,6 +2497,8 @@ export default function App() {
             ? runAction("rescan", () => scannerService.startRescan(currentCaseId, baselineRunId))
             : Promise.resolve()}
           onOpenVerification={() => navigate("verification")}
+          folderRecheckRows={folderRecheck.rows}
+          onChooseFolderAgain={chooseFolderAgain}
         />
       );
     }
@@ -2737,10 +2763,13 @@ export default function App() {
             verification={workspace.verification}
             runs={workspace.runs}
             findings={workspace.findings}
+            assets={workspace.assets}
+            folderRecheckRows={folderRecheck.rows}
             baselineRunId={verificationBaselineRunId}
-            busy={busyAction === "rescan"}
+            busy={busyAction === "rescan" || busyAction === "refresh-workspace"}
             onSelectBaseline={setVerificationBaselineRunId}
             onStartRescan={(baselineRunId) => runAction("rescan", () => scannerService.startRescan(currentCaseId, baselineRunId))}
+            onChooseFolderAgain={chooseFolderAgain}
             onOpenFinding={(findingId) => {
               const findingRunId = workspace.findings.find((finding) => finding.id === findingId)?.lastSeenRunId;
               if (findingRunId && workspace.runs.some((run) => run.id === findingRunId)) {

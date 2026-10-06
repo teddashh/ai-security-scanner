@@ -16,8 +16,8 @@ use ai_security_scanner_lib::domain::{
     AiGeneratedArtifactAnswer, AssessmentActivity, AssessmentIntent, Asset, AssetKind, CaseStatus,
     CoverageStatus, CreateCaseRequest, DataClass, DeclaredAssetInput, DeclaredAssetKind,
     DeclaredHostScanInput, DeclaredHostScanProfile, DeclaredNetworkProtocol, DeclaredWebProtocol,
-    DeclaredWebServiceInput, EngineRunStatus, FindingDiffStatus, InventoryObservationKind,
-    ScanPermission, ScopeGrant, UnevaluatedTargetCause,
+    DeclaredWebServiceInput, EngineRunStatus, FindingDiffReasonCode, FindingDiffStatus,
+    InventoryObservationKind, LocalInputChange, ScanPermission, ScopeGrant, UnevaluatedTargetCause,
 };
 use ai_security_scanner_lib::export::{ExportOptions, RedactionProfile, ReportLocale};
 use ai_security_scanner_lib::external_scope::{
@@ -30,8 +30,9 @@ use ai_security_scanner_lib::orchestrator::{
 use ai_security_scanner_lib::registry::EngineRegistry;
 use ai_security_scanner_lib::storage::Storage;
 use ai_security_scanner_lib::workspace_snapshot::{
-    WorkspaceInputProfile, WorkspaceSnapshotLimits, WorkspaceSnapshotReference,
-    create_workspace_snapshot, create_workspace_snapshot_with_profile, resolve_workspace_snapshot,
+    WORKSPACE_SNAPSHOT_REFERENCE_METADATA_KEY, WorkspaceInputProfile, WorkspaceSnapshotLimits,
+    WorkspaceSnapshotReference, create_workspace_snapshot, create_workspace_snapshot_with_profile,
+    resolve_workspace_snapshot,
 };
 use chrono::{DateTime, Duration, NaiveDate, Utc};
 use serde_json::Value;
@@ -2254,6 +2255,346 @@ fn validate_schema_value(
         }
     }
     Ok(())
+}
+
+fn gitleaks_output(asset_id: &str, findings: &[(&str, u32)]) -> Vec<u8> {
+    let rows = findings
+        .iter()
+        .map(|(rule, line)| {
+            serde_json::json!({
+                "RuleID": rule,
+                "Description": format!("{rule} at line {line}"),
+                "File": "config/example.env",
+                "StartLine": line,
+                "Secret": "example-redacted-value",
+                "Fingerprint": format!("{rule}:{line}"),
+                "asset_id": asset_id,
+            })
+        })
+        .collect::<Vec<_>>();
+    serde_json::to_vec(&rows).expect("gitleaks fixture JSON")
+}
+
+fn stored_workspace_reference(
+    case: &ai_security_scanner_lib::domain::AssessmentCase,
+    source_id: &str,
+) -> WorkspaceSnapshotReference {
+    let source = case
+        .data_sources
+        .iter()
+        .find(|source| source.id == source_id)
+        .expect("workspace source");
+    serde_json::from_value(source.metadata[WORKSPACE_SNAPSHOT_REFERENCE_METADATA_KEY].clone())
+        .expect("stored workspace snapshot reference")
+}
+
+/// A removed secret and a secret whose line moved stay one resolved finding
+/// and one changed finding after the folder is copied again under the same asset.
+///
+/// The two baseline rows use different rules. Line-order pairing would otherwise
+/// join the earliest baseline line to the only current line.
+#[test]
+fn refreshed_folder_keeps_a_moved_gitleaks_line_under_the_same_asset() {
+    let temporary = tempfile::tempdir().expect("refresh lifecycle directory");
+    let storage = Storage::open(temporary.path().join("casework.db")).expect("private storage");
+    let engines = EngineRegistry::load_builtin().expect("supported built-in engine catalog");
+    let adapters = builtin_adapter_registry().expect("built-in adapters");
+    let artifacts =
+        ArtifactStore::open(temporary.path().join("artifacts")).expect("private artifact store");
+    let artifact_root = artifacts.root().to_path_buf();
+    let service = CaseService::new(
+        &storage,
+        &engines,
+        &adapters,
+        &artifact_root,
+        temporary.path().join("integrity-signing-key"),
+    );
+    let case = service
+        .create_case(&CreateCaseRequest {
+            title: "Refresh a local folder".into(),
+            organization_name: "Example organization".into(),
+            employee_range: "1-10".into(),
+            assessment_intent: None,
+            ai_generated_artifact: Default::default(),
+            data_classes: vec![DataClass::CredentialsAndSecrets],
+            requested_activities: vec![],
+            source_kinds: vec![],
+            not_applicable_source_kinds: vec![],
+            declared_assets: vec![],
+            notes: None,
+        })
+        .expect("case creation");
+
+    let source_id = "workspace-source-refresh";
+    let selected = temporary.path().join("selected-folder");
+    fs::create_dir_all(selected.join("config")).expect("selected folder");
+    fs::write(
+        selected.join("config/example.env"),
+        "\
+# config
+# unused
+API_KEY=baseline-line-three
+# padding
+# padding
+# padding
+# padding
+# padding
+PRIVATE_KEY=baseline-line-nine
+",
+    )
+    .expect("baseline env file");
+    fs::write(selected.join("README.md"), "baseline copy\n").expect("baseline readme");
+    let snapshot = create_workspace_snapshot(
+        &artifact_root,
+        &case.id,
+        source_id,
+        &selected,
+        WorkspaceSnapshotLimits::default(),
+    )
+    .expect("baseline workspace snapshot");
+    let asset_id = snapshot.asset.id.clone();
+    let baseline_reference = snapshot.reference.clone();
+    let baseline_sha = snapshot.reference.sha256.clone();
+    service
+        .attach_workspace_snapshot(&case.id, "Application folder", snapshot)
+        .expect("attach the folder");
+    service
+        .approve_scope(
+            &case.id,
+            ScopeApprovalRequest {
+                asset_id: asset_id.clone(),
+                permissions: vec![ScanPermission::LocalArtifactRead],
+                confirmed_by: "Repository owner".into(),
+                expires_at: None,
+                authorization_reference: None,
+                notes: None,
+                external_scope: None,
+            },
+        )
+        .expect("approve local artifact read");
+
+    let plan = service
+        .plan_scan(
+            &case.id,
+            ScanPlanRequest {
+                engine_ids: vec!["gitleaks".into()],
+                engine_asset_routes: Vec::new(),
+            },
+        )
+        .expect("baseline gitleaks plan");
+    assert_eq!(plan.executable.len(), 1);
+    let runtime = FakeContainerRuntime::default();
+    let orchestrator = Orchestrator::new(&runtime, &artifacts, &adapters);
+    let baseline_workspace =
+        resolve_workspace_snapshot(&artifact_root, &case.id, &baseline_reference)
+            .expect("baseline snapshot resolves");
+    let baseline_report = execute_fixture(
+        &orchestrator,
+        &runtime,
+        &plan.executable[0],
+        &baseline_workspace.tree_path,
+        gitleaks_output(&asset_id, &[("generic-api-key", 3), ("private-key", 9)]),
+    );
+    assert_eq!(baseline_report.findings.len(), 2);
+    service
+        .apply_execution_report(&case.id, &DurableExecutionReport::from(&baseline_report))
+        .expect("baseline reconciliation");
+    let baseline_case = service.show_case(&case.id).expect("baseline case");
+    let baseline_run = baseline_case
+        .scan_runs
+        .iter()
+        .find(|run| run.id == plan.scan_run.id)
+        .expect("baseline run");
+    assert!(baseline_run.completed_at.is_some());
+    let frozen_baseline_sha = baseline_run
+        .report_asset_snapshots
+        .iter()
+        .find(|snapshot| snapshot.asset.id == asset_id)
+        .expect("frozen baseline asset")
+        .asset
+        .metadata["workspace_snapshot_sha256"]
+        .as_str()
+        .expect("baseline snapshot hash")
+        .to_owned();
+    assert_eq!(frozen_baseline_sha, baseline_sha);
+
+    fs::write(
+        selected.join("config/example.env"),
+        "\
+# config
+# unused
+# API_KEY removed
+# padding
+# padding
+# padding
+PRIVATE_KEY=moved-line-seven
+",
+    )
+    .expect("edited env file");
+    fs::write(selected.join("README.md"), "refreshed copy\n").expect("edited readme");
+    let refreshed = create_workspace_snapshot(
+        &artifact_root,
+        &case.id,
+        source_id,
+        &selected,
+        WorkspaceSnapshotLimits::default(),
+    )
+    .expect("refreshed workspace snapshot");
+    assert_eq!(refreshed.asset.id, asset_id);
+    assert_ne!(refreshed.reference.sha256, baseline_sha);
+    let current_sha = refreshed.reference.sha256.clone();
+    resolve_workspace_snapshot(&artifact_root, &case.id, &refreshed.reference)
+        .expect("new snapshot resolves before it is saved");
+    service
+        .refresh_workspace_snapshot(&case.id, &asset_id, refreshed)
+        .expect("refresh the same asset");
+    let refreshed_case = service.show_case(&case.id).expect("refreshed case");
+    let current_reference = stored_workspace_reference(&refreshed_case, source_id);
+    assert_eq!(current_reference.sha256, current_sha);
+    let current_workspace =
+        resolve_workspace_snapshot(&artifact_root, &case.id, &current_reference)
+            .expect("execution resolves the new source reference");
+    resolve_workspace_snapshot(&artifact_root, &case.id, &baseline_reference)
+        .expect("the earlier snapshot files remain readable");
+
+    let rescan = service
+        .plan_rescan(
+            &case.id,
+            &plan.scan_run.id,
+            ScanPlanRequest {
+                engine_ids: vec!["gitleaks".into()],
+                engine_asset_routes: Vec::new(),
+            },
+        )
+        .expect("rescan plan");
+    assert_eq!(rescan.plan.executable.len(), 1);
+    assert_eq!(
+        rescan.plan.executable[0].assets[0].metadata["workspace_snapshot_sha256"],
+        current_sha
+    );
+    let current_report = execute_fixture(
+        &orchestrator,
+        &runtime,
+        &rescan.plan.executable[0],
+        &current_workspace.tree_path,
+        gitleaks_output(&asset_id, &[("private-key", 7)]),
+    );
+    assert_eq!(current_report.findings.len(), 1);
+    service
+        .apply_execution_report(&case.id, &DurableExecutionReport::from(&current_report))
+        .expect("rescan reconciliation");
+
+    let current_case = service.show_case(&case.id).expect("rescan case");
+    let current_run = current_case
+        .scan_runs
+        .iter()
+        .find(|run| run.id == rescan.plan.scan_run.id)
+        .expect("rescan run");
+    assert_eq!(
+        current_run
+            .report_asset_snapshots
+            .iter()
+            .find(|snapshot| snapshot.asset.id == asset_id)
+            .expect("frozen rescan asset")
+            .asset
+            .metadata["workspace_snapshot_sha256"]
+            .as_str(),
+        Some(current_sha.as_str())
+    );
+
+    let comparison = service
+        .compare_and_persist(&case.id, &plan.scan_run.id, &rescan.plan.scan_run.id)
+        .expect("comparison");
+    assert!(comparison.complete);
+    assert!(
+        comparison
+            .diffs
+            .iter()
+            .all(|diff| { diff.status != FindingDiffStatus::UnableToVerify })
+    );
+    assert_eq!(comparison.diffs.len(), 2);
+    let resolved = comparison
+        .diffs
+        .iter()
+        .find(|diff| diff.status == FindingDiffStatus::Resolved)
+        .expect("removed finding");
+    let changed = comparison
+        .diffs
+        .iter()
+        .find(|diff| diff.status == FindingDiffStatus::Changed)
+        .expect("moved finding");
+    let resolved_observation = current_case
+        .finding_observations
+        .iter()
+        .find(|observation| {
+            Some(observation.finding_id.as_str()) == resolved.baseline_finding_id.as_deref()
+        })
+        .expect("resolved observation");
+    let resolved_evidence = &resolved_observation
+        .finding_snapshot
+        .as_ref()
+        .expect("resolved snapshot")
+        .evidence[0];
+    assert_eq!(
+        resolved_evidence.source_rule.as_deref(),
+        Some("generic-api-key")
+    );
+    assert_eq!(
+        resolved_evidence.location.as_deref(),
+        Some("config/example.env:line=3")
+    );
+    let moved = changed
+        .reasons
+        .iter()
+        .find(|reason| reason.code == FindingDiffReasonCode::LocationMoved)
+        .expect("location moved reason");
+    assert_eq!(
+        moved.detail,
+        "location moved from line 9 to line 7 in the same file"
+    );
+    let baseline_moved = current_case
+        .finding_observations
+        .iter()
+        .find(|observation| {
+            Some(observation.finding_id.as_str()) == changed.baseline_finding_id.as_deref()
+        })
+        .expect("baseline moved observation");
+    let current_moved = current_case
+        .finding_observations
+        .iter()
+        .find(|observation| {
+            Some(observation.finding_id.as_str()) == changed.current_finding_id.as_deref()
+        })
+        .expect("current moved observation");
+    assert_eq!(
+        baseline_moved
+            .finding_snapshot
+            .as_ref()
+            .expect("baseline moved snapshot")
+            .evidence[0]
+            .location
+            .as_deref(),
+        Some("config/example.env:line=9")
+    );
+    assert_eq!(
+        current_moved
+            .finding_snapshot
+            .as_ref()
+            .expect("current moved snapshot")
+            .evidence[0]
+            .location
+            .as_deref(),
+        Some("config/example.env:line=7")
+    );
+    assert_eq!(
+        comparison.local_input_changes,
+        vec![LocalInputChange {
+            asset_id,
+            baseline_sha256: baseline_sha,
+            current_sha256: current_sha,
+            changed: true,
+        }]
+    );
 }
 
 fn mapping_version_date(value: &str) -> Result<NaiveDate, String> {

@@ -2350,6 +2350,44 @@ pub fn attach_workspace_snapshot(
 }
 
 #[tauri::command]
+pub fn refresh_workspace_snapshot(
+    case_id: Id,
+    asset_id: Id,
+    selected_path: String,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> AppResult<AssessmentCase> {
+    let selected_path = Path::new(&selected_path);
+    if !selected_path.is_absolute() {
+        return Err(AppError::InvalidRequest(
+            "the working-tree selection must be an explicit absolute directory".into(),
+        ));
+    }
+    let service = state.case_service();
+    let case = service.show_case(&case_id)?;
+    if case.is_demo || case.status == CaseStatus::Archived {
+        return Err(AppError::NotAuthorized(
+            "demo or archived cases cannot refresh working-tree snapshots".into(),
+        ));
+    }
+    let (source_id, profile) = service.workspace_refresh_target(&case_id, &asset_id)?;
+    let snapshot = create_workspace_snapshot_with_profile(
+        state.artifact_root(),
+        &case_id,
+        &source_id,
+        selected_path,
+        profile,
+        WorkspaceSnapshotLimits::default(),
+    )?;
+    // Re-resolve through the persisted reference before it enters the case.
+    // This exercises the same no-symlink/hash boundary used by execution.
+    resolve_workspace_snapshot(state.artifact_root(), &case_id, &snapshot.reference)?;
+    let case = service.refresh_workspace_snapshot(&case_id, &asset_id, snapshot)?;
+    emit(&app, COVERAGE_CHANGED_EVENT, &case)?;
+    Ok(case)
+}
+
+#[tauri::command]
 pub fn select_mcp_configuration(
     case_id: Id,
     asset_id: Id,

@@ -22,6 +22,7 @@ import {
 import type {
   AppSnapshot,
   AttachWorkspaceSnapshotInput,
+  RefreshWorkspaceSnapshotInput,
   BeginProviderAuthorizationInput,
   BootstrapOperatorConfig,
   BootstrapRequest,
@@ -100,6 +101,7 @@ export const COMMANDS = {
   cancelDiscovery: "cancel_discovery",
   connectSourceSnapshot: "connect_source_snapshot",
   attachWorkspaceSnapshot: "attach_workspace_snapshot",
+  refreshWorkspaceSnapshot: "refresh_workspace_snapshot",
   selectMcpConfiguration: "select_mcp_configuration",
   selectAgenticFramework: "select_agentic_framework",
   configureModelEndpoint: "configure_model_endpoint",
@@ -734,6 +736,21 @@ export const scannerService = {
       serviceText(
         "Open the desktop app to add this folder.",
         "請開啟桌面版加入這個資料夾。",
+      ),
+    );
+  },
+
+  async refreshWorkspaceSnapshot(input: RefreshWorkspaceSnapshotInput): Promise<ServiceResult<ActionResponse>> {
+    return actionResult(
+      COMMANDS.refreshWorkspaceSnapshot,
+      { ...input },
+      serviceText(
+        "The folder was copied again. Check fixes will read this copy.",
+        "已重新複製資料夾；確認修復會讀取這份副本。",
+      ),
+      serviceText(
+        "Open the desktop app to choose this folder again.",
+        "請開啟桌面版重新選擇這個資料夾。",
       ),
     );
   },

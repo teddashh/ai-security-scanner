@@ -74,7 +74,10 @@ use crate::external_scope::{
     explicit_target_requires_sensitive_network_allowance,
 };
 use crate::mcp_armor_input::{
-    MCP_ARMOR_ENGINE_ID, McpConfigurationPlanStatus, mcp_configuration_plan_status,
+    MCP_ARMOR_ENGINE_ID, MCP_CONFIGURATION_CANDIDATES_METADATA_KEY,
+    MCP_CONFIGURATION_DISCOVERY_COMPLETE_METADATA_KEY, MCP_CONFIGURATION_PATH_NAMESPACE,
+    MCP_CONFIGURATION_SELECTED_METADATA_KEY, MCP_CONFIGURATION_SHA256_NAMESPACE,
+    McpConfigurationPlanStatus, discover_mcp_configurations, mcp_configuration_plan_status,
     select_mcp_configuration,
 };
 use crate::naabu_work_plan::{
@@ -88,7 +91,8 @@ use crate::source_authorization::{
 use crate::storage::Storage;
 use crate::workspace_snapshot::{
     WORKSPACE_SNAPSHOT_REFERENCE_METADATA_KEY, WORKSPACE_SNAPSHOT_REFERENCE_SCHEMA,
-    WorkspaceSnapshot, WorkspaceSnapshotManifest, WorkspaceSnapshotReference,
+    WorkspaceInputProfile, WorkspaceSnapshot, WorkspaceSnapshotManifest,
+    WorkspaceSnapshotReference, inspect_workspace_snapshot,
 };
 use crate::zap_work_plan::{ZAP_ENGINE_ID, ZAP_PASSIVE_PROFILE_ID, matches_zap_passive_profile};
 use chrono::{DateTime, Utc};
@@ -1678,6 +1682,10 @@ impl<'a> CaseService<'a> {
                 existing.discovered_from.sort();
             }
         } else {
+            snapshot.asset.metadata.insert(
+                "workspace_snapshot_saved_at".into(),
+                serde_json::to_value(Utc::now())?,
+            );
             case.assets.push(snapshot.asset);
         }
         case.status = CaseStatus::ScopeReview;
@@ -1685,6 +1693,99 @@ impl<'a> CaseService<'a> {
         refresh_coverage_ledger(&mut case, self.engines.manifests(), Utc::now());
         self.storage
             .save_case(&mut case, "source.workspace_snapshot_attached")?;
+        Ok(case)
+    }
+
+    /// Source id and input profile of a workspace asset that can take a new copy.
+    /// Refuses before any folder is read when the case or asset cannot be refreshed.
+    pub fn workspace_refresh_target(
+        &self,
+        case_id: &str,
+        asset_id: &str,
+    ) -> AppResult<(String, WorkspaceInputProfile)> {
+        let case = self.mutable_case(case_id, "refresh a workspace snapshot")?;
+        ensure_no_active_scan(&case, "refresh a workspace snapshot")?;
+        let binding = workspace_refresh_binding(&case, asset_id)?;
+        Ok((binding.source_id, binding.input_profile))
+    }
+
+    /// Saves a new read-only copy of a folder the user chose again, under the
+    /// same local asset. The previous copy's files stay in place.
+    pub fn refresh_workspace_snapshot(
+        &self,
+        case_id: &str,
+        asset_id: &str,
+        snapshot: WorkspaceSnapshot,
+    ) -> AppResult<AssessmentCase> {
+        if !workspace_snapshot_shape_is_valid(&snapshot) {
+            return Err(AppError::InvalidRequest(
+                "local input snapshot is not a backend-created unauthorized typed candidate".into(),
+            ));
+        }
+        let mut case = self.mutable_case(case_id, "refresh a workspace snapshot")?;
+        ensure_no_active_scan(&case, "refresh a workspace snapshot")?;
+        let binding = workspace_refresh_binding(&case, asset_id)?;
+        if snapshot.asset.id != asset_id {
+            return Err(AppError::InvalidRequest(
+                "workspace refresh snapshot does not belong to the selected asset".into(),
+            ));
+        }
+        if snapshot.asset.discovered_from.first().map(String::as_str)
+            != Some(binding.source_id.as_str())
+        {
+            return Err(AppError::InvalidRequest(
+                "workspace refresh snapshot comes from a different source".into(),
+            ));
+        }
+        if snapshot.reference.input_profile != binding.input_profile {
+            return Err(AppError::InvalidRequest(
+                "workspace refresh snapshot uses a different input profile".into(),
+            ));
+        }
+        if snapshot.asset.kind != binding.asset_kind {
+            return Err(AppError::InvalidRequest(
+                "workspace refresh snapshot asset kind does not match the existing asset".into(),
+            ));
+        }
+        let change = match inspect_workspace_snapshot(
+            &self.artifact_root,
+            case_id,
+            &binding.old_reference,
+        ) {
+            Ok(previous) => Some(workspace_snapshot_change_summary(
+                &previous.manifest,
+                &snapshot.manifest,
+            )),
+            Err(_) => None,
+        };
+        let reference_value = serde_json::to_value(&snapshot.reference)?;
+        validate_non_secret_value("workspace snapshot reference", &reference_value)?;
+        let now = Utc::now();
+        let source = case
+            .data_sources
+            .iter_mut()
+            .find(|source| source.id == binding.source_id)
+            .ok_or_else(|| {
+                AppError::InvalidRequest(
+                    "workspace asset must have exactly one connected read-only snapshot source"
+                        .into(),
+                )
+            })?;
+        source.metadata.insert(
+            WORKSPACE_SNAPSHOT_REFERENCE_METADATA_KEY.into(),
+            reference_value,
+        );
+        source.last_discovered_at = Some(now);
+        let asset = case
+            .assets
+            .iter_mut()
+            .find(|asset| asset.id == asset_id)
+            .ok_or_else(|| AppError::InvalidRequest(format!("asset not found: {asset_id}")))?;
+        apply_refreshed_workspace_asset(asset, &snapshot, now, &binding, change)?;
+        case.touch();
+        refresh_coverage_ledger(&mut case, self.engines.manifests(), now);
+        self.storage
+            .save_case(&mut case, "source.workspace_snapshot_refreshed")?;
         Ok(case)
     }
 
@@ -4340,7 +4441,7 @@ impl<'a> CaseService<'a> {
                     .map(|asset| asset.id.clone())
                     .collect::<Vec<_>>();
                 let execution_contract =
-                    (|| -> AppResult<(EngineManifest, String, String, String)> {
+                    (|| -> AppResult<(EngineManifest, String, String, String, String)> {
                         let execution_manifest = execution_manifest_for_verified_single_asset(
                             manifest,
                             assets.iter().copied(),
@@ -4371,12 +4472,20 @@ impl<'a> CaseService<'a> {
                             &execution_manifest,
                             &assets,
                             &relevant_grants,
+                            ScopeContractPurpose::Execution,
+                        )?;
+                        let comparison_scope_sha256 = comparable_scope_contract_sha256(
+                            &execution_manifest,
+                            &assets,
+                            &relevant_grants,
+                            ScopeContractPurpose::Comparison,
                         )?;
                         Ok((
                             execution_manifest,
                             planned_resume_token,
                             command_sha256,
                             scope_contract_sha256,
+                            comparison_scope_sha256,
                         ))
                     })();
                 let (
@@ -4384,6 +4493,7 @@ impl<'a> CaseService<'a> {
                     planned_resume_token,
                     command_sha256,
                     scope_contract_sha256,
+                    comparison_scope_sha256,
                 ) = match execution_contract {
                     Ok(contract) => contract,
                     Err(error) => {
@@ -4449,6 +4559,7 @@ impl<'a> CaseService<'a> {
                     execution_timeout_seconds: Some(manifest.execution_timeout_seconds()),
                     knowledge_input: Some(dated_knowledge_input(manifest)),
                     scope_contract_sha256: Some(scope_contract_sha256),
+                    comparison_scope_sha256: Some(comparison_scope_sha256),
                     execution_scope_grant_ids: matches!(
                         manifest.id.as_str(),
                         "greenbone" | ZAP_ENGINE_ID
@@ -6144,6 +6255,7 @@ impl<'a> CaseService<'a> {
                 manifest,
                 &assets.iter().collect::<Vec<_>>(),
                 &relevant_grants,
+                ScopeContractPurpose::Execution,
             )?;
             if engine_run.scope_contract_sha256.as_deref() != Some(resumed_scope_sha256.as_str()) {
                 blocked.push(ResumeBlocked {
@@ -10263,6 +10375,7 @@ fn not_executed_run(
         execution_timeout_seconds: manifest.map(EngineManifest::execution_timeout_seconds),
         knowledge_input: manifest.map(dated_knowledge_input),
         scope_contract_sha256: None,
+        comparison_scope_sha256: None,
         execution_scope_grant_ids: None,
         naabu_work_plan: None,
         naabu_attempt_requests: Vec::new(),
@@ -10295,6 +10408,256 @@ fn dated_knowledge_input(manifest: &EngineManifest) -> EngineKnowledgeInput {
     input
 }
 
+const WORKSPACE_SNAPSHOT_SHA256_NAMESPACE: &str = "ai-security-scanner:workspace-snapshot-sha256";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ScopeContractPurpose {
+    /// Byte-for-byte the historical execution document, including local-copy hashes.
+    Execution,
+    /// Same document with local-copy content hashes removed, for run comparison only.
+    Comparison,
+}
+
+struct WorkspaceRefreshBinding {
+    source_id: String,
+    input_profile: WorkspaceInputProfile,
+    asset_kind: AssetKind,
+    previous_sha256: String,
+    old_reference: WorkspaceSnapshotReference,
+    previous_mcp_selection: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct WorkspaceSnapshotChangeSummary {
+    changed: u64,
+    added: u64,
+    removed: u64,
+    unchanged: u64,
+}
+
+fn workspace_snapshot_shape_is_valid(snapshot: &WorkspaceSnapshot) -> bool {
+    snapshot.reference.schema_version == WORKSPACE_SNAPSHOT_REFERENCE_SCHEMA
+        && snapshot.reference.sha256.len() == 64
+        && snapshot
+            .reference
+            .sha256
+            .chars()
+            .all(|character| character.is_ascii_hexdigit())
+        && snapshot.reference.working_tree_only
+        && snapshot.asset.kind == snapshot.reference.input_profile.asset_kind()
+        && snapshot.asset.discovered_from.len() == 1
+}
+
+fn workspace_refresh_binding(
+    case: &AssessmentCase,
+    asset_id: &str,
+) -> AppResult<WorkspaceRefreshBinding> {
+    let asset = case
+        .assets
+        .iter()
+        .find(|asset| asset.id == asset_id)
+        .ok_or_else(|| AppError::InvalidRequest(format!("asset not found: {asset_id}")))?;
+    let previous_sha256 = asset
+        .metadata
+        .get("workspace_snapshot_sha256")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            AppError::InvalidRequest("workspace asset has no snapshot content hash".into())
+        })?
+        .to_owned();
+    let sha_identifiers = asset
+        .identifiers
+        .iter()
+        .filter(|identifier| identifier.namespace == WORKSPACE_SNAPSHOT_SHA256_NAMESPACE)
+        .count();
+    if sha_identifiers != 1 {
+        return Err(AppError::InvalidRequest(
+            "workspace asset must carry exactly one snapshot content hash".into(),
+        ));
+    }
+    let mut sources = asset.discovered_from.iter().filter_map(|source_id| {
+        case.data_sources.iter().find(|source| {
+            source.id == *source_id
+                && source.read_only
+                && source.status == SourceConnectionStatus::Connected
+                && source
+                    .metadata
+                    .contains_key(WORKSPACE_SNAPSHOT_REFERENCE_METADATA_KEY)
+        })
+    });
+    let Some(source) = sources.next() else {
+        return Err(AppError::InvalidRequest(
+            "workspace asset must have exactly one connected read-only snapshot source".into(),
+        ));
+    };
+    if sources.next().is_some() {
+        return Err(AppError::InvalidRequest(
+            "workspace asset must have exactly one connected read-only snapshot source".into(),
+        ));
+    }
+    let old_reference = source
+        .metadata
+        .get(WORKSPACE_SNAPSHOT_REFERENCE_METADATA_KEY)
+        .cloned()
+        .ok_or_else(|| {
+            AppError::InvalidRequest(
+                "workspace source has an invalid backend snapshot reference".into(),
+            )
+        })?;
+    let old_reference = serde_json::from_value::<WorkspaceSnapshotReference>(old_reference)
+        .map_err(|_| {
+            AppError::InvalidRequest(
+                "workspace source has an invalid backend snapshot reference".into(),
+            )
+        })?;
+    let previous_mcp_selection = asset
+        .metadata
+        .get(MCP_CONFIGURATION_SELECTED_METADATA_KEY)
+        .and_then(Value::as_str)
+        .map(str::to_owned);
+    Ok(WorkspaceRefreshBinding {
+        source_id: source.id.clone(),
+        input_profile: old_reference.input_profile,
+        asset_kind: asset.kind.clone(),
+        previous_sha256,
+        old_reference,
+        previous_mcp_selection,
+    })
+}
+
+fn workspace_snapshot_change_summary(
+    previous: &WorkspaceSnapshotManifest,
+    current: &WorkspaceSnapshotManifest,
+) -> WorkspaceSnapshotChangeSummary {
+    let mut previous_files = BTreeMap::<&str, (&str, u64)>::new();
+    for file in &previous.files {
+        previous_files.insert(
+            file.relative_path.as_str(),
+            (file.sha256.as_str(), file.byte_length),
+        );
+    }
+    let mut current_files = BTreeMap::<&str, (&str, u64)>::new();
+    for file in &current.files {
+        current_files.insert(
+            file.relative_path.as_str(),
+            (file.sha256.as_str(), file.byte_length),
+        );
+    }
+    let mut changed = 0u64;
+    let mut added = 0u64;
+    let mut removed = 0u64;
+    let mut unchanged = 0u64;
+    for (path, current_file) in &current_files {
+        match previous_files.get(path) {
+            Some(previous_file) if previous_file == current_file => unchanged += 1,
+            Some(_) => changed += 1,
+            None => added += 1,
+        }
+    }
+    for path in previous_files.keys() {
+        if !current_files.contains_key(path) {
+            removed += 1;
+        }
+    }
+    WorkspaceSnapshotChangeSummary {
+        changed,
+        added,
+        removed,
+        unchanged,
+    }
+}
+
+fn apply_refreshed_workspace_asset(
+    asset: &mut Asset,
+    snapshot: &WorkspaceSnapshot,
+    now: DateTime<Utc>,
+    binding: &WorkspaceRefreshBinding,
+    change: Option<WorkspaceSnapshotChangeSummary>,
+) -> AppResult<()> {
+    let mut sha_indexes = asset
+        .identifiers
+        .iter()
+        .enumerate()
+        .filter(|(_, identifier)| identifier.namespace == WORKSPACE_SNAPSHOT_SHA256_NAMESPACE)
+        .map(|(index, _)| index)
+        .collect::<Vec<_>>();
+    if sha_indexes.len() != 1 {
+        return Err(AppError::InvalidRequest(
+            "workspace asset must carry exactly one snapshot content hash".into(),
+        ));
+    }
+    asset.identifiers[sha_indexes.remove(0)].value = snapshot.reference.sha256.clone();
+    asset.metadata.insert(
+        "workspace_snapshot_id".into(),
+        Value::String(snapshot.reference.snapshot_id.clone()),
+    );
+    asset.metadata.insert(
+        "workspace_snapshot_sha256".into(),
+        Value::String(snapshot.reference.sha256.clone()),
+    );
+    asset
+        .metadata
+        .remove(MCP_CONFIGURATION_CANDIDATES_METADATA_KEY);
+    asset
+        .metadata
+        .remove(MCP_CONFIGURATION_DISCOVERY_COMPLETE_METADATA_KEY);
+    asset
+        .metadata
+        .remove(MCP_CONFIGURATION_SELECTED_METADATA_KEY);
+    asset.identifiers.retain(|identifier| {
+        identifier.namespace != MCP_CONFIGURATION_PATH_NAMESPACE
+            && identifier.namespace != MCP_CONFIGURATION_SHA256_NAMESPACE
+    });
+    for key in [
+        MCP_CONFIGURATION_CANDIDATES_METADATA_KEY,
+        MCP_CONFIGURATION_DISCOVERY_COMPLETE_METADATA_KEY,
+        MCP_CONFIGURATION_SELECTED_METADATA_KEY,
+    ] {
+        if let Some(value) = snapshot.asset.metadata.get(key) {
+            asset.metadata.insert(key.to_owned(), value.clone());
+        }
+    }
+    for identifier in &snapshot.asset.identifiers {
+        if identifier.namespace == MCP_CONFIGURATION_PATH_NAMESPACE
+            || identifier.namespace == MCP_CONFIGURATION_SHA256_NAMESPACE
+        {
+            asset.identifiers.push(identifier.clone());
+        }
+    }
+    if let Some(selection) = binding.previous_mcp_selection.as_deref() {
+        let discovery = discover_mcp_configurations(&snapshot.manifest);
+        if discovery.complete
+            && discovery
+                .candidates
+                .iter()
+                .any(|candidate| candidate.relative_path == selection)
+        {
+            select_mcp_configuration(asset, &snapshot.manifest, selection)?;
+        }
+    }
+    asset.metadata.insert(
+        "workspace_snapshot_saved_at".into(),
+        serde_json::to_value(now)?,
+    );
+    asset.metadata.insert(
+        "workspace_snapshot_previous_sha256".into(),
+        Value::String(binding.previous_sha256.clone()),
+    );
+    match change {
+        Some(change) => {
+            asset.metadata.insert(
+                "workspace_snapshot_change".into(),
+                serde_json::to_value(change)?,
+            );
+        }
+        None => {
+            asset.metadata.remove("workspace_snapshot_change");
+        }
+    }
+    Ok(())
+}
+
 /// Build a deterministic execution-semantics contract. Approval actors,
 /// timestamps, notes, and grant IDs remain preserved in `ScanRun` snapshots,
 /// but are excluded here because they do not change what the engine can read or
@@ -10304,6 +10667,7 @@ fn comparable_scope_contract_sha256(
     manifest: &EngineManifest,
     assets: &[&Asset],
     grants: &[ScopeGrant],
+    purpose: ScopeContractPurpose,
 ) -> AppResult<String> {
     let direct_external = manifest.required_permissions.iter().any(|permission| {
         matches!(
@@ -10339,6 +10703,11 @@ fn comparable_scope_contract_sha256(
             .iter()
             .filter(|identifier| {
                 external_targets.is_empty() || external_targets.contains(&identifier.value)
+            })
+            .filter(|identifier| {
+                purpose == ScopeContractPurpose::Execution
+                    || (identifier.namespace != WORKSPACE_SNAPSHOT_SHA256_NAMESPACE
+                        && identifier.namespace != MCP_CONFIGURATION_SHA256_NAMESPACE)
             })
             .map(|identifier| {
                 serde_json::json!({
@@ -10428,8 +10797,12 @@ fn comparable_scope_contract_sha256(
             .cmp(&right.get("id").and_then(Value::as_str))
     });
 
+    let schema_version = match purpose {
+        ScopeContractPurpose::Execution => "1",
+        ScopeContractPurpose::Comparison => "comparison-1",
+    };
     let document = serde_json::json!({
-        "schema_version": "1",
+        "schema_version": schema_version,
         "engine_id": manifest.id,
         "active_external": manifest.active_external,
         "required_permissions": required_permissions,
@@ -20939,6 +21312,7 @@ fn html_escape(value: &str) -> String {
 mod tests {
     use super::*;
     include!("case_service_attachment_tests.rs");
+    include!("case_service_workspace_refresh_tests.rs");
     use crate::beginner_report::build_beginner_master_report;
     use crate::bootstrap::{
         CreatedBootstrapResources, create_cleanup_ledger, write_cleanup_ledger,
@@ -27854,9 +28228,13 @@ mod tests {
         let manifest = comparison_scope_manifest();
         let asset = comparison_scope_asset();
         let grant = comparison_scope_grant();
-        let baseline =
-            comparable_scope_contract_sha256(&manifest, &[&asset], std::slice::from_ref(&grant))
-                .expect("baseline scope contract");
+        let baseline = comparable_scope_contract_sha256(
+            &manifest,
+            &[&asset],
+            std::slice::from_ref(&grant),
+            ScopeContractPurpose::Execution,
+        )
+        .expect("baseline scope contract");
 
         let mut reapproved = grant.clone();
         reapproved.id = "grant-2".into();
@@ -27865,16 +28243,26 @@ mod tests {
         reapproved.notes = Some("new audit note".into());
         assert_eq!(
             baseline,
-            comparable_scope_contract_sha256(&manifest, &[&asset], &[reapproved])
-                .expect("equivalent reapproval")
+            comparable_scope_contract_sha256(
+                &manifest,
+                &[&asset],
+                &[reapproved],
+                ScopeContractPurpose::Execution,
+            )
+            .expect("equivalent reapproval")
         );
 
         let mut changed_permission = grant;
         changed_permission.permission = ScanPermission::InventoryRead;
         assert_ne!(
             baseline,
-            comparable_scope_contract_sha256(&manifest, &[&asset], &[changed_permission])
-                .expect("changed permission contract")
+            comparable_scope_contract_sha256(
+                &manifest,
+                &[&asset],
+                &[changed_permission],
+                ScopeContractPurpose::Execution,
+            )
+            .expect("changed permission contract")
         );
     }
 
@@ -27933,9 +28321,13 @@ mod tests {
                 allow_sensitive_networks: false,
             }),
         };
-        let baseline =
-            comparable_scope_contract_sha256(&manifest, &[&asset], std::slice::from_ref(&grant))
-                .expect("baseline profile scope contract");
+        let baseline = comparable_scope_contract_sha256(
+            &manifest,
+            &[&asset],
+            std::slice::from_ref(&grant),
+            ScopeContractPurpose::Execution,
+        )
+        .expect("baseline profile scope contract");
 
         grant
             .external_scope
@@ -27945,8 +28337,13 @@ mod tests {
             .profile_id = Some("nuclei_web_safe_v2".into());
         assert_ne!(
             baseline,
-            comparable_scope_contract_sha256(&manifest, &[&asset], &[grant])
-                .expect("changed upstream profile contract")
+            comparable_scope_contract_sha256(
+                &manifest,
+                &[&asset],
+                &[grant],
+                ScopeContractPurpose::Execution,
+            )
+            .expect("changed upstream profile contract")
         );
     }
 
@@ -27955,16 +28352,25 @@ mod tests {
         let manifest = comparison_scope_manifest();
         let asset = comparison_scope_asset();
         let grant = comparison_scope_grant();
-        let baseline =
-            comparable_scope_contract_sha256(&manifest, &[&asset], std::slice::from_ref(&grant))
-                .expect("baseline scope contract");
+        let baseline = comparable_scope_contract_sha256(
+            &manifest,
+            &[&asset],
+            std::slice::from_ref(&grant),
+            ScopeContractPurpose::Execution,
+        )
+        .expect("baseline scope contract");
         let mut changed_target = asset.clone();
         changed_target.identifiers[0].value = "arn:aws:s3:::example-b".into();
 
         assert_ne!(
             baseline,
-            comparable_scope_contract_sha256(&manifest, &[&changed_target], &[grant])
-                .expect("changed target contract")
+            comparable_scope_contract_sha256(
+                &manifest,
+                &[&changed_target],
+                &[grant],
+                ScopeContractPurpose::Execution,
+            )
+            .expect("changed target contract")
         );
     }
 
@@ -27986,15 +28392,24 @@ mod tests {
             value: "111122223333".into(),
         }];
         let grant = comparison_scope_grant();
-        let baseline =
-            comparable_scope_contract_sha256(&manifest, &[&asset], std::slice::from_ref(&grant))
-                .expect("baseline provider scope contract");
+        let baseline = comparable_scope_contract_sha256(
+            &manifest,
+            &[&asset],
+            std::slice::from_ref(&grant),
+            ScopeContractPurpose::Execution,
+        )
+        .expect("baseline provider scope contract");
 
         manifest.provider_execution_contracts[0].profile = "aws_iam_changed".into();
         assert_ne!(
             baseline,
-            comparable_scope_contract_sha256(&manifest, &[&asset], &[grant])
-                .expect("changed provider profile contract")
+            comparable_scope_contract_sha256(
+                &manifest,
+                &[&asset],
+                &[grant],
+                ScopeContractPurpose::Execution,
+            )
+            .expect("changed provider profile contract")
         );
     }
 
@@ -32935,8 +33350,13 @@ mod tests {
             .filter(|grant| grant.asset_id == asset.id)
             .cloned()
             .collect::<Vec<_>>();
-        let hash =
-            comparable_scope_contract_sha256(&second_task.manifest, &[asset], &grants).unwrap();
+        let hash = comparable_scope_contract_sha256(
+            &second_task.manifest,
+            &[asset],
+            &grants,
+            ScopeContractPurpose::Execution,
+        )
+        .unwrap();
         let run = &mut legacy.scan_runs[0];
         let mut combined = run
             .engine_runs
@@ -38093,6 +38513,7 @@ mod tests {
                 execution_timeout_seconds: None,
                 knowledge_input: None,
                 scope_contract_sha256: None,
+                comparison_scope_sha256: None,
                 execution_scope_grant_ids: None,
                 naabu_work_plan: None,
                 naabu_attempt_requests: Vec::new(),
@@ -41832,6 +42253,7 @@ mod tests {
                 execution_timeout_seconds: None,
                 knowledge_input: None,
                 scope_contract_sha256: None,
+                comparison_scope_sha256: None,
                 execution_scope_grant_ids: None,
                 naabu_work_plan: None,
                 naabu_attempt_requests: Vec::new(),
@@ -46725,6 +47147,7 @@ mod tests {
                 execution_timeout_seconds: None,
                 knowledge_input: None,
                 scope_contract_sha256: None,
+                comparison_scope_sha256: None,
                 execution_scope_grant_ids: None,
                 naabu_work_plan: None,
                 naabu_attempt_requests: Vec::new(),
@@ -47214,6 +47637,7 @@ mod tests {
                 support_until: Some("2026-11-22".into()),
             }),
             scope_contract_sha256: Some("d".repeat(64)),
+            comparison_scope_sha256: None,
             execution_scope_grant_ids: None,
             naabu_work_plan: None,
             naabu_attempt_requests: Vec::new(),

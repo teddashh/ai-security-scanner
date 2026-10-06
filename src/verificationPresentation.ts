@@ -46,6 +46,7 @@ const reasonLabelsZhTW: Readonly<Record<FindingDiffReasonCode, string>> = {
   evidence_changed: "證據雜湊有變更",
   affected_assets_changed: "受影響的資產有變更",
   observing_engines_changed: "觀察到問題的掃描工具有變更",
+  location_moved: "在同一個檔案中的位置改變",
 };
 
 const fixedReasonDetailsZhTW: Readonly<Record<string, readonly [string, string]>> = {
@@ -133,6 +134,13 @@ const translatedReasonDetailZhTW = (
           `${match?.[1] === "reference" ? "參考執行" : "候選執行"}缺少 ${match?.[2]}`,
         ).join("；"),
       };
+    }
+  }
+  if (code === "location_moved") {
+    const moved = detail.match(/^location moved from line (\d+) to line (\d+) in the same file$/u);
+    if (moved) return { text: `同一個檔案中的位置從第 ${moved[1]} 行移到第 ${moved[2]} 行` };
+    if (detail === "location moved within the same file") {
+      return { text: "在同一個檔案中的位置改變" };
     }
   }
   return undefined;

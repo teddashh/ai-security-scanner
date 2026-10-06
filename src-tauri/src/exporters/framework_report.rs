@@ -1755,6 +1755,7 @@ mod tests {
                 execution_timeout_seconds: None,
                 knowledge_input: None,
                 scope_contract_sha256: None,
+                comparison_scope_sha256: None,
                 execution_scope_grant_ids: None,
                 naabu_work_plan: None,
                 naabu_attempt_requests: Vec::new(),

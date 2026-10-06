@@ -826,6 +826,12 @@ interface NativeComparison {
   diffs: NativeFindingDiff[];
   complete?: boolean;
   completeness_issues?: NativeDiffReason[];
+  local_input_changes?: Array<{
+    asset_id: string;
+    baseline_sha256: string;
+    current_sha256: string;
+    changed: boolean;
+  }>;
 }
 
 export interface NativeAssessmentCase {
@@ -1339,6 +1345,60 @@ const localInputProfileFromAsset = (asset: NativeAsset): LocalInputProfile | und
   return asset.kind === "repository" && typeof asset.metadata?.workspace_snapshot_id === "string"
     ? "repository_working_tree"
     : undefined;
+};
+
+const workspaceSnapshotSha256 = /^[0-9a-f]{64}$/u;
+
+const nonNegativeInteger = (value: unknown): value is number =>
+  typeof value === "number" && Number.isInteger(value) && value >= 0;
+
+const localCopyFromMetadata = (metadata: Record<string, unknown> | undefined): Asset["localCopy"] | undefined => {
+  if (!metadata) return undefined;
+  const sha256 = metadata.workspace_snapshot_sha256;
+  if (typeof sha256 !== "string" || !workspaceSnapshotSha256.test(sha256)) return undefined;
+  const savedAt = typeof metadata.workspace_snapshot_saved_at === "string"
+    ? metadata.workspace_snapshot_saved_at
+    : undefined;
+  const previousSha256 = typeof metadata.workspace_snapshot_previous_sha256 === "string"
+    ? metadata.workspace_snapshot_previous_sha256
+    : undefined;
+  const rawChange = metadata.workspace_snapshot_change;
+  const changed = isRecord(rawChange) ? rawChange.changed : undefined;
+  const added = isRecord(rawChange) ? rawChange.added : undefined;
+  const removed = isRecord(rawChange) ? rawChange.removed : undefined;
+  const unchanged = isRecord(rawChange) ? rawChange.unchanged : undefined;
+  const change = nonNegativeInteger(changed)
+    && nonNegativeInteger(added)
+    && nonNegativeInteger(removed)
+    && nonNegativeInteger(unchanged)
+    ? { changed, added, removed, unchanged }
+    : undefined;
+  return {
+    sha256,
+    ...(savedAt !== undefined ? { savedAt } : {}),
+    ...(previousSha256 !== undefined ? { previousSha256 } : {}),
+    ...(change ? { change } : {}),
+  };
+};
+
+const localInputChangesFromComparison = (
+  value: unknown,
+): NonNullable<VerificationSummary["localInputChanges"]> => {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((entry) => {
+    if (!isRecord(entry)) return [];
+    const assetId = entry.asset_id;
+    const baselineSha256 = entry.baseline_sha256;
+    const currentSha256 = entry.current_sha256;
+    const changed = entry.changed;
+    if (
+      typeof assetId !== "string"
+      || typeof baselineSha256 !== "string"
+      || typeof currentSha256 !== "string"
+      || typeof changed !== "boolean"
+    ) return [];
+    return [{ assetId, baselineSha256, currentSha256, changed }];
+  });
 };
 
 const mcpConfigurationsFromAsset = (asset: NativeAsset): NonNullable<Asset["mcpConfigurationCandidates"]> => {
@@ -2427,6 +2487,7 @@ export const adaptNativeCase = (
       ? mapCoverageState(entry.status)
       : asset.candidate ? "discovered_not_authorized" : exactBoolean(asset.owner_confirmed) === true ? "authorized_incomplete" : "source_unavailable_unknown";
     const localInputProfile = localInputProfileFromAsset(asset);
+    const localCopy = localCopyFromMetadata(asset.metadata);
     const internetExposed = explicitTargetRequiresSensitiveNetworkAllowance(asset.name)
       ? false
       : asset.internet_exposed ?? undefined;
@@ -2449,6 +2510,7 @@ export const adaptNativeCase = (
       scanAttempted: exactNonEmptyString(entry?.last_run_id) || scanAttemptedAssetIds.has(asset.id),
       questionnairePlaceholder: localQuestionnaireKinds.has(String(asset.metadata?.questionnaire_kind)) && !localInputProfile,
       localInputProfile,
+      ...(localCopy ? { localCopy } : {}),
       mcpConfigurationCandidates: mcpConfigurationsFromAsset(asset),
       selectedMcpConfiguration: typeof asset.metadata?.mcp_configuration_selected === "string"
         ? asset.metadata.mcp_configuration_selected
@@ -2792,6 +2854,7 @@ export const adaptNativeCase = (
   if (comparison) {
     const nativeFindingById = new Map(nativeCase.findings.map((finding) => [finding.id, finding]));
     const runById = new Map(nativeCase.scan_runs.map((run) => [run.id, run]));
+    const localInputChanges = localInputChangesFromComparison(comparison.local_input_changes);
     verification = {
       baselineRunId: comparison.baseline_run_id,
       comparisonRunId: comparison.current_run_id,
@@ -2836,6 +2899,7 @@ export const adaptNativeCase = (
           })),
         };
       }),
+      ...(localInputChanges.length > 0 ? { localInputChanges } : {}),
     };
   }
   const assessmentIntent = mapAssessmentIntent(nativeCase.assessment_intent);

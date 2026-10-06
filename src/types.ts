@@ -262,6 +262,12 @@ export interface AttachWorkspaceSnapshotInput {
   inputProfile: LocalInputProfile;
 }
 
+export interface RefreshWorkspaceSnapshotInput {
+  caseId: string;
+  assetId: string;
+  selectedPath: string;
+}
+
 export interface SelectMcpConfigurationInput {
   caseId: string;
   assetId: string;
@@ -611,6 +617,21 @@ export interface Asset {
   /** True only for a local item named in the questionnaire but not attached yet. */
   questionnairePlaceholder?: boolean;
   localInputProfile?: LocalInputProfile;
+  /**
+   * Read-only folder copy the scanners actually read. Present only when the
+   * saved digest is a 64-character lowercase sha256.
+   */
+  localCopy?: {
+    sha256: string;
+    savedAt?: string;
+    previousSha256?: string;
+    change?: {
+      changed: number;
+      added: number;
+      removed: number;
+      unchanged: number;
+    };
+  };
   /** Bounded exact candidates discovered inside an immutable repository snapshot. */
   mcpConfigurationCandidates?: Array<{
     relativePath: string;
@@ -1821,7 +1842,8 @@ export type FindingDiffReasonCode =
   | "confidence_changed"
   | "evidence_changed"
   | "affected_assets_changed"
-  | "observing_engines_changed";
+  | "observing_engines_changed"
+  | "location_moved";
 
 export type DiffState = "resolved" | "persistent" | "new" | "unverifiable";
 
@@ -1858,6 +1880,13 @@ export interface VerificationSummary {
     detail: string;
   }>;
   diffs: VerificationDiff[];
+  /** Folder copies the comparison actually read. Omitted when the run had none. */
+  localInputChanges?: Array<{
+    assetId: string;
+    baselineSha256: string;
+    currentSha256: string;
+    changed: boolean;
+  }>;
 }
 
 export type ExportFormat =

@@ -1,13 +1,15 @@
 import { useMemo, useState } from "react";
 
 import { Icon } from "../components/Icon";
+import { LocalFolderRecheck } from "../components/LocalFolderRecheck";
 import { EmptyState, InlineNotice, MetricCard, PageHeader } from "../components/Shared";
 import { StatusPill } from "../components/StatusPill";
 import { useI18n } from "../i18n";
 import { diffMeta, runStatusMeta, severityMeta } from "../lib";
+import type { LocalFolderRecheckRow } from "../localFolderRecheck.ts";
 import { scanRunIdentityPresentation } from "../scanRunIdentityPresentation";
 import { isVerificationBaselineRun } from "../runLifecycle.ts";
-import type { DiffState, Finding, ScanRun, VerificationSummary } from "../types";
+import type { Asset, DiffState, Finding, ScanRun, VerificationSummary } from "../types";
 import {
   affectedEngineCount,
   isOnlyMappingVersionDrift,
@@ -20,10 +22,13 @@ interface VerificationPageProps {
   verification?: VerificationSummary;
   runs: ScanRun[];
   findings: Finding[];
+  assets?: ReadonlyArray<Pick<Asset, "id" | "name">>;
+  folderRecheckRows?: readonly LocalFolderRecheckRow[];
   baselineRunId?: string;
   busy?: boolean;
   onSelectBaseline: (runId: string) => void;
   onStartRescan: (baselineRunId: string) => Promise<void>;
+  onChooseFolderAgain?: (assetId: string) => void;
   onOpenFinding: (findingId: string) => void;
 }
 
@@ -148,7 +153,27 @@ const copy = {
     en: "The baseline finding is no longer in the current list. Its complete technical history remains in the case package.",
     zhTW: "這筆基準問題已不在目前清單；完整技術歷史仍保留在案件包。",
   },
+  gate: { en: "Choose each folder again first.", zhTW: "請先重新選擇每個資料夾。" },
+  copiesTitle: { en: "Folder copies compared", zhTW: "比較的資料夾副本" },
+  copiesChanged: { en: "{name}: {before} → {after}", zhTW: "{name}：{before} → {after}" },
+  copiesSame: {
+    en: "{name}: the same files in both scans ({hash})",
+    zhTW: "{name}：兩次掃描的檔案相同（{hash}）",
+  },
+  sameFilesNotice: {
+    en: "{name}: both scans read the same files. If you changed this folder, choose it again, then check again.",
+    zhTW: "{name}：兩次掃描讀到的檔案相同。如果你修改過這個資料夾，請重新選擇後再檢查一次。",
+  },
+  movedSummary: {
+    en: "The same rule still finds this problem in the same file; only its line moved. Continue its recommended fix, then check again.",
+    zhTW: "同一條規則在同一個檔案仍找到這個問題，只是行號改變；請繼續執行建議修復，完成後再次檢查。",
+  },
 } as const;
+
+const redactedSnapshotHash = "[redacted snapshot hash]";
+
+const shortSnapshotHash = (value: string): string =>
+  value === redactedSnapshotHash ? value : value.slice(0, 12);
 
 const states: DiffState[] = ["resolved", "persistent", "new", "unverifiable"];
 
@@ -176,7 +201,19 @@ const mappingDiffSummary = {
   zhTW: "這項檢查在兩次掃描中都已完成，但控制對照目錄版本不同；這個問題目前沒有比較分類。",
 } as const;
 
-export function VerificationPage({ verification, runs, findings, baselineRunId, busy, onSelectBaseline, onStartRescan, onOpenFinding }: VerificationPageProps) {
+export function VerificationPage({
+  verification,
+  runs,
+  findings,
+  assets = [],
+  folderRecheckRows = [],
+  baselineRunId,
+  busy,
+  onSelectBaseline,
+  onStartRescan,
+  onChooseFolderAgain = () => {},
+  onOpenFinding,
+}: VerificationPageProps) {
   const { locale, text, formatDateTime, formatNumber } = useI18n();
   const [filter, setFilter] = useState<DiffState | "all">("all");
 
@@ -189,6 +226,13 @@ export function VerificationPage({ verification, runs, findings, baselineRunId, 
   const terminalRuns = runs.filter(isVerificationBaselineRun);
   const selectedBaselineRun = terminalRuns.find((run) => run.id === baselineRunId);
   const showRunDate = (run: ScanRun): string => formatDateTime(run.finishedAt ?? run.startedAt);
+  const folderRecheckReady = folderRecheckRows.every((row) => row.state !== "choose_again");
+  const folderRecheck = folderRecheckRows.length > 0 && !activeRun ? (
+    <LocalFolderRecheck rows={folderRecheckRows} busy={busy} onChooseAgain={onChooseFolderAgain} />
+  ) : undefined;
+  const recheckGate = !activeRun && !folderRecheckReady
+    ? <p className="local-folder-recheck-gate">{text(copy.gate)}</p>
+    : undefined;
   const baselinePicker = terminalRuns.length > 0 ? (
     <section className="section-block" aria-labelledby="verification-baseline-picker-title">
       <div className="section-heading">
@@ -207,6 +251,7 @@ export function VerificationPage({ verification, runs, findings, baselineRunId, 
         </select>
         {!selectedBaselineRun && <small>{text(copy.baselinePrompt)}</small>}
       </label>
+      {folderRecheck}
       <details className="page-technical-details page-technical-details--guide">
         <summary>{text(copy.comparisonDetails)}</summary>
         <p>{text(copy.comparisonMechanics)}</p>
@@ -218,7 +263,7 @@ export function VerificationPage({ verification, runs, findings, baselineRunId, 
   ) : undefined;
 
   if (!verification) {
-    const canStart = Boolean(selectedBaselineRun) && !activeRun;
+    const canStart = Boolean(selectedBaselineRun) && !activeRun && folderRecheckReady;
     return (
       <div className="page">
         <PageHeader eyebrow={text(copy.eyebrow)} title={text(copy.beforeTitle)} description={text(copy.beforeDescription)} />
@@ -240,9 +285,12 @@ export function VerificationPage({ verification, runs, findings, baselineRunId, 
               date: showRunDate(selectedBaselineRun),
             })}
           action={terminalRuns.length > 0 ? (
-            <button className="button button--primary" type="button" disabled={busy || !canStart} onClick={() => selectedBaselineRun && void onStartRescan(selectedBaselineRun.id)}>
-              <Icon name="refresh" size={17} />{busy ? text(copy.preparing) : activeRun ? text(copy.handleActiveFirst) : text(copy.start)}
-            </button>
+            <div className="empty-state__actions">
+              <button className="button button--primary" type="button" disabled={busy || !canStart} onClick={() => selectedBaselineRun && void onStartRescan(selectedBaselineRun.id)}>
+                <Icon name="refresh" size={17} />{busy ? text(copy.preparing) : activeRun ? text(copy.handleActiveFirst) : text(copy.start)}
+              </button>
+              {recheckGate}
+            </div>
           ) : undefined}
         />
       </div>
@@ -259,7 +307,10 @@ export function VerificationPage({ verification, runs, findings, baselineRunId, 
   const completenessIssues = verification.completenessIssues ?? [];
   const mappingVersionDriftOnly = isOnlyMappingVersionDrift(completenessIssues);
   const mappingAffectedEngineCount = affectedEngineCount(completenessIssues);
-  const canRescan = !activeRun && Boolean(selectedBaselineRun);
+  const canRescan = !activeRun && Boolean(selectedBaselineRun) && folderRecheckReady;
+  const localInputChanges = verification.localInputChanges ?? [];
+  const comparedFolderName = (assetId: string): string =>
+    assets.find((asset) => asset.id === assetId)?.name ?? assetId;
 
   return (
     <div className="page">
@@ -268,10 +319,13 @@ export function VerificationPage({ verification, runs, findings, baselineRunId, 
         title={text(copy.resultTitle)}
         description={text(copy.resultDescription)}
         actions={(
-          <button className="button button--primary" type="button" disabled={busy || !canRescan} onClick={() => selectedBaselineRun && void onStartRescan(selectedBaselineRun.id)}>
-            <Icon name="refresh" size={18} />
-            {busy ? text(copy.preparing) : activeRun ? text(copy.handleActiveFirst) : text(copy.rescan)}
-          </button>
+          <>
+            <button className="button button--primary" type="button" disabled={busy || !canRescan} onClick={() => selectedBaselineRun && void onStartRescan(selectedBaselineRun.id)}>
+              <Icon name="refresh" size={18} />
+              {busy ? text(copy.preparing) : activeRun ? text(copy.handleActiveFirst) : text(copy.rescan)}
+            </button>
+            {recheckGate}
+          </>
         )}
       />
 
@@ -309,6 +363,28 @@ export function VerificationPage({ verification, runs, findings, baselineRunId, 
           <div><dt>{text(copy.comparisonRun)}</dt><dd><code>{verification.comparisonRunId}</code></dd></div>
         </dl>
       </details>
+
+      {localInputChanges.length > 0 && (
+        <details className="page-technical-details">
+          <summary>{text(copy.copiesTitle)}</summary>
+          <ul className="local-folder-copies">
+            {localInputChanges.map((change) => {
+              const name = comparedFolderName(change.assetId);
+              return (
+                <li key={change.assetId}>
+                  {change.changed
+                    ? text(copy.copiesChanged, {
+                      name,
+                      before: shortSnapshotHash(change.baselineSha256),
+                      after: shortSnapshotHash(change.currentSha256),
+                    })
+                    : text(copy.copiesSame, { name, hash: shortSnapshotHash(change.baselineSha256) })}
+                </li>
+              );
+            })}
+          </ul>
+        </details>
+      )}
 
       <section className="metrics-grid metrics-grid--four" aria-label={text(copy.metricsAria)}>
         <MetricCard label={diffMeta.resolved.label} value={formatNumber(counts.resolved)} detail={text(copy.resolvedDetail)} icon="check" tone="accent" />
@@ -355,6 +431,10 @@ export function VerificationPage({ verification, runs, findings, baselineRunId, 
         </InlineNotice>
       )}
 
+      {localInputChanges.filter((change) => change.changed === false).map((change) => (
+        <InlineNotice key={change.assetId} tone="info" title={text(copy.sameFilesNotice, { name: comparedFolderName(change.assetId) })} />
+      ))}
+
       <section className="section-block">
         <div className="section-heading section-heading--row">
           <div>
@@ -387,6 +467,11 @@ export function VerificationPage({ verification, runs, findings, baselineRunId, 
               const findingAvailable = Boolean(findingId && findings.some((finding) => finding.id === findingId));
               const mappingVersionDriftOnlyForFinding = item.state === "unverifiable"
                 && isOnlyMappingVersionDrift(item.changeReasons ?? []);
+              const locationMoved = item.state === "persistent"
+                && item.changeReasons?.some((reason) => reason.code === "location_moved") === true;
+              const summaryCopy = locationMoved
+                ? copy.movedSummary
+                : mappingVersionDriftOnlyForFinding ? mappingDiffSummary : stateSummaryCopy[item.state];
               return (
                 <article key={item.id} className={`diff-row diff-row--${meta.tone}`}>
                   <span className="diff-row__icon">
@@ -399,7 +484,7 @@ export function VerificationPage({ verification, runs, findings, baselineRunId, 
                       {item.evidenceChanged && <span className="evidence-changed">{text(copy.evidenceChanged)}</span>}
                     </div>
                     <h3>{item.title}</h3>
-                    <p>{text(mappingVersionDriftOnlyForFinding ? mappingDiffSummary : stateSummaryCopy[item.state])}</p>
+                    <p>{text(summaryCopy)}</p>
                     <span>{item.assetName}</span>
                     {(item.beforeSeverity || item.afterSeverity) && (
                       <div className="diff-severity-change">

@@ -167,6 +167,8 @@ The product does not modify, build, execute, upload, commit, or push the project
 
 Repository ignore rules still prune ordinary ignored files and generated directories. Common secret-bearing regular files in source directories, including `.env` variants, private keys, registry/auth configuration, and `*.tfvars`, remain in the bounded snapshot so the upstream secret scanners can inspect them; ignored dependency, build, cache, and VCS directories are not reopened.
 
+**Check fixes** reads each local folder again. The user chooses the folder once more; the product saves a new read-only copy as the same asset and compares it with the copy the earlier scan read. Technical detail names both copies. A problem the same rule still reports in the same file stays **still present** when only its line moved.
+
 ### 4.3 Local service
 
 A connection observation answers only whether one address and port accepted a TCP connection, refused it, or did not answer in time. It is labeled **Connection test** and never becomes a vulnerability finding.

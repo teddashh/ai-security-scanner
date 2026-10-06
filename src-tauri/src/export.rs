@@ -1239,6 +1239,10 @@ pub(crate) fn case_for_export(
             for issue in &mut comparison.completeness_issues {
                 issue.detail = "[redacted comparison completeness reason]".into();
             }
+            for change in &mut comparison.local_input_changes {
+                change.baseline_sha256 = "[redacted snapshot hash]".into();
+                change.current_sha256 = "[redacted snapshot hash]".into();
+            }
         }
     }
     exported
@@ -3043,6 +3047,7 @@ mod tests {
                 execution_timeout_seconds: None,
                 knowledge_input: None,
                 scope_contract_sha256: None,
+                comparison_scope_sha256: None,
                 execution_scope_grant_ids: None,
                 naabu_work_plan: None,
                 naabu_attempt_requests: Vec::new(),
@@ -5186,6 +5191,12 @@ mod tests {
                 asset_id: Some("asset-1".into()),
                 detail: SENTINEL.into(),
             }],
+            local_input_changes: vec![LocalInputChange {
+                asset_id: "asset-1".into(),
+                baseline_sha256: "ab".repeat(32),
+                current_sha256: "cd".repeat(32),
+                changed: true,
+            }],
         });
         case.raw_artifacts[0].relative_path = format!("raw/{SENTINEL}.txt");
 
@@ -5235,6 +5246,17 @@ mod tests {
         let redacted_value = serde_json::to_value(&redacted).expect("the redacted case serializes");
         let redacted_json = serde_json::to_string(&redacted).unwrap();
         assert!(!redacted_json.contains(SENTINEL));
+        assert_eq!(
+            redacted.comparisons[0].local_input_changes,
+            vec![LocalInputChange {
+                asset_id: "asset-1".into(),
+                baseline_sha256: "[redacted snapshot hash]".into(),
+                current_sha256: "[redacted snapshot hash]".into(),
+                changed: true,
+            }]
+        );
+        assert!(!redacted_json.contains(&"ab".repeat(32)));
+        assert!(!redacted_json.contains(&"cd".repeat(32)));
         assert!(!redacted_json.contains(ARBITRARY_SCANNER_DESCRIPTION));
         assert!(!redacted_json.contains(ARBITRARY_SCANNER_REMEDIATION));
         let redacted_evidence = &redacted.findings[0].evidence[0];

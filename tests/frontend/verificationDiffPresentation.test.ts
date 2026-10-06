@@ -275,6 +275,39 @@ test("every FindingDiffReasonCode enum variant has a Chinese label", () => {
   }
 });
 
+test("a moved line stays the same finding in Traditional Chinese", () => {
+  assert.equal(verificationDiffReasonLabelZhTW("location_moved"), "在同一個檔案中的位置改變");
+  assert.equal(
+    verificationDiffExplanation("zh-TW", {
+      explanation: storedExplanation,
+      comparisonStatus: "changed",
+      beforeSeverity: "high",
+      afterSeverity: "high",
+      changeReasons: [
+        { code: "location_moved", detail: "location moved from line 9 to line 7 in the same file" },
+        { code: "evidence_changed", detail: "evidence hashes changed" },
+      ],
+    }),
+    "仍可觀察到這個問題，但同一個檔案中的位置從第 9 行移到第 7 行；證據雜湊有變更。",
+  );
+  assert.equal(
+    verificationDiffExplanation("zh-TW", {
+      explanation: storedExplanation,
+      comparisonStatus: "changed",
+      changeReasons: [{ code: "location_moved", detail: "location moved within the same file" }],
+    }),
+    "仍可觀察到這個問題，但在同一個檔案中的位置改變。",
+  );
+  assert.equal(
+    isVerificationDiffReasonDetailRecognized("location_moved", "location moved from line 9 to line 7 in the same file"),
+    true,
+  );
+  assert.equal(
+    isVerificationDiffReasonDetailRecognized("location_moved", "location moved within the same file"),
+    true,
+  );
+});
+
 test("every detail shape authored by the producer is recognized", () => {
   for (const { code, frame } of uniqueDetailShapes) {
     const detail = fillFrame(frame);
