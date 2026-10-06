@@ -12,6 +12,10 @@ SWOT 為專案團隊評估。啟用功能描述本產品設定，不代表完整
 
 [Upstream](https://github.com/cloudquery/cloudquery) · [README @ e27e4ab](https://github.com/cloudquery/cloudquery/blob/e27e4ab61ad85479a5d53dae9b08440bc63e72b3/README.md) · [整合與更新筆記](https://github.com/teddashh/ai-security-scanner/blob/335d0666bdc63eb86e6c8c4cddeae110db893397/docs/engines/cloudquery.md)
 
+### 工具介紹
+
+CloudQuery 是一款廣泛使用的開源工具，會把雲端服務商 API 提供的資料整理成結構化表格，方便你之後查詢與比對。它用來源外掛讀取雲端服務，再用目的地外掛寫下每一列資料，所以每次收集到的格式都一致。我們把它放進本程式，是因為它能幫你很快看清一個核准的 AWS 帳號裡有哪些身分與權限政策，讓安全檢查的結果更容易對照。這裡只收集一組固定的身分與存取管理（IAM）表格：帳號、使用者、群組、角色、政策、密碼政策與憑證報告。這些資料屬於盤點，只說明目前有什麼，會和安全問題分開列出，也不涵蓋所有 AWS 服務。
+
 ### 原本的工具能做什麼
 
 CloudQuery 把 API 資料轉成可查詢、比較的結構化資料。CLI、來源 plugin 與目的地 plugin 各有版本，只記 CLI 版本不足以辨識實際收集行為。
@@ -75,6 +79,10 @@ AWS API 變更、分頁失敗或唯讀權限不足都可能遺漏資源。舊依
 列出 AWS 使用者與部分帳號設定，方便了解哪些人可以存取。
 
 [Upstream](https://github.com/turbot/steampipe) · [README @ 71fa72f](https://github.com/turbot/steampipe/blob/71fa72fc9ce33897bcb0bd0c9ebf09b867b881cf/README.md) · [整合與更新筆記](https://github.com/teddashh/ai-security-scanner/blob/335d0666bdc63eb86e6c8c4cddeae110db893397/docs/engines/steampipe.md)
+
+### 工具介紹
+
+Steampipe 由 Turbot 維護，是一款廣泛使用的開源工具，能把雲端 API 變成 SQL 資料表。SQL 是查詢資料庫的標準語言，而每個服務商外掛決定你能讀到哪些服務與欄位。我們把它放進本程式，是因為它能幫你很快列出一個核准 AWS 帳號裡的身分與存取管理（IAM）使用者，再拿這份名單對照安全檢查的結果。這裡只執行一個固定的 IAM 使用者查詢。查到的資料屬於盤點：只列出找到的使用者，不判斷哪個使用者有風險。本程式也不執行 Steampipe 現成的安全基準檢查，也不接受你自己寫的 SQL。
 
 ### 原本的工具能做什麼
 
@@ -140,6 +148,10 @@ Provider 限流、欄位或結構變更，以及 API 權限拒絕，都可能造
 
 [Upstream](https://github.com/prowler-cloud/prowler) · [README @ 40ecbd0](https://github.com/prowler-cloud/prowler/blob/40ecbd035e5541bf099917c5033cceb8959c4737/README.md) · [整合與更新筆記](https://github.com/teddashh/ai-security-scanner/blob/335d0666bdc63eb86e6c8c4cddeae110db893397/docs/engines/prowler.md)
 
+### 工具介紹
+
+Prowler 是一款廣泛使用的開源雲端安全評估工具。它呼叫雲端服務商的 API、執行內建檢查，並記下檢查名稱、受影響的資源、哪裡不符合，以及怎麼修正。上游的 Prowler 能涵蓋許多服務與合規框架。我們把它放進本程式，是因為它能幫你很快找出需要注意的身分與權限設定。這裡每次只對一個核准資產執行範圍很窄的身分與存取管理（IAM）檢查：一個 AWS 帳號的 IAM 服務、一個 Azure 訂用帳戶的 IAM 服務，或一個 GCP 專案的四項指定 IAM 檢查。其他服務與帳號不在這次檢查範圍內，單一檢查通過也不代表取得認證。
+
 ### 原本的工具能做什麼
 
 Prowler 是雲端安全評估專案，提供依 provider 區分的檢查與修正指引。上游完整平台的能力，比本桌面整合選用的受限 provider profile 更廣。
@@ -203,6 +215,10 @@ Prowler 5.39.1 針對一個精確 AWS 帳號、Azure subscription 或 GCP projec
 檢查部分 AWS 身分與存取設定。本程式使用的是 ScoutSuite 的部分功能。
 
 [Upstream](https://github.com/nccgroup/ScoutSuite) · [README @ 7909f2f](https://github.com/nccgroup/ScoutSuite/blob/7909f2fc6186063e5c9e7ddef8c4d7d1072c8f3d/README.md) · [整合與更新筆記](https://github.com/teddashh/ai-security-scanner/blob/335d0666bdc63eb86e6c8c4cddeae110db893397/docs/engines/scoutsuite.md)
+
+### 工具介紹
+
+ScoutSuite 來自 NCC Group，是一款廣泛使用的開源工具。它透過雲端服務商的 API 讀取設定，用自己的規則標出有風險的設定，每筆結果都保留規則、受影響的項目，以及值得檢視的原因。上游的 ScoutSuite 支援多家雲端服務商，也有自己的報告。我們把它放進本程式，是因為它能幫你很快找出值得再看一眼的 AWS 身分與存取設定，也能和 Prowler 互相對照。這裡只對一個核准帳號執行 AWS 身分與存取管理（IAM）規則，其他雲端服務商與其他 AWS 服務都不在範圍內。設定要被規則標出才會成為報告裡的問題，只是收集到設定並不代表有弱點。
 
 ### 原本的工具能做什麼
 
@@ -268,6 +284,10 @@ AWS 回應變化可能超出固定 parser 的理解範圍；上游報告結構�
 
 [Upstream](https://github.com/salesforce/cloudsplaining) · [README @ 75a67ea](https://github.com/salesforce/cloudsplaining/blob/75a67ea9cb6d0fdf35ff185d08dad0d45587e6f7/README.md) · [整合與更新筆記](https://github.com/teddashh/ai-security-scanner/blob/335d0666bdc63eb86e6c8c4cddeae110db893397/docs/engines/cloudsplaining.md)
 
+### 工具介紹
+
+Cloudsplaining 來自 Salesforce，是一款開源工具，專門檢查 AWS 身分與存取管理（IAM）政策是否給了超過工作所需的權限，也就是有沒有違反「最小權限」原則。它讀取帳號的授權細節，找出沒有限定資源範圍的動作，再把有風險的動作分成權限提升、資料外洩、資源曝露與更動基礎設施等類別，並指出是哪一份政策、哪些動作。我們把它放進本程式，是因為它能幫你很快找出過寬的權限，看清該檢視哪些動作。這裡只分析一個核准的 AWS 帳號。被標出的動作是供你審閱的證據：它不判斷業務是否需要這項權限、不修改政策，也不能證明現在真的有人用得到。
+
 ### 原本的工具能做什麼
 
 Cloudsplaining 專注 AWS IAM 政策分析，檢視授權資料，將高風險權限分類，例如權限提升、資料存取或更動基礎設施的能力。
@@ -331,6 +351,10 @@ Cloudsplaining 專注 AWS IAM 政策分析，檢視授權資料，將高風險�
 依照美國 CISA 的安全建議，檢查支援的 Microsoft 365 設定。
 
 [Upstream](https://github.com/cisagov/ScubaGear) · [README @ 4d34e9a](https://github.com/cisagov/ScubaGear/blob/4d34e9a48e38ce5c2e14c0fdfbaee53e57594ae2/README.md) · [整合與更新筆記](https://github.com/teddashh/ai-security-scanner/blob/335d0666bdc63eb86e6c8c4cddeae110db893397/docs/engines/scubagear.md)
+
+### 工具介紹
+
+ScubaGear 來自美國網路安全暨基礎設施安全局（CISA），是一款開源工具，會把 Microsoft 365 租戶（也就是組織的 Microsoft 365 環境）的設定，和 CISA 的 Secure Cloud Business Applications（SCuBA）基準比較；這些基準是以書面寫下的安全設定要求。上游也涵蓋其他 Microsoft 365 產品。我們把它放進本程式，是因為它能幫你很快找出不符合這份基準的 Microsoft Entra ID 設定；Entra ID 是租戶的登入與身分目錄。這裡只為一個已授權、位於 Microsoft 商業雲端的租戶檢查 Entra ID 基準，Exchange、SharePoint 與其他工作負載不在範圍內。通過不等於合規認證，沒能評估的項目也會照樣列出，不算通過。
 
 ### 原本的工具能做什麼
 
@@ -396,6 +420,10 @@ Microsoft Graph 變更、條件式存取限制與同意權限缺漏可能中斷�
 
 [Upstream](https://github.com/maester365/maester) · [README @ 6bf1d98](https://github.com/maester365/maester/blob/6bf1d98f094fc7a68e449d2f40f73ef820b72ee3/README.md) · [整合與更新筆記](https://github.com/teddashh/ai-security-scanner/blob/335d0666bdc63eb86e6c8c4cddeae110db893397/docs/engines/maester.md)
 
+### 工具介紹
+
+Maester 是一套開源的測試框架，用 PowerShell（Microsoft 的腳本語言）寫成，專門檢查 Microsoft 365 的安全設定。每一項測試都寫明安全的租戶應有的設定，並記錄你的租戶是否符合。我們把它放進本程式，是因為它能幫你很快找出不符合這些要求的 Microsoft Entra ID 設定；Entra ID 是租戶的登入與身分目錄。這裡對一個已授權的租戶執行一組固定的 Entra 測試，並略過耗時很長的測試、預覽測試，以及需要連到其他服務的測試；Exchange Online 和你自己提供的腳本都不在範圍內。被略過的測試絕不會顯示成通過，需要人來判斷的測試會列出來供你審閱。
+
 ### 原本的工具能做什麼
 
 Maester 是以 PowerShell 為基礎的 Microsoft 365 安全設定測試框架。測試把預期設定寫成明確條件，保留判定以便長期追蹤。
@@ -459,6 +487,10 @@ Graph 與 PowerShell 依賴改版可能破壞原本有效的收集路徑；即�
 查看核准的連接埠是否接受連線。連接埠開著值得了解，但不代表有漏洞。
 
 [Upstream](https://github.com/projectdiscovery/naabu) · [README @ 5a0ca8b](https://github.com/projectdiscovery/naabu/blob/5a0ca8bde91b5bb16213e9e8b5c6871eac954bd8/README.md) · [整合與更新筆記](https://github.com/teddashh/ai-security-scanner/blob/335d0666bdc63eb86e6c8c4cddeae110db893397/docs/engines/naabu.md)
+
+### 工具介紹
+
+Naabu 是 ProjectDiscovery 維護的開源連接埠探索工具，用來找出哪些 TCP 連接埠正在接受連線。TCP 連接埠就是網路服務等候連線時使用的編號。它的連線掃描會對每個位址與連接埠嘗試一次一般的 TCP 連線，連得上就代表連接埠是開的；上游另外還有其他探索方式。我們把它放進本程式，是因為它能幫你很快看出哪些核准的服務正在等候連線，讓接下來的安全檢查有明確的對象。這裡只連你核准的位址與連接埠，不會把附近的主機加進來，也不掃描 UDP（另一種常見的服務連線方式）。開著的連接埠會記在盤點裡，本身不是漏洞。
 
 ### 原本的工具能做什麼
 
@@ -524,6 +556,10 @@ TCP 連線無法充分說明服務身分、修補狀態或存取控制；防火�
 
 [Upstream](https://github.com/projectdiscovery/httpx) · [README @ 13037dd](https://github.com/projectdiscovery/httpx/blob/13037dd08b9715cfbd960a70ae1edfef6686a857/README.md) · [整合與更新筆記](https://github.com/teddashh/ai-security-scanner/blob/335d0666bdc63eb86e6c8c4cddeae110db893397/docs/engines/httpx.md)
 
+### 工具介紹
+
+httpx 是 ProjectDiscovery 維護的開源網站探測工具，和 Python 裡同名的 HTTPX 程式庫不是同一個東西。它會對一個位址送出一般的網頁（HTTP）請求，記下有沒有網站服務回應、回傳的狀態碼，以及其他基本的回應資訊；這些都是只看連接埠開不開無法得知的。我們把它放進本程式，是因為它能幫你在真正的安全檢查開始前，很快確認核准的網站服務是否有在回應。上游還能做更多種探測，這裡只詢問你核准的那一個服務，不爬網站、不登入，也不開啟所有上游探測。結果是描述這個服務的盤點資料，本身不代表有漏洞。
+
 ### 原本的工具能做什麼
 
 ProjectDiscovery httpx 是 HTTP 探測工具，與 Python HTTPX client library 不同。它的探測協助描述會回應的網站服務；一次回應本身不構成弱點判斷。
@@ -587,6 +623,10 @@ CDN、WAF、短暫錯誤與改變的重新導向會讓不同輪觀察不同；�
 先辨識網站使用的技術，再於核准的網址與限制內執行適用的唯讀檢查。
 
 [Upstream](https://github.com/projectdiscovery/nuclei) · [README @ a8c88fe](https://github.com/projectdiscovery/nuclei/blob/a8c88feb4a1c8e961b7902534ce3af97e9d524a4/README.md) · [整合與更新筆記](https://github.com/teddashh/ai-security-scanner/blob/335d0666bdc63eb86e6c8c4cddeae110db893397/docs/engines/nuclei.md)
+
+### 工具介紹
+
+Nuclei 是 ProjectDiscovery 維護的開源弱點掃描工具，也是同類工具中最受歡迎且備受信任的工具之一。它的每一項檢查都是一份範本：寫好的請求，加上代表已知曝露或漏洞的回應特徵。它會先辨識網站用了哪些技術，再挑出適合的範本。我們把它放進本程式，是因為它能幫你很快找出這些已知問題；它是預設的網站檢查，使用本程式內附的範本。它只對一個核准的網站位址送出唯讀請求，不登入、不送出表單、不做模糊測試或漏洞利用、不操作瀏覽器，也不請外部伺服器回撥。你輸入的路徑不會把檢查範圍縮小到那個路徑。
 
 ### 原本的工具能做什麼
 
@@ -652,6 +692,10 @@ Nuclei 3.11.1 使用固定 nuclei-templates 快照及經檢視的唯讀 HTTP pro
 
 [Upstream](https://github.com/greenbone/openvas-scanner) · [README @ 26465a1](https://github.com/greenbone/openvas-scanner/blob/26465a11ff0e6a98d60a253265fab5974fc757b6/README.md) · [整合與更新筆記](https://github.com/teddashh/ai-security-scanner/blob/335d0666bdc63eb86e6c8c4cddeae110db893397/docs/engines/greenbone.md)
 
+### 工具介紹
+
+Greenbone OpenVAS 是 Greenbone 維護的開源網路弱點掃描工具。它使用一份固定版本的 Greenbone Community Feed 來做弱點測試；Community Feed 是 Greenbone 另外維護的檢查項目庫。它會先辨識連接埠上跑的是什麼服務，再執行適用的測試。我們把它放進本程式，是因為它能幫你找出內部設備與伺服器上、光靠連線看不出來的已知安全問題。這裡只測試你核准的主機與連接埠，不登入、不進到主機內部檢查、不猜密碼、不試預設帳號，也不做可能中斷或壓垮服務的檢查。辨識不出服務時，這些測試就不會執行，報告會把該主機列為未測試。
+
 ### 原本的工具能做什麼
 
 Greenbone OpenVAS Scanner 執行 feed 中的弱點測試，透過服務辨識與測試依賴判斷適用性。引擎與 feed 是分開的輸入；相同引擎搭配不同日期的 feed，具備的偵測知識也不同。
@@ -715,6 +759,10 @@ Feed 時效、服務指紋變化與被過濾的網路回應都會影響適用性
 瀏覽一個核准網站的頁面並檢查回應，不會送出表單或攻擊內容。
 
 [Upstream](https://github.com/zaproxy/zaproxy) · [README @ 2665d97](https://github.com/zaproxy/zaproxy/blob/2665d972f6d587ba4773a95053ac39af3fdf8df9/README.md) · [整合與更新筆記](https://github.com/teddashh/ai-security-scanner/blob/335d0666bdc63eb86e6c8c4cddeae110db893397/docs/engines/zap.md)
+
+### 工具介紹
+
+ZAP（Zed Attack Proxy，也就是大家熟悉的 OWASP ZAP）是開源的網站應用程式安全掃描工具，也是同類工具中最受歡迎且備受信任的工具之一。上游的 ZAP 可以站在瀏覽器與網站之間、爬取頁面、檢查每一個回應，也能主動送出攻擊內容。它的被動規則只讀取回應，包括標頭與 cookie，不發動攻擊。我們把它放進本程式，是因為這些被動規則能幫你在它走得到的頁面上，找出缺少安全標頭、cookie 設定不安全這類問題，和 Nuclei 互補。在本程式裡它是選用的：只在固定限制內爬一個核准的網站，不登入、不送出表單、不送攻擊內容，也不跟著連結到其他網站。預設的網站檢查仍是 Nuclei。
 
 ### 原本的工具能做什麼
 
@@ -780,6 +828,10 @@ ZAP 補上回應層檢查與有界連結探索，與範本驅動的 Nuclei 互�
 
 [Upstream](https://github.com/semgrep/semgrep) · [README @ a0c13f3](https://github.com/semgrep/semgrep/blob/a0c13f304151e531c7e7c00838076211a07a790c/README.md) · [整合與更新筆記](https://github.com/teddashh/ai-security-scanner/blob/335d0666bdc63eb86e6c8c4cddeae110db893397/docs/engines/semgrep.md)
 
+### 工具介紹
+
+Semgrep 是一套廣泛使用的開源靜態應用程式安全測試（SAST）工具，也就是不編譯、不執行專案，直接檢查程式碼裡的安全問題。一般的文字搜尋只看字面，換行、空白不同或變數改名，都可能讓同一種寫法躲過去；Semgrep 則會把程式碼解析成語法樹（程式碼的結構），比對的是結構而不是字面。本程式使用的是社群版（Community Edition），追蹤不受信任資料流向的規則，只會在同一個函式內追蹤。我們把它放進本程式，是因為它能幫你很快找出有風險的寫法，例如不安全的指令呼叫，或直接拿使用者輸入組成的資料庫查詢；使用的是本程式內附的安全規則包，不是目前完整的規則庫。
+
 ### 原本的工具能做什麼
 
 Semgrep 以宣告式規則分析原始碼。語言支援、規則選擇與 Community Edition 能力，決定能在不編譯、不執行目標專案的情況下觀察什麼。
@@ -843,6 +895,10 @@ Semgrep 以宣告式規則分析原始碼。語言支援、規則選擇與 Commu
 找出專案檔案裡可能留下的密碼與金鑰，報告會隱藏它們的內容。
 
 [Upstream](https://github.com/gitleaks/gitleaks) · [README @ 83d9cd6](https://github.com/gitleaks/gitleaks/blob/83d9cd684c87d95d656c1458ef04895a7f1cbd8e/README.md) · [整合與更新筆記](https://github.com/teddashh/ai-security-scanner/blob/335d0666bdc63eb86e6c8c4cddeae110db893397/docs/engines/gitleaks.md)
+
+### 工具介紹
+
+Gitleaks 是一套開源工具，也是最受歡迎且備受信任的密碼與金鑰掃描工具之一，用來找出寫死在專案檔案裡的密碼、API 金鑰、token 與其他憑證。它的規則認得許多已知金鑰的格式，有些規則還會參考附近的字詞，或字串看起來有多隨機。上游的 Gitleaks 也能搜尋儲存庫的 Git 歷史，就算金鑰後來刪掉了也找得到。我們把它放進本程式，是因為它能幫你很快找出你所選專案裡留下的密碼與金鑰。這裡只讀取目前檔案的唯讀副本，不搜尋已刪除的 Git 歷史，也不測試憑證是否仍然有效，報告也會遮蔽密碼與金鑰本身。
 
 ### 原本的工具能做什麼
 
@@ -908,6 +964,10 @@ Gitleaks 透過掃描器自有規則與模式背景偵測祕密。上游支援�
 
 [Upstream](https://github.com/trufflesecurity/trufflehog) · [README @ 3ab759f](https://github.com/trufflesecurity/trufflehog/blob/3ab759fef4bb5935d4fe9ac68b503d05346b8364/README.md) · [整合與更新筆記](https://github.com/teddashh/ai-security-scanner/blob/335d0666bdc63eb86e6c8c4cddeae110db893397/docs/engines/trufflehog.md)
 
+### 工具介紹
+
+TruffleHog 是一套開源工具，也是最受歡迎且備受信任的密碼與金鑰掃描工具之一，用來找出 API 金鑰、token 這類可能外洩的憑證。它為許多種憑證各準備了專屬的偵測器。上游的 TruffleHog 還能向對應的線上服務確認找到的金鑰是否有效，也能搜尋 Git 歷史。我們把它放進本程式，是因為它能幫你很快找出目前檔案裡的密碼與金鑰，偵測器也和 Gitleaks 互補。這裡會關閉網路，只讀取這些檔案的唯讀副本，不搜尋 Git 歷史，也不拿憑證去線上服務測試。找到結果不代表金鑰仍然有效，報告也不會放上金鑰內容。
+
 ### 原本的工具能做什麼
 
 TruffleHog 為多種憑證類型提供偵測器，並支援多種來源與驗證流程。本產品的本機掃描刻意關閉上游線上有效性驗證。
@@ -971,6 +1031,10 @@ TruffleHog 為多種憑證類型提供偵測器，並支援多種來源與驗證
 檢查支援的部署與基礎設施設定檔，找出不安全的設定。
 
 [Upstream](https://github.com/bridgecrewio/checkov) · [README @ 0604e97](https://github.com/bridgecrewio/checkov/blob/0604e97b0f77c89a8c6c1fe2219c3d251cbb9789/README.md) · [整合與更新筆記](https://github.com/teddashh/ai-security-scanner/blob/335d0666bdc63eb86e6c8c4cddeae110db893397/docs/engines/checkov.md)
+
+### 工具介紹
+
+Checkov 是一套廣泛使用的開源工具，專門檢查基礎設施即程式碼（IaC），也就是描述雲端資源與部署該怎麼設定的檔案。它把這些檔案讀成資源以及資源之間的關係，而不是一段純文字，再用一套安全政策逐一檢查。我們把它放進本程式，是因為它能幫你在真正部署之前，很快找出 Terraform、CloudFormation 與 Dockerfile 等檔案裡不安全的設定。這裡只讀取你所選專案的唯讀副本，不連接雲端帳號、不下載平台政策資料，也不套用這些檔案，所以結果描述的是檔案本身，不是線上環境實際的狀態。
 
 ### 原本的工具能做什麼
 
@@ -1036,6 +1100,10 @@ Checkov 對基礎設施即程式碼、容器設定與交付流程提供政策檢
 
 [Upstream](https://github.com/Checkmarx/kics) · [README @ e1f23ca](https://github.com/Checkmarx/kics/blob/e1f23cad9640f55b963f22a116b04906b8c16ac6/README.md) · [整合與更新筆記](https://github.com/teddashh/ai-security-scanner/blob/335d0666bdc63eb86e6c8c4cddeae110db893397/docs/engines/kics.md)
 
+### 工具介紹
+
+KICS（Keeping Infrastructure as Code Secure）來自 Checkmarx，是一套開源工具，用來找出基礎設施即程式碼（IaC）裡不安全的設定；IaC 就是描述系統要怎麼部署的檔案。它用一套安全查詢檢查 Terraform、CloudFormation、Kubernetes 設定檔與 Dockerfile 等格式，並把每筆結果對應到檔案與行號；內附的查詢也會找出檔案裡留下的密碼與金鑰。我們把它放進本程式，是因為它能幫你很快找出有風險的部署設定，查詢庫和 Checkov 各自獨立，能提供第二種觀點。這裡用工具內附的查詢掃描你所選專案的唯讀副本，不連接雲端帳號，也不另外下載查詢。
+
 ### 原本的工具能做什麼
 
 KICS 透過安全查詢庫評估 Terraform、CloudFormation、Kubernetes、Dockerfile 等格式的基礎設施定義，將每個查詢結果連到個別檔案位置。
@@ -1099,6 +1167,10 @@ KICS 提供以查詢為基礎的基礎設施風險觀點，同時保留原生查
 用內附的漏洞資料庫，檢查支援的專案與容器套件。
 
 [Upstream](https://github.com/aquasecurity/trivy) · [README @ e1fd17a](https://github.com/aquasecurity/trivy/blob/e1fd17a0ea4a8cf24bc4b4dd7e2cfbf4bb31b994/README.md) · [整合與更新筆記](https://github.com/teddashh/ai-security-scanner/blob/335d0666bdc63eb86e6c8c4cddeae110db893397/docs/engines/trivy.md)
+
+### 工具介紹
+
+Trivy 來自 Aqua Security，是一套開源的資安掃描工具，也是最受歡迎且備受信任的套件弱點掃描工具之一。它會讀取認得出的相依套件檔，以及 JAR 這類個別的 Java 套件檔，再把版本拿去和漏洞資料庫裡的公開公告比對；這些公告通常是 CVE，也就是已知漏洞的標準編號。上游的 Trivy 還能檢查設定與密碼金鑰。我們把它放進本程式，是因為它能幫你很快找出已知有漏洞的套件；資料庫列有修正版本時，也會一併告訴你。這裡只執行漏洞檢查，使用本程式內附的資料庫。檢查容器映像時只看作業系統套件，映像裡的應用程式函式庫交給 Grype 檢查。
 
 ### 原本的工具能做什麼
 
@@ -1164,6 +1236,10 @@ Trivy 提供公告 ID、已安裝與修正版、供應商評分及套件位置�
 
 [Upstream](https://github.com/anchore/grype) · [README @ b5fa92b](https://github.com/anchore/grype/blob/b5fa92bbcbef655497e3be840a2f718380e2cdd3/README.md) · [整合與更新筆記](https://github.com/teddashh/ai-security-scanner/blob/335d0666bdc63eb86e6c8c4cddeae110db893397/docs/engines/grype.md)
 
+### 工具介紹
+
+Grype 來自 Anchore，是一套廣泛使用的開源工具，用來把軟體套件對上已知漏洞。它拿套件名稱與版本去比對漏洞資料庫，回報對應的公告，例如 CVE（已知漏洞的標準編號）或 GitHub 安全公告；資料庫若列有修正版本，也會一併呈現。我們把它放進本程式，是因為它能幫你很快找出所選專案或容器映像裡已知有漏洞的套件；檢查映像時，應用程式函式庫和作業系統套件都包含在內。即使 Trivy 也回報同一個問題，報告仍會標明各是哪個工具找到的。這裡使用本程式內附的資料庫，不會自己從 registry 下載映像，也不會執行容器。
+
 ### 原本的工具能做什麼
 
 Grype 將軟體元件與漏洞資料比對，回報受影響套件、公告及可用修正，支援套件目錄、檔案目錄與容器相關輸入。
@@ -1227,6 +1303,10 @@ Grype 提供獨立的公告比對觀點與實用的套件修正模型。與 Triv
 列出專案或容器裡的軟體元件，幫你掌握用了哪些東西；清單本身不是漏洞報告。
 
 [Upstream](https://github.com/anchore/syft) · [README @ 2293641](https://github.com/anchore/syft/blob/2293641e3bd628a01bb37639318d62c0ebe89b39/README.md) · [整合與更新筆記](https://github.com/teddashh/ai-security-scanner/blob/335d0666bdc63eb86e6c8c4cddeae110db893397/docs/engines/syft.md)
+
+### 工具介紹
+
+Syft 來自 Anchore，是一套廣泛使用的開源工具，用來建立軟體物料清單（SBOM），也就是列出專案或容器映像裡有哪些軟體元件的清單，例如函式庫與作業系統套件。它會記下每個認得出的元件名稱、版本與類型。我們把它放進本程式，是因為它能幫你很快看清所選專案或映像裡有哪些軟體，也就知道漏洞檢查看的是哪些東西。這份清單只說明有什麼，不是漏洞報告。這裡只讀取唯讀副本、不連網路，也不會從 registry 下載映像；已知漏洞交給 Trivy 與 Grype 檢查。
 
 ### 原本的工具能做什麼
 
@@ -1292,6 +1372,10 @@ Syft 在本產品中不產生漏洞發現。原生授權、CPE 及位置細節�
 
 [Upstream](https://github.com/kubescape/kubescape) · [README @ 469969f](https://github.com/kubescape/kubescape/blob/469969f6bebf46bef5e808b91a4bb46fb2bbf4ed/README.md) · [整合與更新筆記](https://github.com/teddashh/ai-security-scanner/blob/335d0666bdc63eb86e6c8c4cddeae110db893397/docs/engines/kubescape.md)
 
+### 工具介紹
+
+Kubescape 是一套廣泛使用的開源工具，用來檢查 Kubernetes（許多團隊用來運行容器的系統）的設定。它把 YAML 與 JSON 檔案讀成 Kubernetes 資源，再對照一份固定的強化檢查清單，也就是根據美國 NSA 與 CISA 指引整理的 NSA 框架，所以每筆結果都會指出是哪個資源、哪一項控制沒有通過。上游的 Kubescape 也能掃描運作中的叢集與容器映像。我們把它放進本程式，是因為它能幫你很快找出所選 Kubernetes 設定檔裡有風險的設定。這裡只離線檢查那份已儲存的快照，不連到運作中的叢集，無法判斷檔案是否與實際部署一致，也不掃描容器套件。
+
 ### 原本的工具能做什麼
 
 Kubescape 提供 Kubernetes 設定評估及更廣泛叢集工作流程的安全能力。本產品選用離線資源清單評估，搭配固定的框架與政策庫。
@@ -1355,6 +1439,10 @@ Kubernetes API 演進及政策庫變更，可能讓舊檢查不完整或不適�
 依照 CIS 建議檢查節點設定的副本，不會取得管理員權限來檢查運作中的主機。
 
 [Upstream](https://github.com/aquasecurity/kube-bench) · [README @ 9f133cb](https://github.com/aquasecurity/kube-bench/blob/9f133cb7509ce1dbedfc860e94474588000e25ac/README.md) · [整合與更新筆記](https://github.com/teddashh/ai-security-scanner/blob/335d0666bdc63eb86e6c8c4cddeae110db893397/docs/engines/kube-bench.md)
+
+### 工具介紹
+
+kube-bench 是 Aqua Security 維護、廣泛使用的開源工具，依照 CIS Kubernetes Benchmark 檢查 Kubernetes 節點，也就是實際運行工作負載的機器；CIS Benchmark 是網際網路安全中心（CIS）公開的安全設定檢查清單。它拿設定檔與執行中程序的資訊逐項比對，標成通過、失敗或警告；警告代表這項檢查需要自動化無法提供的資訊或判斷。上游的 kube-bench 會在運作中的節點上執行，也能檢查控制平面。我們把它放進本程式，是因為它能幫你很快找出不符合這份清單的節點設定。這裡只使用你匯出的節點資訊與節點檢查項目，不會登入運作中的主機，也不執行控制平面檢查。
 
 ### 原本的工具能做什麼
 
@@ -1420,6 +1508,10 @@ kube-bench 依 Kubernetes 設定及程序資訊執行基準檢查。原生結果
 
 [Upstream](https://github.com/NVIDIA/garak) · [README @ 93aa9cd](https://github.com/NVIDIA/garak/blob/93aa9cdec309ec4170559676f1826ea2a679920c/README.md) · [整合與更新筆記](https://github.com/teddashh/ai-security-scanner/blob/335d0666bdc63eb86e6c8c4cddeae110db893397/docs/engines/garak.md)
 
+### 工具介紹
+
+Garak 是 NVIDIA 維護、廣泛使用的開源大型語言模型（LLM）弱點掃描工具。它送出稱為「探測」的特製提示，再用偵測器判斷模型的回覆。這裡使用的探測包括「Do Anything Now」這類試圖讓模型拋開自身規則的指示，以及試圖讓模型輸出終端機跳脫碼的提示；上游的 Garak 還有更多探測。我們把它放進本程式，是因為它能幫你很快看出一個核准的模型如何回應這組固定測試。這項選用檢查要由你自己啟動，只對一個核准、相容 OpenAI 格式的 HTTPS 聊天 API 與模型送出 54 個提示。沒有發現問題，也只代表這些提示沒有引出問題。服務商可能會收費；你輸入的 API 金鑰只用於這一次檢查，不會存進掃描紀錄或報告。
+
 ### 原本的工具能做什麼
 
 NVIDIA garak 是具備探測、生成器及偵測器外掛的 LLM 弱點掃描器。完整上游支援多種研究流程；本產品提供一組明確受限的原生探測設定。
@@ -1484,6 +1576,10 @@ Garak 0.17.0 將 dan.Dan_11_0、dan.Dan_10_0、dan.Dan_9_0 與 ansiescape.AnsiEs
 
 [Upstream](https://github.com/splx-ai/agentic-radar) · [README @ 65a7e4b](https://github.com/splx-ai/agentic-radar/blob/65a7e4bd01e2034c7cb52e9620eeed287688cc53/README.md) · [整合與更新筆記](https://github.com/teddashh/ai-security-scanner/blob/335d0666bdc63eb86e6c8c4cddeae110db893397/docs/engines/agentic-radar.md)
 
+### 工具介紹
+
+Agentic Radar 是一套開源工具，會閱讀由 AI 代理組成的專案，整理出各個部分如何相連。你先選定一個受支援的框架（LangGraph、CrewAI、n8n、OpenAI Agents 或 AutoGen），它的解析器就會列出代理、工具、MCP 伺服器，以及它們之間的連線。MCP 伺服器是透過 Model Context Protocol 接上的外部工具，這個協定讓 AI 應用程式能呼叫其他工具。上游的 Agentic Radar 還有更廣的風險分析。我們把它放進本程式，是因為它能幫你在審閱之前，很快看懂一個 AI 代理專案裡有哪些元件。這裡只盤點一份已儲存的專案副本，不執行工作流程、不連線到模型，也不會回報安全問題。
+
 ### 原本的工具能做什麼
 
 Agentic Radar 分析代理式工作流程，提供架構及安全分析能力。本整合選用其框架解析器與圖形盤點，不包含完整上游分析流程。
@@ -1547,6 +1643,10 @@ Agentic Radar 分析代理式工作流程，提供架構及安全分析能力。
 檢查選定的 MCP 設定是否留下金鑰，或給了工具過大的權限；不會啟動或連線 MCP 伺服器。
 
 [Upstream](https://github.com/aira-security/mcp-armor) · [README @ 6af4cee](https://github.com/aira-security/mcp-armor/blob/6af4cee4665ab6242f02a88952f9127b6a04922a/README.md) · [整合與更新筆記](https://github.com/teddashh/ai-security-scanner/blob/335d0666bdc63eb86e6c8c4cddeae110db893397/docs/engines/mcp-armor.md)
+
+### 工具介紹
+
+MCP Armor 是一套開源工具，用來檢查 MCP 設定檔。MCP（Model Context Protocol）是 AI 應用程式連接外部工具的協定，設定檔則寫明要連哪些工具。它有兩項檢查直接讀取這個檔案：一項找出寫在檔案裡的金鑰等機密，另一項依上游規則標出範圍過大的工具指令與權限；比對到的機密內容不會寫進報告。上游的 MCP Armor 還能連上設定裡的伺服器，並執行需要模型的測試。我們把它放進本程式，是因為它能幫你很快找出你選定的那份設定裡外露的金鑰與過大的工具權限。這裡只讀取已儲存專案中的那一個檔案，不啟動也不連線任何 MCP 伺服器、不載入模型，也無法顯示運作中的伺服器實際執行的權限控管。
 
 ### 原本的工具能做什麼
 

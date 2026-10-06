@@ -12,6 +12,10 @@ Lists selected AWS identities and permission policies. This inventory is kept se
 
 [Upstream](https://github.com/cloudquery/cloudquery) · [README @ e27e4ab](https://github.com/cloudquery/cloudquery/blob/e27e4ab61ad85479a5d53dae9b08440bc63e72b3/README.md) · [Integration and update notes](https://github.com/teddashh/ai-security-scanner/blob/335d0666bdc63eb86e6c8c4cddeae110db893397/docs/engines/cloudquery.md)
 
+### About this tool
+
+CloudQuery is a widely used open-source tool that copies data from cloud provider APIs into structured tables you can query and compare later. A source plugin reads the cloud service and a destination plugin writes each row, so every collection comes out in the same shape. We include it in this app because it helps you quickly see which identities and permission policies exist in an approved AWS account, which gives the security checks context. Here it collects one fixed set of identity and access management (IAM) tables: the account, users, groups, roles, policies, password policies, and credential reports. These rows are inventory: they describe what exists, stay separate from security findings, and do not cover every AWS service.
+
 ### What the original tool does
 
 CloudQuery moves structured API data into destinations that can be queried and compared. Its CLI, source plugin and destination plugin are independently versioned; recording only the CLI version does not identify the data collection behavior.
@@ -75,6 +79,10 @@ Image identity: `ghcr.io/teddashh/ai-security-scanner-engine-cloudquery:2.0.31-a
 Lists AWS users and selected account settings so you can review who has access.
 
 [Upstream](https://github.com/turbot/steampipe) · [README @ 71fa72f](https://github.com/turbot/steampipe/blob/71fa72fc9ce33897bcb0bd0c9ebf09b867b881cf/README.md) · [Integration and update notes](https://github.com/teddashh/ai-security-scanner/blob/335d0666bdc63eb86e6c8c4cddeae110db893397/docs/engines/steampipe.md)
+
+### About this tool
+
+Steampipe, maintained by Turbot, is a widely used open-source tool that turns cloud APIs into SQL tables. SQL is the standard database query language, and each provider plugin decides which services and columns you can read. We include it in this app because it helps you quickly list the identity and access management (IAM) users in one approved AWS account, so you can compare that list with what the security checks report. Here it runs one fixed query of the IAM user table. The rows are inventory: they name the users found and do not judge whether any user is a risk. This app does not run Steampipe's ready-made security benchmarks or accept SQL you write.
 
 ### What the original tool does
 
@@ -140,6 +148,10 @@ Checks selected identity and permission settings in an approved AWS account, Azu
 
 [Upstream](https://github.com/prowler-cloud/prowler) · [README @ 40ecbd0](https://github.com/prowler-cloud/prowler/blob/40ecbd035e5541bf099917c5033cceb8959c4737/README.md) · [Integration and update notes](https://github.com/teddashh/ai-security-scanner/blob/335d0666bdc63eb86e6c8c4cddeae110db893397/docs/engines/prowler.md)
 
+### About this tool
+
+Prowler is a widely used open-source cloud security assessment tool. It calls the cloud provider's APIs, runs its built-in checks, and records each check's name, the affected resource, what failed, and how to fix it. Upstream, it can cover many services and compliance frameworks. We include it in this app because it helps you quickly find identity and permission settings that need attention. Here each run uses a narrow identity and access management (IAM) profile on one approved asset: the IAM service of one AWS account, the IAM service of one Azure subscription, or four specific IAM checks for one GCP project. Other services and accounts are outside the run, and a passed check is not a certification.
+
 ### What the original tool does
 
 Prowler is a cloud security assessment project with provider-specific checks and remediation guidance. Its upstream platform is broader than the narrow provider profiles selected by this desktop integration.
@@ -203,6 +215,10 @@ Image identity: `ghcr.io/teddashh/ai-security-scanner-engine-prowler:5.39.1-7@sh
 Checks selected AWS identity and access settings. This app uses a limited part of ScoutSuite.
 
 [Upstream](https://github.com/nccgroup/ScoutSuite) · [README @ 7909f2f](https://github.com/nccgroup/ScoutSuite/blob/7909f2fc6186063e5c9e7ddef8c4d7d1072c8f3d/README.md) · [Integration and update notes](https://github.com/teddashh/ai-security-scanner/blob/335d0666bdc63eb86e6c8c4cddeae110db893397/docs/engines/scoutsuite.md)
+
+### About this tool
+
+ScoutSuite, from NCC Group, is a widely used open-source tool that reads cloud configuration through provider APIs and flags settings its rules consider risky. Each result keeps the rule, the affected items, and why they deserve review. Upstream, it supports several cloud providers and produces its own report. We include it in this app because it helps you quickly find AWS identity and access settings worth a closer look, as a second view beside Prowler. Here it runs only the AWS identity and access management (IAM) rules for one approved account; other providers and other AWS services are outside the run. A setting becomes a finding only when a rule flags it, so collected configuration alone is not a vulnerability.
 
 ### What the original tool does
 
@@ -268,6 +284,10 @@ Reviews collected AWS permission policies for access that may be broader than ne
 
 [Upstream](https://github.com/salesforce/cloudsplaining) · [README @ 75a67ea](https://github.com/salesforce/cloudsplaining/blob/75a67ea9cb6d0fdf35ff185d08dad0d45587e6f7/README.md) · [Integration and update notes](https://github.com/teddashh/ai-security-scanner/blob/335d0666bdc63eb86e6c8c4cddeae110db893397/docs/engines/cloudsplaining.md)
 
+### About this tool
+
+Cloudsplaining, from Salesforce, is an open-source tool that checks AWS identity and access management (IAM) policies for permissions broader than the work needs, which breaks the principle of least privilege. It reads an account's authorization details, finds actions allowed without a resource limit, and sorts risky ones into categories such as privilege escalation, data exfiltration, resource exposure, and infrastructure modification, naming the policy and the actions. We include it in this app because it helps you quickly find overly broad permissions and see which actions to review. Here it analyzes one approved AWS account. A flagged action is evidence for review: it does not decide whether the business needs the permission, change the policy, or prove someone can use it now.
+
 ### What the original tool does
 
 Cloudsplaining specializes in AWS IAM policy analysis. It examines authorization data and classifies risky permissions such as privilege escalation, data access or infrastructure-changing capabilities.
@@ -331,6 +351,10 @@ Image identity: `ghcr.io/teddashh/ai-security-scanner-engine-cloudsplaining:0.9.
 Compares supported Microsoft 365 settings with CISA security guidance.
 
 [Upstream](https://github.com/cisagov/ScubaGear) · [README @ 4d34e9a](https://github.com/cisagov/ScubaGear/blob/4d34e9a48e38ce5c2e14c0fdfbaee53e57594ae2/README.md) · [Integration and update notes](https://github.com/teddashh/ai-security-scanner/blob/335d0666bdc63eb86e6c8c4cddeae110db893397/docs/engines/scubagear.md)
+
+### About this tool
+
+ScubaGear, from CISA, the U.S. Cybersecurity and Infrastructure Security Agency, is an open-source tool that compares a Microsoft 365 tenant, an organization's Microsoft 365 environment, with CISA's Secure Cloud Business Applications (SCuBA) baselines: written expectations for a secure configuration. Upstream, it also covers other Microsoft 365 products. We include it in this app because it helps you quickly find Microsoft Entra ID settings that fall short of this guidance; Entra ID is the tenant's sign-in and identity directory. Here it checks the Entra ID baseline for one authorized tenant in Microsoft's commercial cloud. Exchange, SharePoint, and other workloads are outside the check. A pass is not a compliance certification, and checks that could not be evaluated stay visible instead of counting as passes.
 
 ### What the original tool does
 
@@ -396,6 +420,10 @@ Tests supported Microsoft 365 security settings and explains which checks need a
 
 [Upstream](https://github.com/maester365/maester) · [README @ 6bf1d98](https://github.com/maester365/maester/blob/6bf1d98f094fc7a68e449d2f40f73ef820b72ee3/README.md) · [Integration and update notes](https://github.com/teddashh/ai-security-scanner/blob/335d0666bdc63eb86e6c8c4cddeae110db893397/docs/engines/maester.md)
 
+### About this tool
+
+Maester is an open-source test framework for Microsoft 365 security configuration, written in PowerShell, Microsoft's scripting language. Each test states the setting a secure tenant should have and records whether yours matches. We include it in this app because it helps you quickly find Microsoft Entra ID settings that do not meet those expectations; Entra ID is the tenant's sign-in and identity directory. Here it runs a fixed set of Entra tests for one authorized tenant and skips long-running tests, preview tests, and tests that need other services. Exchange Online and scripts you supply are outside the run. A skipped test is never shown as a pass, and a test that needs human judgment is listed for your review.
+
 ### What the original tool does
 
 Maester is a PowerShell-based test framework for Microsoft 365 security configuration. Tests express expected settings and retain a verdict that can be reviewed over time.
@@ -459,6 +487,10 @@ Image identity: `ghcr.io/teddashh/ai-security-scanner-engine-maester:2.0.0-9@sha
 Shows which approved ports accept connections. An open port is information to investigate, not proof of a vulnerability.
 
 [Upstream](https://github.com/projectdiscovery/naabu) · [README @ 5a0ca8b](https://github.com/projectdiscovery/naabu/blob/5a0ca8bde91b5bb16213e9e8b5c6871eac954bd8/README.md) · [Integration and update notes](https://github.com/teddashh/ai-security-scanner/blob/335d0666bdc63eb86e6c8c4cddeae110db893397/docs/engines/naabu.md)
+
+### About this tool
+
+Naabu is an open-source port-discovery tool from ProjectDiscovery that shows which TCP ports are accepting connections. A TCP port is the number a network service listens on. Its connect scan opens an ordinary TCP connection to each address and port, and a completed connection means the port is open; upstream also offers other discovery methods. We include it in this app because it helps you quickly find out which approved services are listening, so the security checks that follow have a real target. Here it connects only to the exact addresses and ports you approved. It does not add nearby hosts or scan UDP, the other common way services listen, and an open port is inventory, not a vulnerability.
 
 ### What the original tool does
 
@@ -524,6 +556,10 @@ Checks whether a selected web service responds and records basic response inform
 
 [Upstream](https://github.com/projectdiscovery/httpx) · [README @ 13037dd](https://github.com/projectdiscovery/httpx/blob/13037dd08b9715cfbd960a70ae1edfef6686a857/README.md) · [Integration and update notes](https://github.com/teddashh/ai-security-scanner/blob/335d0666bdc63eb86e6c8c4cddeae110db893397/docs/engines/httpx.md)
 
+### About this tool
+
+httpx is an open-source web-probing tool from ProjectDiscovery, not the Python HTTPX library of the same name. It sends an ordinary web (HTTP) request to an address and records whether a web service answers, the status code it returns, and other basic response details, which a port check alone cannot tell you. We include it in this app because it helps you quickly confirm that an approved web service is responding before a real security check runs against it. Upstream, it can run many more probes. Here it asks only the exact service you approved and does not crawl, log in, or enable every upstream probe. The result is inventory that describes the service, not a vulnerability finding.
+
 ### What the original tool does
 
 ProjectDiscovery httpx is an HTTP probing toolkit, distinct from the Python HTTPX client library. Its probes help characterize responding web services; a response alone does not diagnose a vulnerability.
@@ -587,6 +623,10 @@ Image identity: `ghcr.io/teddashh/ai-security-scanner-engine-httpx:1.10.0-7@sha2
 Identifies website technologies, then runs suitable read-only checks within the approved address and limits.
 
 [Upstream](https://github.com/projectdiscovery/nuclei) · [README @ a8c88fe](https://github.com/projectdiscovery/nuclei/blob/a8c88feb4a1c8e961b7902534ce3af97e9d524a4/README.md) · [Integration and update notes](https://github.com/teddashh/ai-security-scanner/blob/335d0666bdc63eb86e6c8c4cddeae110db893397/docs/engines/nuclei.md)
+
+### About this tool
+
+Nuclei is an open-source vulnerability scanner from ProjectDiscovery, and one of the most widely used and trusted tools of its kind. Each check is a template: a written request plus the response that signals a known exposure or vulnerability. It first recognizes which technologies a site uses, then picks the templates that fit. We include it in this app because it helps you quickly find those known problems; it is the default website check, using the templates bundled here. It stays on one approved site address and sends only read-only requests. It does not log in, submit forms, fuzz, run exploits, drive a browser, or ask an outside server to call back. A path you type does not narrow the check to that path.
 
 ### What the original tool does
 
@@ -652,6 +692,10 @@ Identifies services on approved hosts and ports, then runs the security checks t
 
 [Upstream](https://github.com/greenbone/openvas-scanner) · [README @ 26465a1](https://github.com/greenbone/openvas-scanner/blob/26465a11ff0e6a98d60a253265fab5974fc757b6/README.md) · [Integration and update notes](https://github.com/teddashh/ai-security-scanner/blob/335d0666bdc63eb86e6c8c4cddeae110db893397/docs/engines/greenbone.md)
 
+### About this tool
+
+Greenbone OpenVAS is an open-source network vulnerability scanner maintained by Greenbone. Its tests come from a fixed copy of the Greenbone Community Feed, a separately maintained library of checks. It first identifies which service is listening on a port, then runs the tests that apply to it. We include it in this app because it helps you find known security problems on internal devices and servers that a simple connection cannot reveal. Here it tests only the exact hosts and ports you approved. It does not log in or inspect the machine from inside, guess passwords, try default accounts, or run disruptive checks. When it cannot identify a service, those tests do not run, and the report lists the host as not tested.
+
 ### What the original tool does
 
 Greenbone OpenVAS Scanner executes vulnerability tests from its feed, using service detection and test dependencies to determine applicability. The engine and feed are separate inputs; a current engine with an old feed has different knowledge from a refreshed assessment.
@@ -715,6 +759,10 @@ Image identity: `ghcr.io/teddashh/ai-security-scanner-engine-greenbone:23.50.24-
 Visits pages on one approved website and checks the responses. It does not submit forms or send attack payloads.
 
 [Upstream](https://github.com/zaproxy/zaproxy) · [README @ 2665d97](https://github.com/zaproxy/zaproxy/blob/2665d972f6d587ba4773a95053ac39af3fdf8df9/README.md) · [Integration and update notes](https://github.com/teddashh/ai-security-scanner/blob/335d0666bdc63eb86e6c8c4cddeae110db893397/docs/engines/zap.md)
+
+### About this tool
+
+ZAP (Zed Attack Proxy, long known as OWASP ZAP) is an open-source web application security scanner, and one of the most widely used and trusted tools of its kind. Upstream, it can sit between a browser and a website, crawl pages, inspect every response, and actively send attack payloads. Its passive rules only read the responses, including headers and cookies, without attacking. We include it in this app because those passive rules help you find problems such as missing security headers or unsafe cookie settings on the pages it reaches, as a complement to Nuclei. Here it is optional: it crawls one approved website within fixed limits and does not log in, submit forms, send attack payloads, or leave the site. Nuclei remains the default.
 
 ### What the original tool does
 
@@ -780,6 +828,10 @@ Finds risky patterns in code, using the rule set included with this version.
 
 [Upstream](https://github.com/semgrep/semgrep) · [README @ a0c13f3](https://github.com/semgrep/semgrep/blob/a0c13f304151e531c7e7c00838076211a07a790c/README.md) · [Integration and update notes](https://github.com/teddashh/ai-security-scanner/blob/335d0666bdc63eb86e6c8c4cddeae110db893397/docs/engines/semgrep.md)
 
+### About this tool
+
+Semgrep is a widely used open-source static application security testing (SAST) tool: it looks for security problems in source code without compiling or running the project. A plain text search sees only characters, so a line break, different spacing, or a renamed variable can hide the same code. Semgrep parses code into a syntax tree and matches its structure instead. In the Community Edition this app runs, rules that track untrusted data follow it only within one function. We include it in this app because it helps you quickly find risky patterns, such as unsafe command calls or database queries built from user input, using the security rule pack bundled with this app rather than the complete current registry.
+
 ### What the original tool does
 
 Semgrep analyzes source code with declarative rules. Language support, rule selection and Community Edition capabilities determine what can be observed without compiling or executing the target project.
@@ -843,6 +895,10 @@ Image identity: `ghcr.io/teddashh/ai-security-scanner-engine-semgrep:1.174.0-4@s
 Looks for passwords and keys left in project files. Values are hidden in the report.
 
 [Upstream](https://github.com/gitleaks/gitleaks) · [README @ 83d9cd6](https://github.com/gitleaks/gitleaks/blob/83d9cd684c87d95d656c1458ef04895a7f1cbd8e/README.md) · [Integration and update notes](https://github.com/teddashh/ai-security-scanner/blob/335d0666bdc63eb86e6c8c4cddeae110db893397/docs/engines/gitleaks.md)
+
+### About this tool
+
+Gitleaks is an open-source secret scanner, and one of the most popular and trusted tools for finding hardcoded passwords, API keys, tokens, and other credentials in project files. Its rules recognize many known key formats, and some also weigh nearby words or how random a value looks. Upstream Gitleaks can also search a repository's Git history, so a key deleted later can still be found. We include it in this app because it helps you quickly find passwords and keys left in the project you select. Here it reads a read-only copy of the current files only: it does not search deleted Git history or test whether a credential still works, and the report hides the secret values.
 
 ### What the original tool does
 
@@ -908,6 +964,10 @@ Looks for exposed secrets in local files. It does not try the credentials agains
 
 [Upstream](https://github.com/trufflesecurity/trufflehog) · [README @ 3ab759f](https://github.com/trufflesecurity/trufflehog/blob/3ab759fef4bb5935d4fe9ac68b503d05346b8364/README.md) · [Integration and update notes](https://github.com/teddashh/ai-security-scanner/blob/335d0666bdc63eb86e6c8c4cddeae110db893397/docs/engines/trufflehog.md)
 
+### About this tool
+
+TruffleHog is an open-source secret scanner, and one of the most popular and trusted tools for finding exposed credentials such as API keys and tokens. It has dedicated detectors for many kinds of credentials. Upstream, it can also ask the matching live service whether a found key works, and it can search Git history. We include it in this app because it helps you quickly find secrets in the current files, with detectors that complement Gitleaks. Here networking is turned off and the scan reads a read-only copy of those files: it does not search Git history or try any credential on a live service. A match is not proof that the key still works, and the report leaves the secret values out.
+
 ### What the original tool does
 
 TruffleHog provides detector families for many credential types and supports multiple source and verification workflows. The available upstream online verification feature is deliberately disabled in this product’s local scan.
@@ -971,6 +1031,10 @@ Image identity: `ghcr.io/teddashh/ai-security-scanner-engine-trufflehog:3.97.0-3
 Checks supported deployment and infrastructure files for unsafe settings.
 
 [Upstream](https://github.com/bridgecrewio/checkov) · [README @ 0604e97](https://github.com/bridgecrewio/checkov/blob/0604e97b0f77c89a8c6c1fe2219c3d251cbb9789/README.md) · [Integration and update notes](https://github.com/teddashh/ai-security-scanner/blob/335d0666bdc63eb86e6c8c4cddeae110db893397/docs/engines/checkov.md)
+
+### About this tool
+
+Checkov is a widely used open-source scanner for infrastructure as code (IaC): the files that describe how cloud resources and deployments should be set up. It reads those files as resources and the relationships between them, not as plain text, and checks them against a library of security policies. We include it in this app because it helps you quickly find unsafe settings in files such as Terraform, CloudFormation, and Dockerfiles before anything is deployed. Here it reads a read-only copy of the selected project. It does not connect to a cloud account, download platform policy data, or apply the files, so the result describes the files, not the live environment.
 
 ### What the original tool does
 
@@ -1036,6 +1100,10 @@ Looks for unsafe settings in files that describe how your systems are deployed.
 
 [Upstream](https://github.com/Checkmarx/kics) · [README @ e1f23ca](https://github.com/Checkmarx/kics/blob/e1f23cad9640f55b963f22a116b04906b8c16ac6/README.md) · [Integration and update notes](https://github.com/teddashh/ai-security-scanner/blob/335d0666bdc63eb86e6c8c4cddeae110db893397/docs/engines/kics.md)
 
+### About this tool
+
+KICS (Keeping Infrastructure as Code Secure), from Checkmarx, is an open-source scanner for infrastructure as code (IaC): the files that describe how your systems are deployed. It runs a library of security queries over formats such as Terraform, CloudFormation, Kubernetes manifests, and Dockerfiles, and ties each result to a file and line. Its bundled queries also look for passwords and keys left in those files. We include it in this app because it helps you quickly find risky deployment settings, with a query library independent of Checkov's that gives a second view. Here it scans a read-only copy of the selected project with the queries bundled in the tool. It does not connect to a cloud account or download extra queries.
+
 ### What the original tool does
 
 KICS evaluates infrastructure definitions with a library of security queries across formats such as Terraform, CloudFormation, Kubernetes and Dockerfile. Its results connect a query to individual file locations.
@@ -1099,6 +1167,10 @@ Image identity: `checkmarx/kics:v2.1.20@sha256:3e5a268eb8adda2e5a483c9359ddfc4cd
 Checks supported project and container packages against the included vulnerability database.
 
 [Upstream](https://github.com/aquasecurity/trivy) · [README @ e1fd17a](https://github.com/aquasecurity/trivy/blob/e1fd17a0ea4a8cf24bc4b4dd7e2cfbf4bb31b994/README.md) · [Integration and update notes](https://github.com/teddashh/ai-security-scanner/blob/335d0666bdc63eb86e6c8c4cddeae110db893397/docs/engines/trivy.md)
+
+### About this tool
+
+Trivy, from Aqua Security, is an open-source security scanner, and one of the most popular and trusted tools for finding known vulnerabilities in software packages. It reads the dependency files it recognizes, plus individual packages such as Java JAR files, and matches their versions against public advisories in a vulnerability database, usually CVEs, the standard IDs for known flaws. Upstream Trivy can also check settings and secrets. We include it in this app because it helps you quickly find known vulnerable packages, along with a fixed version when the database lists one. Here only its vulnerability checks run, using the database bundled with this app. In a container image it checks operating-system packages only; Grype covers the image's application libraries.
 
 ### What the original tool does
 
@@ -1164,6 +1236,10 @@ Finds known vulnerabilities in supported project and container packages using th
 
 [Upstream](https://github.com/anchore/grype) · [README @ b5fa92b](https://github.com/anchore/grype/blob/b5fa92bbcbef655497e3be840a2f718380e2cdd3/README.md) · [Integration and update notes](https://github.com/teddashh/ai-security-scanner/blob/335d0666bdc63eb86e6c8c4cddeae110db893397/docs/engines/grype.md)
 
+### About this tool
+
+Grype, from Anchore, is a widely used open-source tool that matches software packages to known vulnerabilities. It compares package names and versions with a vulnerability database and reports the matching advisory, such as a CVE, the standard ID for a known flaw, or a GitHub security advisory, plus any fixed version the database lists. We include it in this app because it helps you quickly find known vulnerable packages in a selected project or container image; in an image, that includes application libraries as well as operating-system packages. When Trivy reports the same issue, the report still shows which tool found what. Here it uses the database bundled with this app, and it does not pull images from a registry or run the container.
+
 ### What the original tool does
 
 Grype matches software components to vulnerability data and reports the affected package, advisory and available fix. It works with package catalogs, directories and container-related inputs.
@@ -1227,6 +1303,10 @@ Image identity: `ghcr.io/teddashh/ai-security-scanner-engine-grype:0.117.0-4@sha
 Lists the software components in your project or container. The list helps you track what is installed.
 
 [Upstream](https://github.com/anchore/syft) · [README @ 2293641](https://github.com/anchore/syft/blob/2293641e3bd628a01bb37639318d62c0ebe89b39/README.md) · [Integration and update notes](https://github.com/teddashh/ai-security-scanner/blob/335d0666bdc63eb86e6c8c4cddeae110db893397/docs/engines/syft.md)
+
+### About this tool
+
+Syft, from Anchore, is a widely used open-source tool that builds a software bill of materials, or SBOM: a list of the software components inside a project or container image, such as libraries and operating-system packages. It records the name, version, and type of each component it recognizes. We include it in this app because it helps you quickly see which software the selected project or image contains, so you know what the vulnerability checks are looking at. The list shows what is there; it is not a vulnerability report. Here it reads a read-only copy with no network connection and does not download images from a registry. Known vulnerabilities are left to Trivy and Grype.
 
 ### What the original tool does
 
@@ -1292,6 +1372,10 @@ Checks the Kubernetes configuration files you select, without connecting to a ru
 
 [Upstream](https://github.com/kubescape/kubescape) · [README @ 469969f](https://github.com/kubescape/kubescape/blob/469969f6bebf46bef5e808b91a4bb46fb2bbf4ed/README.md) · [Integration and update notes](https://github.com/teddashh/ai-security-scanner/blob/335d0666bdc63eb86e6c8c4cddeae110db893397/docs/engines/kubescape.md)
 
+### About this tool
+
+Kubescape is a widely used open-source tool for checking the configuration of Kubernetes, the system many teams use to run containers. It reads YAML and JSON files as Kubernetes resources and compares them with a fixed hardening checklist, the NSA framework based on U.S. NSA and CISA guidance, so each result names the resource and the control that failed. Upstream Kubescape can also scan live clusters and container images. We include it in this app because it helps you quickly find risky settings in the Kubernetes files you select. Here it checks only that saved snapshot, offline. It does not connect to a running cluster, cannot tell whether the files match what is deployed, and does not scan container packages.
+
 ### What the original tool does
 
 Kubescape offers Kubernetes posture and security capabilities spanning configuration assessment and broader cluster workflows. This product selects its offline manifest assessment with a pinned framework and policy library.
@@ -1355,6 +1439,10 @@ Image identity: `ghcr.io/teddashh/ai-security-scanner-engine-kubescape:4.0.12-3@
 Checks a saved copy of node settings against CIS guidance. It does not inspect a live host with administrator access.
 
 [Upstream](https://github.com/aquasecurity/kube-bench) · [README @ 9f133cb](https://github.com/aquasecurity/kube-bench/blob/9f133cb7509ce1dbedfc860e94474588000e25ac/README.md) · [Integration and update notes](https://github.com/teddashh/ai-security-scanner/blob/335d0666bdc63eb86e6c8c4cddeae110db893397/docs/engines/kube-bench.md)
+
+### About this tool
+
+kube-bench is a widely used open-source tool from Aqua Security that checks Kubernetes nodes, the machines that run workloads, against the CIS Kubernetes Benchmark: the Center for Internet Security's published checklist of secure settings. It compares configuration files and running-process facts with each check and marks it pass, fail, or warn; a warning means the check needs information or judgment that automation cannot supply. Upstream kube-bench runs on a live node and can also check the control plane. We include it in this app because it helps you quickly find node settings that miss this checklist. Here it uses only a saved export of node facts and the node checks. It does not log in to a live host or run the control-plane checks.
 
 ### What the original tool does
 
@@ -1420,6 +1508,10 @@ Sends 54 fixed test prompts to one approved model service. Review the request li
 
 [Upstream](https://github.com/NVIDIA/garak) · [README @ 93aa9cd](https://github.com/NVIDIA/garak/blob/93aa9cdec309ec4170559676f1826ea2a679920c/README.md) · [Integration and update notes](https://github.com/teddashh/ai-security-scanner/blob/335d0666bdc63eb86e6c8c4cddeae110db893397/docs/engines/garak.md)
 
+### About this tool
+
+Garak is NVIDIA's widely used open-source vulnerability scanner for large language models (LLMs). It sends crafted prompts, called probes, and detectors judge the replies. The probes used here are “Do Anything Now” instructions that try to talk a model out of its rules, and prompts that try to make it output terminal escape codes. Upstream Garak has many more probes. We include it in this app because it helps you quickly see how one approved model responds to these fixed tests. You start this optional check yourself: it sends 54 prompts to one approved OpenAI-compatible HTTPS chat API and model. A clean result covers only these prompts. The provider may charge, and your API key is used once and never saved with the scan or report.
+
 ### What the original tool does
 
 NVIDIA garak is an LLM vulnerability scanner with probe, generator and detector plugins. The full upstream project supports many research workflows; this product exposes one deliberately bounded native probe profile.
@@ -1484,6 +1576,10 @@ Maps agents, tools and connections in supported AI workflows without running the
 
 [Upstream](https://github.com/splx-ai/agentic-radar) · [README @ 65a7e4b](https://github.com/splx-ai/agentic-radar/blob/65a7e4bd01e2034c7cb52e9620eeed287688cc53/README.md) · [Integration and update notes](https://github.com/teddashh/ai-security-scanner/blob/335d0666bdc63eb86e6c8c4cddeae110db893397/docs/engines/agentic-radar.md)
 
+### About this tool
+
+Agentic Radar is an open-source tool that reads AI agent projects and maps how their pieces connect. You choose one of the supported frameworks (LangGraph, CrewAI, n8n, OpenAI Agents, or AutoGen), and its parser lists the agents, tools, and MCP servers and the links between them. An MCP server is an outside tool reached through the Model Context Protocol, a standard way for an AI app to call other tools. Upstream Agentic Radar also offers broader risk analysis. We include it in this app because it helps you quickly understand what an AI agent project contains before you review it. Here it only inventories one saved copy of the project. It does not run the workflow, contact a model, or report security problems.
+
 ### What the original tool does
 
 Agentic Radar analyzes agentic workflows and provides architecture and security-oriented analysis capabilities. Our integration selects its framework parsers and graph inventory, not the complete upstream analysis workflow.
@@ -1547,6 +1643,10 @@ Image identity: `ghcr.io/teddashh/ai-security-scanner-engine-agentic-radar:0.14.
 Checks a selected MCP configuration for exposed keys and overly broad tool permissions. It does not start or contact MCP servers.
 
 [Upstream](https://github.com/aira-security/mcp-armor) · [README @ 6af4cee](https://github.com/aira-security/mcp-armor/blob/6af4cee4665ab6242f02a88952f9127b6a04922a/README.md) · [Integration and update notes](https://github.com/teddashh/ai-security-scanner/blob/335d0666bdc63eb86e6c8c4cddeae110db893397/docs/engines/mcp-armor.md)
+
+### About this tool
+
+MCP Armor is an open-source tool for checking Model Context Protocol (MCP) configuration, the file that tells an AI app which outside tools to connect to. Two of its checks read that file: one looks for keys and other secrets written into it, the other flags tool commands and permissions broader than needed. The report leaves out the matched secret. Upstream, it can also contact the configured servers and run tests that use a model. We include it in this app because it helps you quickly find exposed keys and overly broad tool permissions in the configuration you select. Here it reads only that file from the saved project; it does not start or contact an MCP server, load a model, or show what a running server enforces.
 
 ### What the original tool does
 

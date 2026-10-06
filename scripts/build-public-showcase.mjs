@@ -9,6 +9,7 @@ const repo = 'https://github.com/teddashh/ai-security-scanner';
 const site = 'https://teddashh.github.io/ai-security-scanner/';
 const languages = ['en', 'zh-TW'];
 const fields = {
+  introduction: ['About this tool', '工具介紹'],
   upstream: ['What the original tool does', '原本的工具能做什麼'],
   included: ['What this app checks', '這個程式會檢查什麼'],
   notIncluded: ['What it does not check', '哪些不在檢查範圍內'],
@@ -81,8 +82,8 @@ function versionRows(source, lang) {
   ];
 }
 function guideCard(entry, source, sample) {
-  const normal = Object.keys(fields).slice(0,6).map(key => `<section><h3>${bi(fields[key])}</h3><p>${text(entry[key])}</p></section>`).join('\n');
-  const swot = Object.keys(fields).slice(6).map(key => `<section><h4>${bi(fields[key])}</h4><p>${text(entry[key])}</p></section>`).join('\n');
+  const normal = Object.keys(fields).slice(0,7).map(key => `<section><h3>${bi(fields[key])}</h3><p>${text(entry[key])}</p></section>`).join('\n');
+  const swot = Object.keys(fields).slice(7).map(key => `<section><h4>${bi(fields[key])}</h4><p>${text(entry[key])}</p></section>`).join('\n');
   const facts = languages.map(lang => `<dl class="version-facts ${lang === 'en' ? 'lang-en' : 'lang-zh'}"${lang === 'en' ? '' : ' lang="zh-Hant"'}>${versionRows(source, lang).map(([k,v]) => `<div><dt>${escape(k)}</dt><dd>${escape(v)}</dd></div>`).join('')}</dl>`).join('');
   return `<details class="scanner-entry" id="${entry.id}" data-category="${entry.category}">
 <summary><span class="scanner-entry-heading"><strong>${escape(source.displayName)}</strong><span class="scanner-purpose">${text(entry.purpose)}</span></span><span class="scanner-kind">${bi(sample.findings ? ['Security checks','安全檢查'] : ['Inventory','盤點'])}</span></summary>

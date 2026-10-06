@@ -12,6 +12,10 @@
         "en": "Lists selected AWS identities and permission policies. This inventory is kept separate from security findings.",
         "zh-TW": "整理部分 AWS 身分與權限政策，作為盤點資料，和安全問題分開列出。"
       },
+      "introduction": {
+        "en": "CloudQuery is a widely used open-source tool that copies data from cloud provider APIs into structured tables you can query and compare later. A source plugin reads the cloud service and a destination plugin writes each row, so every collection comes out in the same shape. We include it in this app because it helps you quickly see which identities and permission policies exist in an approved AWS account, which gives the security checks context. Here it collects one fixed set of identity and access management (IAM) tables: the account, users, groups, roles, policies, password policies, and credential reports. These rows are inventory: they describe what exists, stay separate from security findings, and do not cover every AWS service.",
+        "zh-TW": "CloudQuery 是一款廣泛使用的開源工具，會把雲端服務商 API 提供的資料整理成結構化表格，方便你之後查詢與比對。它用來源外掛讀取雲端服務，再用目的地外掛寫下每一列資料，所以每次收集到的格式都一致。我們把它放進本程式，是因為它能幫你很快看清一個核准的 AWS 帳號裡有哪些身分與權限政策，讓安全檢查的結果更容易對照。這裡只收集一組固定的身分與存取管理（IAM）表格：帳號、使用者、群組、角色、政策、密碼政策與憑證報告。這些資料屬於盤點，只說明目前有什麼，會和安全問題分開列出，也不涵蓋所有 AWS 服務。"
+      },
       "upstream": {
         "en": "CloudQuery moves structured API data into destinations that can be queried and compared. Its CLI, source plugin and destination plugin are independently versioned; recording only the CLI version does not identify the data collection behavior.",
         "zh-TW": "CloudQuery 把 API 資料轉成可查詢、比較的結構化資料。CLI、來源 plugin 與目的地 plugin 各有版本，只記 CLI 版本不足以辨識實際收集行為。"
@@ -59,6 +63,10 @@
       "purpose": {
         "en": "Lists AWS users and selected account settings so you can review who has access.",
         "zh-TW": "列出 AWS 使用者與部分帳號設定，方便了解哪些人可以存取。"
+      },
+      "introduction": {
+        "en": "Steampipe, maintained by Turbot, is a widely used open-source tool that turns cloud APIs into SQL tables. SQL is the standard database query language, and each provider plugin decides which services and columns you can read. We include it in this app because it helps you quickly list the identity and access management (IAM) users in one approved AWS account, so you can compare that list with what the security checks report. Here it runs one fixed query of the IAM user table. The rows are inventory: they name the users found and do not judge whether any user is a risk. This app does not run Steampipe's ready-made security benchmarks or accept SQL you write.",
+        "zh-TW": "Steampipe 由 Turbot 維護，是一款廣泛使用的開源工具，能把雲端 API 變成 SQL 資料表。SQL 是查詢資料庫的標準語言，而每個服務商外掛決定你能讀到哪些服務與欄位。我們把它放進本程式，是因為它能幫你很快列出一個核准 AWS 帳號裡的身分與存取管理（IAM）使用者，再拿這份名單對照安全檢查的結果。這裡只執行一個固定的 IAM 使用者查詢。查到的資料屬於盤點：只列出找到的使用者，不判斷哪個使用者有風險。本程式也不執行 Steampipe 現成的安全基準檢查，也不接受你自己寫的 SQL。"
       },
       "upstream": {
         "en": "Steampipe exposes APIs through SQL tables using provider plugins. That makes cloud metadata available in a familiar relational model, while the plugin determines which services and columns can be queried.",
@@ -108,6 +116,10 @@
         "en": "Checks selected identity and permission settings in an approved AWS account, Azure subscription or GCP project.",
         "zh-TW": "檢查核准的 AWS 帳號、Azure 訂用帳戶或 GCP 專案中的部分身分與權限設定。"
       },
+      "introduction": {
+        "en": "Prowler is a widely used open-source cloud security assessment tool. It calls the cloud provider's APIs, runs its built-in checks, and records each check's name, the affected resource, what failed, and how to fix it. Upstream, it can cover many services and compliance frameworks. We include it in this app because it helps you quickly find identity and permission settings that need attention. Here each run uses a narrow identity and access management (IAM) profile on one approved asset: the IAM service of one AWS account, the IAM service of one Azure subscription, or four specific IAM checks for one GCP project. Other services and accounts are outside the run, and a passed check is not a certification.",
+        "zh-TW": "Prowler 是一款廣泛使用的開源雲端安全評估工具。它呼叫雲端服務商的 API、執行內建檢查，並記下檢查名稱、受影響的資源、哪裡不符合，以及怎麼修正。上游的 Prowler 能涵蓋許多服務與合規框架。我們把它放進本程式，是因為它能幫你很快找出需要注意的身分與權限設定。這裡每次只對一個核准資產執行範圍很窄的身分與存取管理（IAM）檢查：一個 AWS 帳號的 IAM 服務、一個 Azure 訂用帳戶的 IAM 服務，或一個 GCP 專案的四項指定 IAM 檢查。其他服務與帳號不在這次檢查範圍內，單一檢查通過也不代表取得認證。"
+      },
       "upstream": {
         "en": "Prowler is a cloud security assessment project with provider-specific checks and remediation guidance. Its upstream platform is broader than the narrow provider profiles selected by this desktop integration.",
         "zh-TW": "Prowler 是雲端安全評估專案，提供依 provider 區分的檢查與修正指引。上游完整平台的能力，比本桌面整合選用的受限 provider profile 更廣。"
@@ -155,6 +167,10 @@
       "purpose": {
         "en": "Checks selected AWS identity and access settings. This app uses a limited part of ScoutSuite.",
         "zh-TW": "檢查部分 AWS 身分與存取設定。本程式使用的是 ScoutSuite 的部分功能。"
+      },
+      "introduction": {
+        "en": "ScoutSuite, from NCC Group, is a widely used open-source tool that reads cloud configuration through provider APIs and flags settings its rules consider risky. Each result keeps the rule, the affected items, and why they deserve review. Upstream, it supports several cloud providers and produces its own report. We include it in this app because it helps you quickly find AWS identity and access settings worth a closer look, as a second view beside Prowler. Here it runs only the AWS identity and access management (IAM) rules for one approved account; other providers and other AWS services are outside the run. A setting becomes a finding only when a rule flags it, so collected configuration alone is not a vulnerability.",
+        "zh-TW": "ScoutSuite 來自 NCC Group，是一款廣泛使用的開源工具。它透過雲端服務商的 API 讀取設定，用自己的規則標出有風險的設定，每筆結果都保留規則、受影響的項目，以及值得檢視的原因。上游的 ScoutSuite 支援多家雲端服務商，也有自己的報告。我們把它放進本程式，是因為它能幫你很快找出值得再看一眼的 AWS 身分與存取設定，也能和 Prowler 互相對照。這裡只對一個核准帳號執行 AWS 身分與存取管理（IAM）規則，其他雲端服務商與其他 AWS 服務都不在範圍內。設定要被規則標出才會成為報告裡的問題，只是收集到設定並不代表有弱點。"
       },
       "upstream": {
         "en": "ScoutSuite collects cloud configuration through provider APIs and identifies risky configurations for review. Upstream supports a wider multi-cloud assessment workflow and its own presentation.",
@@ -204,6 +220,10 @@
         "en": "Reviews collected AWS permission policies for access that may be broader than needed.",
         "zh-TW": "分析收集到的 AWS 權限政策，找出可能給得太多的權限。"
       },
+      "introduction": {
+        "en": "Cloudsplaining, from Salesforce, is an open-source tool that checks AWS identity and access management (IAM) policies for permissions broader than the work needs, which breaks the principle of least privilege. It reads an account's authorization details, finds actions allowed without a resource limit, and sorts risky ones into categories such as privilege escalation, data exfiltration, resource exposure, and infrastructure modification, naming the policy and the actions. We include it in this app because it helps you quickly find overly broad permissions and see which actions to review. Here it analyzes one approved AWS account. A flagged action is evidence for review: it does not decide whether the business needs the permission, change the policy, or prove someone can use it now.",
+        "zh-TW": "Cloudsplaining 來自 Salesforce，是一款開源工具，專門檢查 AWS 身分與存取管理（IAM）政策是否給了超過工作所需的權限，也就是有沒有違反「最小權限」原則。它讀取帳號的授權細節，找出沒有限定資源範圍的動作，再把有風險的動作分成權限提升、資料外洩、資源曝露與更動基礎設施等類別，並指出是哪一份政策、哪些動作。我們把它放進本程式，是因為它能幫你很快找出過寬的權限，看清該檢視哪些動作。這裡只分析一個核准的 AWS 帳號。被標出的動作是供你審閱的證據：它不判斷業務是否需要這項權限、不修改政策，也不能證明現在真的有人用得到。"
+      },
       "upstream": {
         "en": "Cloudsplaining specializes in AWS IAM policy analysis. It examines authorization data and classifies risky permissions such as privilege escalation, data access or infrastructure-changing capabilities.",
         "zh-TW": "Cloudsplaining 專注 AWS IAM 政策分析，檢視授權資料，將高風險權限分類，例如權限提升、資料存取或更動基礎設施的能力。"
@@ -251,6 +271,10 @@
       "purpose": {
         "en": "Compares supported Microsoft 365 settings with CISA security guidance.",
         "zh-TW": "依照美國 CISA 的安全建議，檢查支援的 Microsoft 365 設定。"
+      },
+      "introduction": {
+        "en": "ScubaGear, from CISA, the U.S. Cybersecurity and Infrastructure Security Agency, is an open-source tool that compares a Microsoft 365 tenant, an organization's Microsoft 365 environment, with CISA's Secure Cloud Business Applications (SCuBA) baselines: written expectations for a secure configuration. Upstream, it also covers other Microsoft 365 products. We include it in this app because it helps you quickly find Microsoft Entra ID settings that fall short of this guidance; Entra ID is the tenant's sign-in and identity directory. Here it checks the Entra ID baseline for one authorized tenant in Microsoft's commercial cloud. Exchange, SharePoint, and other workloads are outside the check. A pass is not a compliance certification, and checks that could not be evaluated stay visible instead of counting as passes.",
+        "zh-TW": "ScubaGear 來自美國網路安全暨基礎設施安全局（CISA），是一款開源工具，會把 Microsoft 365 租戶（也就是組織的 Microsoft 365 環境）的設定，和 CISA 的 Secure Cloud Business Applications（SCuBA）基準比較；這些基準是以書面寫下的安全設定要求。上游也涵蓋其他 Microsoft 365 產品。我們把它放進本程式，是因為它能幫你很快找出不符合這份基準的 Microsoft Entra ID 設定；Entra ID 是租戶的登入與身分目錄。這裡只為一個已授權、位於 Microsoft 商業雲端的租戶檢查 Entra ID 基準，Exchange、SharePoint 與其他工作負載不在範圍內。通過不等於合規認證，沒能評估的項目也會照樣列出，不算通過。"
       },
       "upstream": {
         "en": "CISA ScubaGear evaluates Microsoft 365 tenant configuration against published SCuBA secure configuration baselines. Upstream has separate product assessments; a baseline result must identify which product was actually assessed.",
@@ -300,6 +324,10 @@
         "en": "Tests supported Microsoft 365 security settings and explains which checks need attention.",
         "zh-TW": "檢查支援的 Microsoft 365 安全設定，列出需要注意的項目。"
       },
+      "introduction": {
+        "en": "Maester is an open-source test framework for Microsoft 365 security configuration, written in PowerShell, Microsoft's scripting language. Each test states the setting a secure tenant should have and records whether yours matches. We include it in this app because it helps you quickly find Microsoft Entra ID settings that do not meet those expectations; Entra ID is the tenant's sign-in and identity directory. Here it runs a fixed set of Entra tests for one authorized tenant and skips long-running tests, preview tests, and tests that need other services. Exchange Online and scripts you supply are outside the run. A skipped test is never shown as a pass, and a test that needs human judgment is listed for your review.",
+        "zh-TW": "Maester 是一套開源的測試框架，用 PowerShell（Microsoft 的腳本語言）寫成，專門檢查 Microsoft 365 的安全設定。每一項測試都寫明安全的租戶應有的設定，並記錄你的租戶是否符合。我們把它放進本程式，是因為它能幫你很快找出不符合這些要求的 Microsoft Entra ID 設定；Entra ID 是租戶的登入與身分目錄。這裡對一個已授權的租戶執行一組固定的 Entra 測試，並略過耗時很長的測試、預覽測試，以及需要連到其他服務的測試；Exchange Online 和你自己提供的腳本都不在範圍內。被略過的測試絕不會顯示成通過，需要人來判斷的測試會列出來供你審閱。"
+      },
       "upstream": {
         "en": "Maester is a PowerShell-based test framework for Microsoft 365 security configuration. Tests express expected settings and retain a verdict that can be reviewed over time.",
         "zh-TW": "Maester 是以 PowerShell 為基礎的 Microsoft 365 安全設定測試框架。測試把預期設定寫成明確條件，保留判定以便長期追蹤。"
@@ -347,6 +375,10 @@
       "purpose": {
         "en": "Shows which approved ports accept connections. An open port is information to investigate, not proof of a vulnerability.",
         "zh-TW": "查看核准的連接埠是否接受連線。連接埠開著值得了解，但不代表有漏洞。"
+      },
+      "introduction": {
+        "en": "Naabu is an open-source port-discovery tool from ProjectDiscovery that shows which TCP ports are accepting connections. A TCP port is the number a network service listens on. Its connect scan opens an ordinary TCP connection to each address and port, and a completed connection means the port is open; upstream also offers other discovery methods. We include it in this app because it helps you quickly find out which approved services are listening, so the security checks that follow have a real target. Here it connects only to the exact addresses and ports you approved. It does not add nearby hosts or scan UDP, the other common way services listen, and an open port is inventory, not a vulnerability.",
+        "zh-TW": "Naabu 是 ProjectDiscovery 維護的開源連接埠探索工具，用來找出哪些 TCP 連接埠正在接受連線。TCP 連接埠就是網路服務等候連線時使用的編號。它的連線掃描會對每個位址與連接埠嘗試一次一般的 TCP 連線，連得上就代表連接埠是開的；上游另外還有其他探索方式。我們把它放進本程式，是因為它能幫你很快看出哪些核准的服務正在等候連線，讓接下來的安全檢查有明確的對象。這裡只連你核准的位址與連接埠，不會把附近的主機加進來，也不掃描 UDP（另一種常見的服務連線方式）。開著的連接埠會記在盤點裡，本身不是漏洞。"
       },
       "upstream": {
         "en": "Naabu is a network port-discovery tool. Upstream offers several scan methods and discovery options; this product binds its invocation to a frozen work plan instead of exposing an unrestricted port-scanning command.",
@@ -396,6 +428,10 @@
         "en": "Checks whether a selected web service responds and records basic response information. It does not assess vulnerabilities.",
         "zh-TW": "確認選定的網站服務是否回應，並記錄基本資訊；這不是漏洞檢查。"
       },
+      "introduction": {
+        "en": "httpx is an open-source web-probing tool from ProjectDiscovery, not the Python HTTPX library of the same name. It sends an ordinary web (HTTP) request to an address and records whether a web service answers, the status code it returns, and other basic response details, which a port check alone cannot tell you. We include it in this app because it helps you quickly confirm that an approved web service is responding before a real security check runs against it. Upstream, it can run many more probes. Here it asks only the exact service you approved and does not crawl, log in, or enable every upstream probe. The result is inventory that describes the service, not a vulnerability finding.",
+        "zh-TW": "httpx 是 ProjectDiscovery 維護的開源網站探測工具，和 Python 裡同名的 HTTPX 程式庫不是同一個東西。它會對一個位址送出一般的網頁（HTTP）請求，記下有沒有網站服務回應、回傳的狀態碼，以及其他基本的回應資訊；這些都是只看連接埠開不開無法得知的。我們把它放進本程式，是因為它能幫你在真正的安全檢查開始前，很快確認核准的網站服務是否有在回應。上游還能做更多種探測，這裡只詢問你核准的那一個服務，不爬網站、不登入，也不開啟所有上游探測。結果是描述這個服務的盤點資料，本身不代表有漏洞。"
+      },
       "upstream": {
         "en": "ProjectDiscovery httpx is an HTTP probing toolkit, distinct from the Python HTTPX client library. Its probes help characterize responding web services; a response alone does not diagnose a vulnerability.",
         "zh-TW": "ProjectDiscovery httpx 是 HTTP 探測工具，與 Python HTTPX client library 不同。它的探測協助描述會回應的網站服務；一次回應本身不構成弱點判斷。"
@@ -443,6 +479,10 @@
       "purpose": {
         "en": "Identifies website technologies, then runs suitable read-only checks within the approved address and limits.",
         "zh-TW": "先辨識網站使用的技術，再於核准的網址與限制內執行適用的唯讀檢查。"
+      },
+      "introduction": {
+        "en": "Nuclei is an open-source vulnerability scanner from ProjectDiscovery, and one of the most widely used and trusted tools of its kind. Each check is a template: a written request plus the response that signals a known exposure or vulnerability. It first recognizes which technologies a site uses, then picks the templates that fit. We include it in this app because it helps you quickly find those known problems; it is the default website check, using the templates bundled here. It stays on one approved site address and sends only read-only requests. It does not log in, submit forms, fuzz, run exploits, drive a browser, or ask an outside server to call back. A path you type does not narrow the check to that path.",
+        "zh-TW": "Nuclei 是 ProjectDiscovery 維護的開源弱點掃描工具，也是同類工具中最受歡迎且備受信任的工具之一。它的每一項檢查都是一份範本：寫好的請求，加上代表已知曝露或漏洞的回應特徵。它會先辨識網站用了哪些技術，再挑出適合的範本。我們把它放進本程式，是因為它能幫你很快找出這些已知問題；它是預設的網站檢查，使用本程式內附的範本。它只對一個核准的網站位址送出唯讀請求，不登入、不送出表單、不做模糊測試或漏洞利用、不操作瀏覽器，也不請外部伺服器回撥。你輸入的路徑不會把檢查範圍縮小到那個路徑。"
       },
       "upstream": {
         "en": "Nuclei evaluates targets using upstream YAML templates. The template repository supplies detector logic and evolves independently of the engine, so the engine and template revisions must both be identified.",
@@ -492,6 +532,10 @@
         "en": "Identifies services on approved hosts and ports, then runs the security checks that apply.",
         "zh-TW": "辨識核准主機與連接埠上的服務，再執行適合的安全檢查。"
       },
+      "introduction": {
+        "en": "Greenbone OpenVAS is an open-source network vulnerability scanner maintained by Greenbone. Its tests come from a fixed copy of the Greenbone Community Feed, a separately maintained library of checks. It first identifies which service is listening on a port, then runs the tests that apply to it. We include it in this app because it helps you find known security problems on internal devices and servers that a simple connection cannot reveal. Here it tests only the exact hosts and ports you approved. It does not log in or inspect the machine from inside, guess passwords, try default accounts, or run disruptive checks. When it cannot identify a service, those tests do not run, and the report lists the host as not tested.",
+        "zh-TW": "Greenbone OpenVAS 是 Greenbone 維護的開源網路弱點掃描工具。它使用一份固定版本的 Greenbone Community Feed 來做弱點測試；Community Feed 是 Greenbone 另外維護的檢查項目庫。它會先辨識連接埠上跑的是什麼服務，再執行適用的測試。我們把它放進本程式，是因為它能幫你找出內部設備與伺服器上、光靠連線看不出來的已知安全問題。這裡只測試你核准的主機與連接埠，不登入、不進到主機內部檢查、不猜密碼、不試預設帳號，也不做可能中斷或壓垮服務的檢查。辨識不出服務時，這些測試就不會執行，報告會把該主機列為未測試。"
+      },
       "upstream": {
         "en": "Greenbone OpenVAS Scanner executes vulnerability tests from its feed, using service detection and test dependencies to determine applicability. The engine and feed are separate inputs; a current engine with an old feed has different knowledge from a refreshed assessment.",
         "zh-TW": "Greenbone OpenVAS Scanner 執行 feed 中的弱點測試，透過服務辨識與測試依賴判斷適用性。引擎與 feed 是分開的輸入；相同引擎搭配不同日期的 feed，具備的偵測知識也不同。"
@@ -539,6 +583,10 @@
       "purpose": {
         "en": "Visits pages on one approved website and checks the responses. It does not submit forms or send attack payloads.",
         "zh-TW": "瀏覽一個核准網站的頁面並檢查回應，不會送出表單或攻擊內容。"
+      },
+      "introduction": {
+        "en": "ZAP (Zed Attack Proxy, long known as OWASP ZAP) is an open-source web application security scanner, and one of the most widely used and trusted tools of its kind. Upstream, it can sit between a browser and a website, crawl pages, inspect every response, and actively send attack payloads. Its passive rules only read the responses, including headers and cookies, without attacking. We include it in this app because those passive rules help you find problems such as missing security headers or unsafe cookie settings on the pages it reaches, as a complement to Nuclei. Here it is optional: it crawls one approved website within fixed limits and does not log in, submit forms, send attack payloads, or leave the site. Nuclei remains the default.",
+        "zh-TW": "ZAP（Zed Attack Proxy，也就是大家熟悉的 OWASP ZAP）是開源的網站應用程式安全掃描工具，也是同類工具中最受歡迎且備受信任的工具之一。上游的 ZAP 可以站在瀏覽器與網站之間、爬取頁面、檢查每一個回應，也能主動送出攻擊內容。它的被動規則只讀取回應，包括標頭與 cookie，不發動攻擊。我們把它放進本程式，是因為這些被動規則能幫你在它走得到的頁面上，找出缺少安全標頭、cookie 設定不安全這類問題，和 Nuclei 互補。在本程式裡它是選用的：只在固定限制內爬一個核准的網站，不登入、不送出表單、不送攻擊內容，也不跟著連結到其他網站。預設的網站檢查仍是 Nuclei。"
       },
       "upstream": {
         "en": "ZAP is a web application security testing project with proxy, crawling, passive and active capabilities. Passive scanning analyzes messages it observes; it is a specific part of the much broader upstream tool.",
@@ -588,6 +636,10 @@
         "en": "Finds risky patterns in code, using the rule set included with this version.",
         "zh-TW": "依照本版提供的規則，找出程式碼中可能不安全的寫法。"
       },
+      "introduction": {
+        "en": "Semgrep is a widely used open-source static application security testing (SAST) tool: it looks for security problems in source code without compiling or running the project. A plain text search sees only characters, so a line break, different spacing, or a renamed variable can hide the same code. Semgrep parses code into a syntax tree and matches its structure instead. In the Community Edition this app runs, rules that track untrusted data follow it only within one function. We include it in this app because it helps you quickly find risky patterns, such as unsafe command calls or database queries built from user input, using the security rule pack bundled with this app rather than the complete current registry.",
+        "zh-TW": "Semgrep 是一套廣泛使用的開源靜態應用程式安全測試（SAST）工具，也就是不編譯、不執行專案，直接檢查程式碼裡的安全問題。一般的文字搜尋只看字面，換行、空白不同或變數改名，都可能讓同一種寫法躲過去；Semgrep 則會把程式碼解析成語法樹（程式碼的結構），比對的是結構而不是字面。本程式使用的是社群版（Community Edition），追蹤不受信任資料流向的規則，只會在同一個函式內追蹤。我們把它放進本程式，是因為它能幫你很快找出有風險的寫法，例如不安全的指令呼叫，或直接拿使用者輸入組成的資料庫查詢；使用的是本程式內附的安全規則包，不是目前完整的規則庫。"
+      },
       "upstream": {
         "en": "Semgrep analyzes source code with declarative rules. Language support, rule selection and Community Edition capabilities determine what can be observed without compiling or executing the target project.",
         "zh-TW": "Semgrep 以宣告式規則分析原始碼。語言支援、規則選擇與 Community Edition 能力，決定能在不編譯、不執行目標專案的情況下觀察什麼。"
@@ -635,6 +687,10 @@
       "purpose": {
         "en": "Looks for passwords and keys left in project files. Values are hidden in the report.",
         "zh-TW": "找出專案檔案裡可能留下的密碼與金鑰，報告會隱藏它們的內容。"
+      },
+      "introduction": {
+        "en": "Gitleaks is an open-source secret scanner, and one of the most popular and trusted tools for finding hardcoded passwords, API keys, tokens, and other credentials in project files. Its rules recognize many known key formats, and some also weigh nearby words or how random a value looks. Upstream Gitleaks can also search a repository's Git history, so a key deleted later can still be found. We include it in this app because it helps you quickly find passwords and keys left in the project you select. Here it reads a read-only copy of the current files only: it does not search deleted Git history or test whether a credential still works, and the report hides the secret values.",
+        "zh-TW": "Gitleaks 是一套開源工具，也是最受歡迎且備受信任的密碼與金鑰掃描工具之一，用來找出寫死在專案檔案裡的密碼、API 金鑰、token 與其他憑證。它的規則認得許多已知金鑰的格式，有些規則還會參考附近的字詞，或字串看起來有多隨機。上游的 Gitleaks 也能搜尋儲存庫的 Git 歷史，就算金鑰後來刪掉了也找得到。我們把它放進本程式，是因為它能幫你很快找出你所選專案裡留下的密碼與金鑰。這裡只讀取目前檔案的唯讀副本，不搜尋已刪除的 Git 歷史，也不測試憑證是否仍然有效，報告也會遮蔽密碼與金鑰本身。"
       },
       "upstream": {
         "en": "Gitleaks detects secrets using its scanner-owned rules and pattern context. It supports workflows beyond the file snapshot used here; the scan mode matters when interpreting what was searched.",
@@ -684,6 +740,10 @@
         "en": "Looks for exposed secrets in local files. It does not try the credentials against a live service.",
         "zh-TW": "在本機檔案裡找出可能外洩的密碼與金鑰，不會拿它們登入服務。"
       },
+      "introduction": {
+        "en": "TruffleHog is an open-source secret scanner, and one of the most popular and trusted tools for finding exposed credentials such as API keys and tokens. It has dedicated detectors for many kinds of credentials. Upstream, it can also ask the matching live service whether a found key works, and it can search Git history. We include it in this app because it helps you quickly find secrets in the current files, with detectors that complement Gitleaks. Here networking is turned off and the scan reads a read-only copy of those files: it does not search Git history or try any credential on a live service. A match is not proof that the key still works, and the report leaves the secret values out.",
+        "zh-TW": "TruffleHog 是一套開源工具，也是最受歡迎且備受信任的密碼與金鑰掃描工具之一，用來找出 API 金鑰、token 這類可能外洩的憑證。它為許多種憑證各準備了專屬的偵測器。上游的 TruffleHog 還能向對應的線上服務確認找到的金鑰是否有效，也能搜尋 Git 歷史。我們把它放進本程式，是因為它能幫你很快找出目前檔案裡的密碼與金鑰，偵測器也和 Gitleaks 互補。這裡會關閉網路，只讀取這些檔案的唯讀副本，不搜尋 Git 歷史，也不拿憑證去線上服務測試。找到結果不代表金鑰仍然有效，報告也不會放上金鑰內容。"
+      },
       "upstream": {
         "en": "TruffleHog provides detector families for many credential types and supports multiple source and verification workflows. The available upstream online verification feature is deliberately disabled in this product’s local scan.",
         "zh-TW": "TruffleHog 為多種憑證類型提供偵測器，並支援多種來源與驗證流程。本產品的本機掃描刻意關閉上游線上有效性驗證。"
@@ -731,6 +791,10 @@
       "purpose": {
         "en": "Checks supported deployment and infrastructure files for unsafe settings.",
         "zh-TW": "檢查支援的部署與基礎設施設定檔，找出不安全的設定。"
+      },
+      "introduction": {
+        "en": "Checkov is a widely used open-source scanner for infrastructure as code (IaC): the files that describe how cloud resources and deployments should be set up. It reads those files as resources and the relationships between them, not as plain text, and checks them against a library of security policies. We include it in this app because it helps you quickly find unsafe settings in files such as Terraform, CloudFormation, and Dockerfiles before anything is deployed. Here it reads a read-only copy of the selected project. It does not connect to a cloud account, download platform policy data, or apply the files, so the result describes the files, not the live environment.",
+        "zh-TW": "Checkov 是一套廣泛使用的開源工具，專門檢查基礎設施即程式碼（IaC），也就是描述雲端資源與部署該怎麼設定的檔案。它把這些檔案讀成資源以及資源之間的關係，而不是一段純文字，再用一套安全政策逐一檢查。我們把它放進本程式，是因為它能幫你在真正部署之前，很快找出 Terraform、CloudFormation 與 Dockerfile 等檔案裡不安全的設定。這裡只讀取你所選專案的唯讀副本，不連接雲端帳號、不下載平台政策資料，也不套用這些檔案，所以結果描述的是檔案本身，不是線上環境實際的狀態。"
       },
       "upstream": {
         "en": "Checkov provides policy checks for infrastructure as code, container configuration and delivery pipelines. It understands resources and relationships rather than treating every file as plain text.",
@@ -780,6 +844,10 @@
         "en": "Looks for unsafe settings in files that describe how your systems are deployed.",
         "zh-TW": "檢查用來部署系統的設定檔，找出可能造成風險的設定。"
       },
+      "introduction": {
+        "en": "KICS (Keeping Infrastructure as Code Secure), from Checkmarx, is an open-source scanner for infrastructure as code (IaC): the files that describe how your systems are deployed. It runs a library of security queries over formats such as Terraform, CloudFormation, Kubernetes manifests, and Dockerfiles, and ties each result to a file and line. Its bundled queries also look for passwords and keys left in those files. We include it in this app because it helps you quickly find risky deployment settings, with a query library independent of Checkov's that gives a second view. Here it scans a read-only copy of the selected project with the queries bundled in the tool. It does not connect to a cloud account or download extra queries.",
+        "zh-TW": "KICS（Keeping Infrastructure as Code Secure）來自 Checkmarx，是一套開源工具，用來找出基礎設施即程式碼（IaC）裡不安全的設定；IaC 就是描述系統要怎麼部署的檔案。它用一套安全查詢檢查 Terraform、CloudFormation、Kubernetes 設定檔與 Dockerfile 等格式，並把每筆結果對應到檔案與行號；內附的查詢也會找出檔案裡留下的密碼與金鑰。我們把它放進本程式，是因為它能幫你很快找出有風險的部署設定，查詢庫和 Checkov 各自獨立，能提供第二種觀點。這裡用工具內附的查詢掃描你所選專案的唯讀副本，不連接雲端帳號，也不另外下載查詢。"
+      },
       "upstream": {
         "en": "KICS evaluates infrastructure definitions with a library of security queries across formats such as Terraform, CloudFormation, Kubernetes and Dockerfile. Its results connect a query to individual file locations.",
         "zh-TW": "KICS 透過安全查詢庫評估 Terraform、CloudFormation、Kubernetes、Dockerfile 等格式的基礎設施定義，將每個查詢結果連到個別檔案位置。"
@@ -827,6 +895,10 @@
       "purpose": {
         "en": "Checks supported project and container packages against the included vulnerability database.",
         "zh-TW": "用內附的漏洞資料庫，檢查支援的專案與容器套件。"
+      },
+      "introduction": {
+        "en": "Trivy, from Aqua Security, is an open-source security scanner, and one of the most popular and trusted tools for finding known vulnerabilities in software packages. It reads the dependency files it recognizes, plus individual packages such as Java JAR files, and matches their versions against public advisories in a vulnerability database, usually CVEs, the standard IDs for known flaws. Upstream Trivy can also check settings and secrets. We include it in this app because it helps you quickly find known vulnerable packages, along with a fixed version when the database lists one. Here only its vulnerability checks run, using the database bundled with this app. In a container image it checks operating-system packages only; Grype covers the image's application libraries.",
+        "zh-TW": "Trivy 來自 Aqua Security，是一套開源的資安掃描工具，也是最受歡迎且備受信任的套件弱點掃描工具之一。它會讀取認得出的相依套件檔，以及 JAR 這類個別的 Java 套件檔，再把版本拿去和漏洞資料庫裡的公開公告比對；這些公告通常是 CVE，也就是已知漏洞的標準編號。上游的 Trivy 還能檢查設定與密碼金鑰。我們把它放進本程式，是因為它能幫你很快找出已知有漏洞的套件；資料庫列有修正版本時，也會一併告訴你。這裡只執行漏洞檢查，使用本程式內附的資料庫。檢查容器映像時只看作業系統套件，映像裡的應用程式函式庫交給 Grype 檢查。"
       },
       "upstream": {
         "en": "Trivy has capabilities for vulnerability, misconfiguration, secret and other security checks across multiple target types. This integration deliberately selects its vulnerability scanner and fixed offline databases.",
@@ -876,6 +948,10 @@
         "en": "Finds known vulnerabilities in supported project and container packages using the included database.",
         "zh-TW": "使用內附資料庫，找出支援的專案與容器套件是否有已知漏洞。"
       },
+      "introduction": {
+        "en": "Grype, from Anchore, is a widely used open-source tool that matches software packages to known vulnerabilities. It compares package names and versions with a vulnerability database and reports the matching advisory, such as a CVE, the standard ID for a known flaw, or a GitHub security advisory, plus any fixed version the database lists. We include it in this app because it helps you quickly find known vulnerable packages in a selected project or container image; in an image, that includes application libraries as well as operating-system packages. When Trivy reports the same issue, the report still shows which tool found what. Here it uses the database bundled with this app, and it does not pull images from a registry or run the container.",
+        "zh-TW": "Grype 來自 Anchore，是一套廣泛使用的開源工具，用來把軟體套件對上已知漏洞。它拿套件名稱與版本去比對漏洞資料庫，回報對應的公告，例如 CVE（已知漏洞的標準編號）或 GitHub 安全公告；資料庫若列有修正版本，也會一併呈現。我們把它放進本程式，是因為它能幫你很快找出所選專案或容器映像裡已知有漏洞的套件；檢查映像時，應用程式函式庫和作業系統套件都包含在內。即使 Trivy 也回報同一個問題，報告仍會標明各是哪個工具找到的。這裡使用本程式內附的資料庫，不會自己從 registry 下載映像，也不會執行容器。"
+      },
       "upstream": {
         "en": "Grype matches software components to vulnerability data and reports the affected package, advisory and available fix. It works with package catalogs, directories and container-related inputs.",
         "zh-TW": "Grype 將軟體元件與漏洞資料比對，回報受影響套件、公告及可用修正，支援套件目錄、檔案目錄與容器相關輸入。"
@@ -923,6 +999,10 @@
       "purpose": {
         "en": "Lists the software components in your project or container. The list helps you track what is installed.",
         "zh-TW": "列出專案或容器裡的軟體元件，幫你掌握用了哪些東西；清單本身不是漏洞報告。"
+      },
+      "introduction": {
+        "en": "Syft, from Anchore, is a widely used open-source tool that builds a software bill of materials, or SBOM: a list of the software components inside a project or container image, such as libraries and operating-system packages. It records the name, version, and type of each component it recognizes. We include it in this app because it helps you quickly see which software the selected project or image contains, so you know what the vulnerability checks are looking at. The list shows what is there; it is not a vulnerability report. Here it reads a read-only copy with no network connection and does not download images from a registry. Known vulnerabilities are left to Trivy and Grype.",
+        "zh-TW": "Syft 來自 Anchore，是一套廣泛使用的開源工具，用來建立軟體物料清單（SBOM），也就是列出專案或容器映像裡有哪些軟體元件的清單，例如函式庫與作業系統套件。它會記下每個認得出的元件名稱、版本與類型。我們把它放進本程式，是因為它能幫你很快看清所選專案或映像裡有哪些軟體，也就知道漏洞檢查看的是哪些東西。這份清單只說明有什麼，不是漏洞報告。這裡只讀取唯讀副本、不連網路，也不會從 registry 下載映像；已知漏洞交給 Trivy 與 Grype 檢查。"
       },
       "upstream": {
         "en": "Syft generates software bills of materials by identifying packages in directories and container images. Its component inventory can be used by vulnerability tools and supply-chain workflows.",
@@ -972,6 +1052,10 @@
         "en": "Checks the Kubernetes configuration files you select, without connecting to a running cluster.",
         "zh-TW": "檢查你選好的 Kubernetes 設定檔，不會連到正在運作的叢集。"
       },
+      "introduction": {
+        "en": "Kubescape is a widely used open-source tool for checking the configuration of Kubernetes, the system many teams use to run containers. It reads YAML and JSON files as Kubernetes resources and compares them with a fixed hardening checklist, the NSA framework based on U.S. NSA and CISA guidance, so each result names the resource and the control that failed. Upstream Kubescape can also scan live clusters and container images. We include it in this app because it helps you quickly find risky settings in the Kubernetes files you select. Here it checks only that saved snapshot, offline. It does not connect to a running cluster, cannot tell whether the files match what is deployed, and does not scan container packages.",
+        "zh-TW": "Kubescape 是一套廣泛使用的開源工具，用來檢查 Kubernetes（許多團隊用來運行容器的系統）的設定。它把 YAML 與 JSON 檔案讀成 Kubernetes 資源，再對照一份固定的強化檢查清單，也就是根據美國 NSA 與 CISA 指引整理的 NSA 框架，所以每筆結果都會指出是哪個資源、哪一項控制沒有通過。上游的 Kubescape 也能掃描運作中的叢集與容器映像。我們把它放進本程式，是因為它能幫你很快找出所選 Kubernetes 設定檔裡有風險的設定。這裡只離線檢查那份已儲存的快照，不連到運作中的叢集，無法判斷檔案是否與實際部署一致，也不掃描容器套件。"
+      },
       "upstream": {
         "en": "Kubescape offers Kubernetes posture and security capabilities spanning configuration assessment and broader cluster workflows. This product selects its offline manifest assessment with a pinned framework and policy library.",
         "zh-TW": "Kubescape 提供 Kubernetes 設定評估及更廣泛叢集工作流程的安全能力。本產品選用離線資源清單評估，搭配固定的框架與政策庫。"
@@ -1019,6 +1103,10 @@
       "purpose": {
         "en": "Checks a saved copy of node settings against CIS guidance. It does not inspect a live host with administrator access.",
         "zh-TW": "依照 CIS 建議檢查節點設定的副本，不會取得管理員權限來檢查運作中的主機。"
+      },
+      "introduction": {
+        "en": "kube-bench is a widely used open-source tool from Aqua Security that checks Kubernetes nodes, the machines that run workloads, against the CIS Kubernetes Benchmark: the Center for Internet Security's published checklist of secure settings. It compares configuration files and running-process facts with each check and marks it pass, fail, or warn; a warning means the check needs information or judgment that automation cannot supply. Upstream kube-bench runs on a live node and can also check the control plane. We include it in this app because it helps you quickly find node settings that miss this checklist. Here it uses only a saved export of node facts and the node checks. It does not log in to a live host or run the control-plane checks.",
+        "zh-TW": "kube-bench 是 Aqua Security 維護、廣泛使用的開源工具，依照 CIS Kubernetes Benchmark 檢查 Kubernetes 節點，也就是實際運行工作負載的機器；CIS Benchmark 是網際網路安全中心（CIS）公開的安全設定檢查清單。它拿設定檔與執行中程序的資訊逐項比對，標成通過、失敗或警告；警告代表這項檢查需要自動化無法提供的資訊或判斷。上游的 kube-bench 會在運作中的節點上執行，也能檢查控制平面。我們把它放進本程式，是因為它能幫你很快找出不符合這份清單的節點設定。這裡只使用你匯出的節點資訊與節點檢查項目，不會登入運作中的主機，也不執行控制平面檢查。"
       },
       "upstream": {
         "en": "kube-bench runs benchmark checks against Kubernetes configuration and process facts. Its native outcomes include PASS, FAIL and WARN; some checks require information or judgment that automation cannot supply.",
@@ -1068,6 +1156,10 @@
         "en": "Sends 54 fixed test prompts to one approved model service. Review the request limits and provider charges before starting.",
         "zh-TW": "對一個核准的模型服務送出 54 個固定測試提示。開始前請確認請求限制與服務商費用。"
       },
+      "introduction": {
+        "en": "Garak is NVIDIA's widely used open-source vulnerability scanner for large language models (LLMs). It sends crafted prompts, called probes, and detectors judge the replies. The probes used here are “Do Anything Now” instructions that try to talk a model out of its rules, and prompts that try to make it output terminal escape codes. Upstream Garak has many more probes. We include it in this app because it helps you quickly see how one approved model responds to these fixed tests. You start this optional check yourself: it sends 54 prompts to one approved OpenAI-compatible HTTPS chat API and model. A clean result covers only these prompts. The provider may charge, and your API key is used once and never saved with the scan or report.",
+        "zh-TW": "Garak 是 NVIDIA 維護、廣泛使用的開源大型語言模型（LLM）弱點掃描工具。它送出稱為「探測」的特製提示，再用偵測器判斷模型的回覆。這裡使用的探測包括「Do Anything Now」這類試圖讓模型拋開自身規則的指示，以及試圖讓模型輸出終端機跳脫碼的提示；上游的 Garak 還有更多探測。我們把它放進本程式，是因為它能幫你很快看出一個核准的模型如何回應這組固定測試。這項選用檢查要由你自己啟動，只對一個核准、相容 OpenAI 格式的 HTTPS 聊天 API 與模型送出 54 個提示。沒有發現問題，也只代表這些提示沒有引出問題。服務商可能會收費；你輸入的 API 金鑰只用於這一次檢查，不會存進掃描紀錄或報告。"
+      },
       "upstream": {
         "en": "NVIDIA garak is an LLM vulnerability scanner with probe, generator and detector plugins. The full upstream project supports many research workflows; this product exposes one deliberately bounded native probe profile.",
         "zh-TW": "NVIDIA garak 是具備探測、生成器及偵測器外掛的 LLM 弱點掃描器。完整上游支援多種研究流程；本產品提供一組明確受限的原生探測設定。"
@@ -1116,6 +1208,10 @@
         "en": "Maps agents, tools and connections in supported AI workflows without running them.",
         "zh-TW": "整理支援的 AI 工作流程，讓你看懂有哪些代理、工具與連線，不會執行那些流程。"
       },
+      "introduction": {
+        "en": "Agentic Radar is an open-source tool that reads AI agent projects and maps how their pieces connect. You choose one of the supported frameworks (LangGraph, CrewAI, n8n, OpenAI Agents, or AutoGen), and its parser lists the agents, tools, and MCP servers and the links between them. An MCP server is an outside tool reached through the Model Context Protocol, a standard way for an AI app to call other tools. Upstream Agentic Radar also offers broader risk analysis. We include it in this app because it helps you quickly understand what an AI agent project contains before you review it. Here it only inventories one saved copy of the project. It does not run the workflow, contact a model, or report security problems.",
+        "zh-TW": "Agentic Radar 是一套開源工具，會閱讀由 AI 代理組成的專案，整理出各個部分如何相連。你先選定一個受支援的框架（LangGraph、CrewAI、n8n、OpenAI Agents 或 AutoGen），它的解析器就會列出代理、工具、MCP 伺服器，以及它們之間的連線。MCP 伺服器是透過 Model Context Protocol 接上的外部工具，這個協定讓 AI 應用程式能呼叫其他工具。上游的 Agentic Radar 還有更廣的風險分析。我們把它放進本程式，是因為它能幫你在審閱之前，很快看懂一個 AI 代理專案裡有哪些元件。這裡只盤點一份已儲存的專案副本，不執行工作流程、不連線到模型，也不會回報安全問題。"
+      },
       "upstream": {
         "en": "Agentic Radar analyzes agentic workflows and provides architecture and security-oriented analysis capabilities. Our integration selects its framework parsers and graph inventory, not the complete upstream analysis workflow.",
         "zh-TW": "Agentic Radar 分析代理式工作流程，提供架構及安全分析能力。本整合選用其框架解析器與圖形盤點，不包含完整上游分析流程。"
@@ -1163,6 +1259,10 @@
       "purpose": {
         "en": "Checks a selected MCP configuration for exposed keys and overly broad tool permissions. It does not start or contact MCP servers.",
         "zh-TW": "檢查選定的 MCP 設定是否留下金鑰，或給了工具過大的權限；不會啟動或連線 MCP 伺服器。"
+      },
+      "introduction": {
+        "en": "MCP Armor is an open-source tool for checking Model Context Protocol (MCP) configuration, the file that tells an AI app which outside tools to connect to. Two of its checks read that file: one looks for keys and other secrets written into it, the other flags tool commands and permissions broader than needed. The report leaves out the matched secret. Upstream, it can also contact the configured servers and run tests that use a model. We include it in this app because it helps you quickly find exposed keys and overly broad tool permissions in the configuration you select. Here it reads only that file from the saved project; it does not start or contact an MCP server, load a model, or show what a running server enforces.",
+        "zh-TW": "MCP Armor 是一套開源工具，用來檢查 MCP 設定檔。MCP（Model Context Protocol）是 AI 應用程式連接外部工具的協定，設定檔則寫明要連哪些工具。它有兩項檢查直接讀取這個檔案：一項找出寫在檔案裡的金鑰等機密，另一項依上游規則標出範圍過大的工具指令與權限；比對到的機密內容不會寫進報告。上游的 MCP Armor 還能連上設定裡的伺服器，並執行需要模型的測試。我們把它放進本程式，是因為它能幫你很快找出你選定的那份設定裡外露的金鑰與過大的工具權限。這裡只讀取已儲存專案中的那一個檔案，不啟動也不連線任何 MCP 伺服器、不載入模型，也無法顯示運作中的伺服器實際執行的權限控管。"
       },
       "upstream": {
         "en": "MCP Armor provides security checks for Model Context Protocol configurations and related workflows. The product isolates two existing native static checks in a configuration-only mode.",

@@ -102,3 +102,36 @@ test("the project site stays local, responsive, bilingual, and GitHub Pages read
   const packageMetadata = JSON.parse(packageSource) as { homepage?: string };
   assert.equal(packageMetadata.homepage, "https://teddashh.github.io/ai-security-scanner/");
 });
+
+test("tool cards and both READMEs use each scanner introduction", async () => {
+  const [catalogSource, contentSource, site, readme, readmeZh] = await Promise.all([
+    workspaceFile("engines/catalog.json"),
+    workspaceFile("docs/scanner-guide.content.json"),
+    workspaceFile("docs/index.html"),
+    workspaceFile("README.md"),
+    workspaceFile("README.zh-TW.md"),
+  ]);
+  const catalog = JSON.parse(catalogSource) as CatalogEngine[];
+  const content = JSON.parse(contentSource) as {
+    scanners: Array<{ id: string; introduction: { en: string; "zh-TW": string } }>;
+  };
+  const integrated = catalog.filter((engine) => engine.status === "integrated");
+  const unescapeHtml = (value: string) =>
+    value.replaceAll("&amp;", "&").replaceAll("&lt;", "<").replaceAll("&gt;", ">");
+
+  assert.equal(integrated.length, 25);
+  for (const engine of integrated) {
+    const entry = content.scanners.find((scanner) => scanner.id === engine.id);
+    assert.ok(entry?.introduction.en && entry.introduction["zh-TW"], `${engine.id} introduction`);
+    const card = site.match(
+      new RegExp(
+        `<article class="tool-card" data-tool="${engine.id}">[\\s\\S]*?<p(?: class="tool-desc")?><span class="lang-en">([\\s\\S]*?)</span><span class="lang-zh" lang="zh-Hant">([\\s\\S]*?)</span></p>`,
+      ),
+    );
+    assert.ok(card, `${engine.id} card paragraph`);
+    assert.equal(unescapeHtml(card[1]), entry.introduction.en, `${engine.id} English card`);
+    assert.equal(unescapeHtml(card[2]), entry.introduction["zh-TW"], `${engine.id} Chinese card`);
+    assert.ok(readme.includes(entry.introduction.en), `${engine.id} English README`);
+    assert.ok(readmeZh.includes(entry.introduction["zh-TW"]), `${engine.id} Chinese README`);
+  }
+});
