@@ -3227,7 +3227,7 @@ export function FindingsPage({
                 <span className="priority-card__status">
                   <StatusPill label={severityLabelFor(finding)} tone={severityMeta[finding.severity].tone} />
                   {!group && <StatusPill label={confidenceMeta[finding.confidence]} tone="neutral" />}
-                  {group && <span>{text(copy.originalFindingCount, {count: formatNumber(members.length)})}</span>}
+                  {group && <span className="priority-card__count">{text(copy.originalFindingCount, {count: formatNumber(members.length)})}</span>}
                 </span>
                 <h3>{group ? problemGroupTitle(group, locale) : findingHeadline(locale, finding.title, finding.family)}</h3>
                 <p className="priority-card__impact">{problemGroupImpact(group, locale) ?? findingImpactSentence(locale, {
@@ -3668,7 +3668,7 @@ export function FindingsPage({
                         </span>
                       )}
                       {!group && <StatusPill label={workflowMeta[finding.workflowState]} tone={workflowTone(finding.workflowState)} />}
-                      {group && <span>{text(copy.originalFindingCount, {count: formatNumber(members.length)})}</span>}
+                      {group && <span className="finding-row__count">{text(copy.originalFindingCount, {count: formatNumber(members.length)})}</span>}
                     </span>
                     <strong>{group ? problemGroupTitle(group, locale) : findingHeadline(locale, finding.title, finding.family)}</strong>
                     <span>

@@ -2615,6 +2615,11 @@ button.history-row:hover, .history-row--active { background: #f2f8f5; }
   gap: 6px;
 }
 
+.priority-card__count {
+  color: #9fb5b9;
+  font-size: 0.78rem;
+}
+
 .priority-card:hover {
   transform: translateY(-2px);
   background: rgba(255, 255, 255, 0.085);
@@ -2897,6 +2902,11 @@ button.history-row:hover, .history-row--active { background: #f2f8f5; }
   color: var(--muted);
   font-size: 0.78rem;
   white-space: nowrap;
+}
+
+.finding-row__count {
+  color: var(--muted);
+  font-size: 0.78rem;
 }
 
 .finding-row__main > strong {
