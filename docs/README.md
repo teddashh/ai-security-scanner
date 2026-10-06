@@ -13,6 +13,7 @@ Use the shortest path that matches the task.
 - [v0.4.1 release record](release/v0.4.1.md): current changes, exact delivery evidence, and remaining platform observations.
 
 - [Standard report examples](samples/v0.4.0/README.md): redacted and fully disclosed, in both languages; 25 adapters, real formats, simulated data.
+- [Fix and check again](demos/check-fixes/README.md): two real scans of a small demo project, before and after a fix, in both languages.
 - [All-scanner guide](scanner-guide.md): detailed SWOT, selection rationale, use cases, enabled features and the 2026-10-04 version snapshot.
 
 ## Understand the product

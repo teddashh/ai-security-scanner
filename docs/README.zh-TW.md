@@ -13,6 +13,7 @@
 - [v0.4.1 發布紀錄](release/v0.4.1.zh-TW.md)：本版更新、實際交付證據與尚未觀察的平台項目。
 
 - [標準報告範例](samples/v0.4.0/README.zh-TW.md)：遮蔽／完整揭露版，中英皆有；25 個 adapter、真實格式、模擬資料。
+- [修正後再檢查一次](demos/check-fixes/README.zh-TW.md)：一個小型示範專案修正前後的兩次真實掃描，中英皆有。
 - [全部掃描器指南](scanner-guide.zh-TW.md)：詳細 SWOT、選用原因、情境、啟用功能與 2026-10-04 版本快照。
 
 ## 理解產品

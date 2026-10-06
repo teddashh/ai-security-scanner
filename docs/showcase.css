@@ -57,6 +57,26 @@
 .showcase-home { padding-block: 64px; }
 .showcase-home .section-heading { margin-bottom: 24px; }
 .showcase-home .showcase-links { display: flex; flex-wrap: wrap; gap: 20px; line-height: 1.6; }
+.visually-hidden { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+.demo-metrics { display: flex; flex-wrap: wrap; gap: 14px; margin: 28px 0 24px; padding: 0; list-style: none; }
+.demo-metrics li { display: grid; gap: 6px; min-width: 150px; padding: 16px 20px; background: var(--paper-strong); border: 1px solid var(--line); border-radius: var(--radius-sm); }
+.demo-metrics strong { font-size: 1.7rem; letter-spacing: -.04em; font-variant-numeric: tabular-nums; }
+.demo-metrics span { color: var(--ink-soft); font-size: .85rem; font-weight: 700; }
+.demo-step { padding-block: 40px; border-top: 1px solid var(--line); }
+.demo-step h2 { font-size: clamp(1.8rem, 3.6vw, 2.6rem); letter-spacing: -.04em; line-height: 1.1; margin-bottom: 16px; }
+.demo-step > p, .demo-step > ul { max-width: 880px; line-height: 1.75; }
+.demo-step li { margin-bottom: 6px; }
+.demo-step code { font-size: .9em; }
+.demo-shot { margin: 28px 0; }
+.demo-shot img { display: block; width: 100%; height: auto; border: 1px solid var(--line); border-radius: var(--radius-sm); box-shadow: var(--shadow); background: var(--paper-strong); }
+.demo-shot figcaption { margin-top: 12px; color: var(--ink-soft); font-size: .92rem; line-height: 1.6; }
+.demo-shot--card img { max-width: 1104px; box-shadow: none; }
+.demo-diff { overflow-x: auto; max-width: 880px; padding: 20px 24px; color: #e8f1f3; background: var(--ink); border-radius: var(--radius-sm); font-size: .88rem; line-height: 1.6; }
+.demo-detail { max-width: 880px; padding: 4px 18px; background: var(--paper-strong); border: 1px solid var(--line); border-radius: var(--radius-sm); }
+.demo-detail summary { cursor: pointer; padding-block: 12px; font-weight: 700; }
+.demo-detail p { line-height: 1.7; }
+.demo-step .table-scroll { margin-block: 8px 28px; }
+.demo-step .sample-downloads { margin-top: 24px; }
 @media (max-width: 720px) {
   .showcase-intro { padding-block: 36px 20px; }
   .sample-downloads, .swot-grid, .version-facts { grid-template-columns: 1fr; }
@@ -70,6 +90,7 @@
   .scanner-filter label { width: 100%; }
   .showcase-lead { font-size: 1.12rem; }
   .showcase-page .header-inner { gap: 12px; }
+  .demo-metrics li { min-width: calc(50% - 7px); }
 }
 @media print {
   .scanner-filter, .showcase-page .site-header { display: none !important; }

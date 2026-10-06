@@ -149,7 +149,7 @@ test('homepage language switch points both downloads at the selected report lang
 });
 
 test('every local website/download link resolves, including alternate-language destinations', async () => {
-  for (const path of ['index.html','scanner-guide.html','sample-reports.html']) {
+  for (const path of ['index.html','scanner-guide.html','sample-reports.html','check-fixes-demo.html']) {
     const dom = new JSDOM(await read('docs/'+path),{url:'https://example.test/'+path});
     for (const element of dom.window.document.querySelectorAll('a[href],link[href],script[src],img[src]')) {
       for (const attr of ['href','src','data-href-en','data-href-zh']) {

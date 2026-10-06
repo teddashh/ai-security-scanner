@@ -43,6 +43,8 @@
 
 範例使用模擬資料，包含 25 個工具的 62 筆發現與 42 筆盤點紀錄。它用來展示報告，不代表任何真實公司的安全狀況。盤點紀錄會另外列出，不算成安全問題。[範例製作方式](docs/samples/v0.4.0/README.zh-TW.md)。
 
+想看真實掃描，請看[修正專案後再檢查一次](https://teddashh.github.io/ai-security-scanner/check-fixes-demo.html?lang=zh-TW)：修正前 26 個問題、修正後 16 個，以及兩次之間的變化。
+
 ## 請 Claude Code 或 Codex 幫忙
 
 在同一台電腦上的 AI 助手，可以協助安裝、確認設定、解讀結果與儲存報告。你負責選好目標，並在桌面應用程式裡開始、暫停或繼續掃描。
