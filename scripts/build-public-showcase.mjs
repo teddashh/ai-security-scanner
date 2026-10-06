@@ -50,7 +50,7 @@ function shell(page, title, description, content) {
 </head><body class="showcase-page">
 <a class="skip-link" href="#main">${bi(['Skip to content','跳到主要內容'])}</a>
 <header class="site-header"><div class="header-inner"><a class="brand" href="index.html" data-href-en="index.html" data-href-zh="index.html?lang=zh-TW"><img src="project-mark.svg" alt=""><span>ai-security-scanner</span></a>
-<nav class="nav" aria-label="Primary navigation">${localizedLink('sample-reports.html',['Sample reports','範例報告'])}${localizedLink('scanner-guide.html',['Scanner guide','掃描器指南'])}<a href="${repo}">GitHub ↗</a></nav>
+<nav class="nav" aria-label="Primary navigation">${localizedLink('sample-reports.html',['Sample reports','範例報告'])}${localizedLink('scanner-guide.html',['Scanner guide','掃描器指南'])}${localizedLink('check-fixes-demo.html',['Real scan example','真實掃描案例'])}<a href="${repo}">GitHub ↗</a></nav>
 <div class="language-switch" role="group" aria-label="Language"><button type="button" data-language="en" aria-pressed="true">EN</button><button type="button" data-language="zh-TW" aria-pressed="false">繁中</button></div></div></header>
 <main id="main">${content}</main>
 <footer class="site-footer"><div class="footer-inner"><p>ai-security-scanner · v0.4.0 · 2026-10-04</p><p>${localizedLink('index.html',['Back to the project','回到專案首頁'])} · <a href="${repo}/tree/main/docs/samples/v0.4.0">${bi(['Examples on GitHub','GitHub 範例檔案'])}</a></p></div></footer>
