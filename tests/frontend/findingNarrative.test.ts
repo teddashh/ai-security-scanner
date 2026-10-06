@@ -124,6 +124,33 @@ test("a network-exposure finding is told to correct the service, not to document
   assert.doesNotMatch(action, /must remain reachable/u);
 });
 
+test("a cloud-posture finding names the checked setting instead of least privilege", () => {
+  // The stored Prowler recommendation is still least privilege. The report
+  // layer's next step is the family's own sentence, because MFA, password
+  // policy, root use, logging, and encryption checks are not that change.
+  const prowlerRecommendation =
+    "Apply least privilege to the affected resource's configuration or policy.";
+  const english = findingActionSentence("en", {
+    englishFallback: prowlerRecommendation,
+    family: "cloud_posture",
+  });
+  const chinese = findingActionSentence("zh-TW", {
+    englishFallback: prowlerRecommendation,
+    family: "cloud_posture",
+  });
+  assert.equal(english, "Correct the cloud setting or policy named by this check.");
+  assert.equal(chinese, "調整這項檢查所指出的雲端設定或政策。");
+  assert.doesNotMatch(english, /least privilege/u);
+  assert.equal(chinese.includes("最小權限"), false);
+  assert.equal(
+    findingActionSentence("en", {
+      englishFallback: prowlerRecommendation,
+      family: "cloud_identity",
+    }),
+    "Replace the affected policy with a narrower policy that grants only the actions the identity's role requires.",
+  );
+});
+
 test("an unconfirmed finding is told to finish the check, not to correct the service", () => {
   assert.equal(
     findingActionSentence("en", {

@@ -74,7 +74,7 @@ const CONSEQUENCE_ENGLISH: Record<FindingFamily, string> = {
  * permissions screen first leaves it valid for exactly that long.
  */
 const REMEDY: Record<FindingFamily, string> = {
-  cloud_posture: "將受影響資源的設定或政策改為最小權限",
+  cloud_posture: "調整這項檢查所指出的雲端設定或政策",
   cloud_identity: "改用只授予該身分角色所需操作的較小範圍政策",
   microsoft365: "調整這項控制項所檢查的 Microsoft 365 租用戶設定",
   // Used by Nuclei and Greenbone vulnerability findings. Reachability
@@ -100,7 +100,7 @@ const REMEDY: Record<FindingFamily, string> = {
 };
 
 const REMEDY_ENGLISH: Record<FindingFamily, string> = {
-  cloud_posture: "Apply least privilege to the affected resource's configuration or policy",
+  cloud_posture: "Correct the cloud setting or policy named by this check",
   cloud_identity: "Replace the affected policy with a narrower policy that grants only the actions the identity's role requires",
   microsoft365: "Correct the Microsoft 365 tenant setting named by this control",
   network_exposure: "Correct the service or configuration named by this check",

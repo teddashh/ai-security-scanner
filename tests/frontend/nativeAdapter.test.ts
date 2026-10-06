@@ -2636,6 +2636,33 @@ test("a native VNC host remains an external service with its exact declared port
   });
 });
 
+test("identity and cloud resources keep their own asset types", () => {
+  const asset = (id: string, kind: string, provider: string | null) => ({
+    id,
+    kind,
+    name: id,
+    provider,
+    region: null,
+    identifiers: [],
+    discovered_from: [],
+    candidate: true,
+    owner_confirmed: false,
+  });
+  const workspace = adaptNativeCase(platformCaseFixture({
+    assets: [
+      asset("m365-user", "identity", "microsoft365"),
+      asset("aws-role", "cloud_resource", "aws"),
+      asset("ssh-host", "host", null),
+      asset("website", "web_service", null),
+    ],
+  }));
+  const typeById = new Map(workspace.assets.map((item: { id: string; type: string }) => [item.id, item.type]));
+  assert.equal(typeById.get("m365-user"), "identity");
+  assert.equal(typeById.get("aws-role"), "cloud_resource");
+  assert.equal(typeById.get("ssh-host"), "service");
+  assert.equal(typeById.get("website"), "service");
+});
+
 test("native findings keep unknown severity distinct from informational", () => {
   const finding = (id: string, severity: string) => ({
     id,

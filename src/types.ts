@@ -566,6 +566,8 @@ export type AssetType =
   | "image"
   | "cluster"
   | "service"
+  | "cloud_resource"
+  | "identity"
   | "storage";
 
 export type ScopeMode =

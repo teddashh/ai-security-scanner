@@ -710,6 +710,8 @@ const assetTypeLabels: Record<Asset["type"], BilingualText> = {
   image: bilingual("Container image", "容器映像"),
   cluster: bilingual("Kubernetes cluster", "Kubernetes 叢集"),
   service: bilingual("Network service", "網路服務"),
+  cloud_resource: bilingual("Cloud resource", "雲端資源"),
+  identity: bilingual("Identity", "身分"),
   storage: bilingual("Cloud storage", "雲端儲存空間"),
 };
 

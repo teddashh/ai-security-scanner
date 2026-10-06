@@ -86,7 +86,7 @@ fn consequence_english(family: FindingFamily) -> &'static str {
 /// a permissions screen first leaves it valid for exactly that long.
 fn remedy(family: FindingFamily) -> &'static str {
     match family {
-        FindingFamily::CloudPosture => "將受影響資源的設定或政策改為最小權限",
+        FindingFamily::CloudPosture => "調整這項檢查所指出的雲端設定或政策",
         FindingFamily::CloudIdentity => "改用只授予該身分角色所需操作的較小範圍政策",
         FindingFamily::Microsoft365 => "調整這項控制項所檢查的 Microsoft 365 租用戶設定",
         // Used by Nuclei and Greenbone vulnerability findings. Reachability
@@ -120,9 +120,7 @@ fn remedy(family: FindingFamily) -> &'static str {
 
 fn remedy_english(family: FindingFamily) -> &'static str {
     match family {
-        FindingFamily::CloudPosture => {
-            "Apply least privilege to the affected resource's configuration or policy"
-        }
+        FindingFamily::CloudPosture => "Correct the cloud setting or policy named by this check",
         FindingFamily::CloudIdentity => {
             "Replace the affected policy with a narrower policy that grants only the actions the identity's role requires"
         }
@@ -3646,6 +3644,52 @@ mod tests {
                 None,
             ),
             "調整這項檢查所指出的服務或設定。"
+        );
+    }
+
+    #[test]
+    fn cloud_posture_action_names_the_checked_setting_not_least_privilege() {
+        // Prowler, ScoutSuite, CloudQuery, and Steampipe share this family.
+        // A missing MFA device, a password policy, root use, disabled logging,
+        // or an unencrypted volume is not a least-privilege change. The
+        // scanner's own remediation stays on the finding underneath this step.
+        let english = action_english(
+            "Apply least privilege to the affected resource's configuration or policy.",
+            Some(FindingFamily::CloudPosture),
+            None,
+        );
+        assert_eq!(
+            english,
+            "Correct the cloud setting or policy named by this check."
+        );
+        assert!(
+            !english.contains("least privilege"),
+            "{english} still says least privilege"
+        );
+        assert_eq!(
+            action_zh_hant(
+                "Apply least privilege to the affected resource's configuration or policy.",
+                "Cloud security engineer",
+                Some(FindingFamily::CloudPosture),
+                None,
+            ),
+            "調整這項檢查所指出的雲端設定或政策。"
+        );
+
+        // Cloudsplaining stays on the narrower-policy sentence. That family
+        // is a least-privilege finding.
+        assert_eq!(
+            action_english("unused", Some(FindingFamily::CloudIdentity), None),
+            "Replace the affected policy with a narrower policy that grants only the actions the identity's role requires."
+        );
+        assert_eq!(
+            action_zh_hant(
+                "unused",
+                "Cloud identity specialist",
+                Some(FindingFamily::CloudIdentity),
+                None,
+            ),
+            "改用只授予該身分角色所需操作的較小範圍政策。"
         );
     }
 
