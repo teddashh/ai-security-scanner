@@ -29,6 +29,9 @@ import {
   coverageGapProseWithoutDiagnosticCode,
   findingRollbackSentence,
   findingVerificationSentence,
+  findingHeadline,
+  stepConfirmation,
+  stepGroupLead,
   findingImpactSentence,
   findingLocationText,
   isEvidenceOnlyPriorityReason,
@@ -656,7 +659,7 @@ const copy = {
   attentionTitle: { en: "What needs attention", zhTW: "需要留意的內容" },
   nextTitle: { en: "What to do next", zhTW: "接下來怎麼做" },
   moreItems: { en: "+{count} more", zhTW: "另 {count} 項" },
-  stepCoversProblems: { en: "Problems this step covers: {count}", zhTW: "這一步涵蓋的問題：{count}" },
+  stepConfirm: { en: "To confirm", zhTW: "確認方式" },
   noRequestedTarget: {
     en: "The older run did not retain an exact target description.",
     zhTW: "這筆舊掃描沒有保留精確的目標說明。",
@@ -1942,6 +1945,26 @@ function BeginnerReportOverview({ report, run }: { report: BeginnerMasterReport;
     [copy.manualReviewCount, report.coverageCounts.manualReview],
     [copy.unavailableCount, report.coverageCounts.unavailable],
   ] as const;
+  // Every place a step covers, the lead finding's first: a grouped step's
+  // problems sit in different places. "[redacted location]" is the masked
+  // placeholder, not a place a reader can open.
+  const stepLocations = (
+    findings: readonly BeginnerMasterReport["findings"][number][],
+  ): string[] => [
+    ...new Set(findings.flatMap((finding) => finding.evidenceReferences)
+      .map((reference) => reference.location?.trim())
+      .filter((location): location is string => Boolean(location) && location !== "[redacted location]")
+      .map((location) => findingLocationText(locale, location))),
+  ];
+  const stepLocationLine = (locations: readonly string[]): string => {
+    const first = locations[0];
+    if (!first) return "";
+    const more = locations.length - 1;
+    if (more === 0) return first;
+    return locale === "en"
+      ? `${first} and ${formatNumber(more)} more`
+      : `${first}，另有 ${formatNumber(more)} 處`;
+  };
 
   return (
     <section className="section-block" aria-labelledby="beginner-master-report-title">
@@ -2244,12 +2267,35 @@ function BeginnerReportOverview({ report, run }: { report: BeginnerMasterReport;
             const covers = new Set([step.findingId, ...(step.alsoResolves ?? [])].filter(Boolean).map(id =>
               report.problemGroups?.find(group => group.findingIds.includes(id!))?.groupId ?? id)).size;
             const closes = stepCoverageNames(step, report, locale, run);
+            const lead = step.findingId
+              ? report.findings.find((finding) => finding.findingId === step.findingId)
+              : undefined;
+            const headline = lead ? findingHeadline(locale, lead.title, lead.family) : undefined;
+            const locations = lead
+              ? stepLocations([lead, ...(step.alsoResolves ?? []).flatMap((id) =>
+                report.findings.filter((finding) => finding.findingId === id))])
+              : [];
+            const locationLine = locations.length > 0 ? stepLocationLine(locations) : undefined;
             return (
               <li key={`${step.code}-${step.findingId ?? step.taskId ?? index}`}>
                 <strong>{nextStepActionText(step)}</strong>
                 {closes.length > 0 && <span>{closes.join(inlineSeparator)}</span>}
-                {step.findingId && covers > 1 && (
-                  <span>{text(copy.stepCoversProblems, { count: formatNumber(covers) })}</span>
+                {headline && (
+                  <span>{covers > 1
+                    ? stepGroupLead(locale, covers, step.sharedFix === true, headline)
+                    : headline}</span>
+                )}
+                {locationLine && (
+                  <span>
+                    {adviceLabel(locale, text(copy.reportedLocation))}
+                    {locationLine}
+                  </span>
+                )}
+                {lead && step.code !== "confirm_finding_after_incomplete_check" && (
+                  <span>
+                    {adviceLabel(locale, text(copy.stepConfirm))}
+                    {stepConfirmation(locale, lead.verificationGuidance, lead.title, covers)}
+                  </span>
                 )}
                 {step.recommendedExpertType && <span>{localizedExpertType(step.recommendedExpertType, locale)}</span>}
               </li>
@@ -2557,7 +2603,7 @@ export function FindingsPage({
           findingCount: 1,
           highestSeverity: finding.severity,
           topFindingId: finding.id,
-          topFindingTitle: group ? problemGroupTitle(group, locale) : finding.title,
+          topFindingTitle: group ? problemGroupTitle(group, locale) : findingHeadline(locale, finding.title, finding.family),
         });
       }
     }
@@ -3120,7 +3166,7 @@ export function FindingsPage({
                   {!group && <StatusPill label={confidenceMeta[finding.confidence]} tone="neutral" />}
                   {group && <span>{text(copy.originalFindingCount, {count: formatNumber(members.length)})}</span>}
                 </span>
-                <h3>{group ? problemGroupTitle(group, locale) : finding.title}</h3>
+                <h3>{group ? problemGroupTitle(group, locale) : findingHeadline(locale, finding.title, finding.family)}</h3>
                 <p className="priority-card__impact">{problemGroupImpact(group, locale) ?? findingImpactSentence(locale, {
                   englishFallback: finding.impact,
                   severity: finding.severity,
@@ -3261,7 +3307,7 @@ export function FindingsPage({
                               type="button"
                               onClick={() => revealFinding(finding.id)}
                             >
-                              {finding.title}
+                              {findingHeadline(locale, finding.title, finding.family)}
                             </button>
                           )
                           : findingId}
@@ -3344,7 +3390,7 @@ export function FindingsPage({
                           type="button"
                           onClick={() => revealFinding(finding.id)}
                         >
-                          {finding.title}
+                          {findingHeadline(locale, finding.title, finding.family)}
                         </button>
                       </li>
                     ))}
@@ -3381,7 +3427,7 @@ export function FindingsPage({
                       <li key={findingId}>
                         {finding ? (
                           <button className="clear-filters" type="button" onClick={() => revealFinding(finding.id)}>
-                            {finding.title}
+                            {findingHeadline(locale, finding.title, finding.family)}
                           </button>
                         ) : (
                           <span>{text(copy.caseHistoryMember)} · <code>{findingId}</code></span>
@@ -3421,9 +3467,14 @@ export function FindingsPage({
                   </div>
                   <p>{event.rationale}</p>
                   <ul className="detail-list">
-                    {event.findingIds.map((findingId) => (
-                      <li key={findingId}>{findingById.get(findingId)?.title ?? `${text(copy.findingId)}: ${findingId}`}</li>
-                    ))}
+                    {event.findingIds.map((findingId) => {
+                      const named = findingById.get(findingId);
+                      return (
+                        <li key={findingId}>{named
+                          ? findingHeadline(locale, named.title, named.family)
+                          : `${text(copy.findingId)}: ${findingId}`}</li>
+                      );
+                    })}
                   </ul>
                   <small>{text(copy.performedBy, { actor: event.actor })}</small>
                   <details className="page-technical-details">
@@ -3455,7 +3506,7 @@ export function FindingsPage({
                     checked={groupFindingIds.includes(finding.id)}
                     onChange={() => toggleGroupedFinding(finding.id)}
                   />
-                  <span>{finding.title}<small>{finding.assetName} · {severityLabelFor(finding)}</small></span>
+                  <span>{findingHeadline(locale, finding.title, finding.family)}<small>{finding.assetName} · {severityLabelFor(finding)}</small></span>
                 </label>
               ))}
             </div>
@@ -3550,7 +3601,7 @@ export function FindingsPage({
                       {!group && <StatusPill label={workflowMeta[finding.workflowState]} tone={workflowTone(finding.workflowState)} />}
                       {group && <span>{text(copy.originalFindingCount, {count: formatNumber(members.length)})}</span>}
                     </span>
-                    <strong>{group ? problemGroupTitle(group, locale) : finding.title}</strong>
+                    <strong>{group ? problemGroupTitle(group, locale) : findingHeadline(locale, finding.title, finding.family)}</strong>
                     <span>
                       {[
                         finding.assetName,
@@ -3588,7 +3639,7 @@ export function FindingsPage({
                     {selectedProblemMembers.map(member => (
                       <li key={member.id}>
                         <button className="button button--ghost button--small" type="button" aria-current={member.id === selected.id ? "true" : undefined} onClick={() => revealFinding(member.id)}>
-                          {member.title}
+                          {findingHeadline(locale, member.title, member.family)}
                         </button>
                         <span className="tag-row">
                           <StatusPill label={severityLabelFor(member)} tone={severityMeta[member.severity].tone} />
@@ -3613,7 +3664,7 @@ export function FindingsPage({
                     <StatusPill label={text(copy.tenantDisputed)} tone="neutral" />
                   )}
                 </div>
-                <h2>{selected.title}</h2>
+                <h2>{findingHeadline(locale, selected.title, selected.family)}</h2>
                 <p>{findingSummarySentence(locale, {
                   englishFallback: selected.summary,
                   severity: selected.severity,

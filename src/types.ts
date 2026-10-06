@@ -1277,8 +1277,10 @@ export interface BeginnerNextStep {
   recommendedExpertType?: string;
   family?: FindingFamily;
   unattributed?: UnattributedResults;
-  /** Other findings that are resolved by the same single instruction. */
+  /** Other findings the same instruction covers; `sharedFix` says whether one change fixes them all. */
   alsoResolves?: string[];
+  /** True only when every covered finding is fixed by the one specific change the action names. */
+  sharedFix?: boolean;
 }
 
 export interface BeginnerInventorySource {

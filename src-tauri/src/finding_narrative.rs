@@ -2800,6 +2800,97 @@ pub fn finding_next_action_zh_hant(
     }
 }
 
+/// The problem heading a reader sees.
+///
+/// ScubaGear and Maester name a control for the state it was checking, and
+/// only a control the tenant failed becomes a finding. Printed unchanged,
+/// that title reads as the opposite of the result. Other families already
+/// title a finding with the failure or a neutral rule name, so they stay as
+/// the scanner wrote them.
+pub fn finding_headline_english(title: &str, family: Option<FindingFamily>) -> String {
+    match family {
+        Some(FindingFamily::Microsoft365) => format!("Requirement not met: {title}"),
+        _ => title.to_owned(),
+    }
+}
+
+/// The Traditional Chinese form of [`finding_headline_english`].
+pub fn finding_headline_zh_hant(title: &str, family: Option<FindingFamily>) -> String {
+    match family {
+        Some(FindingFamily::Microsoft365) => format!("未符合要求：{title}"),
+        _ => title.to_owned(),
+    }
+}
+
+/// The sentence in front of a next step that covers more than one problem.
+///
+/// `shared_fix` is true when every problem is fixed by the one change the
+/// step names. A family-level instruction is the same kind of change in
+/// different places, and the sentence says so instead of calling them one fix.
+pub fn step_group_lead_english(count: usize, shared_fix: bool, reason: &str) -> String {
+    if shared_fix {
+        format!("{count} problems name this same fix. The first is {reason}")
+    } else {
+        format!(
+            "{count} related problems call for this kind of change; each needs its own fix. The first is {reason}"
+        )
+    }
+}
+
+/// The Traditional Chinese form of [`step_group_lead_english`].
+pub fn step_group_lead_zh_hant(count: usize, shared_fix: bool, reason: &str) -> String {
+    if shared_fix {
+        format!("有 {count} 項問題指向同一個修復方式，第一項是 {reason}")
+    } else {
+        format!("有 {count} 項相關問題需要這類處理，每一項都要分別修正；第一項是 {reason}")
+    }
+}
+
+/// How a reader confirms a next step.
+///
+/// One problem keeps that finding's own verification sentence, which names
+/// the scanner and the source rule. Several problems do not share one rule,
+/// so the sentence asks for the same scan again rather than the lead
+/// finding's rule. `title` is the scanner's own title: a verification
+/// sentence uses it only when the source rule is an opaque id.
+pub fn step_confirmation_english(
+    verification: Option<&str>,
+    title: &str,
+    problems: usize,
+) -> String {
+    if problems > 1 {
+        return "Rerun the same scan after the changes and confirm these problems are no longer reported.".to_owned();
+    }
+    match verification
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        Some(english) => verification_english(english, Some(title)),
+        None => {
+            "Rerun the same scan after the change and confirm this problem is no longer reported."
+                .to_owned()
+        }
+    }
+}
+
+/// The Traditional Chinese form of [`step_confirmation_english`].
+pub fn step_confirmation_zh_hant(
+    verification: Option<&str>,
+    title: &str,
+    problems: usize,
+) -> String {
+    if problems > 1 {
+        return "修正後以相同範圍重新掃描，確認這些問題不再被回報。".to_owned();
+    }
+    match verification
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        Some(english) => verification_zh_hant(english, Some(title)),
+        None => "修正後以相同範圍重新掃描，確認這項問題不再被回報。".to_owned(),
+    }
+}
+
 /// A [`parse_location_coordinate`] split: the leading path, then the line,
 /// column and resource captured from the coordinate tail, each present only
 /// when the raw location carried that piece.
@@ -3013,6 +3104,84 @@ mod tests {
                 verification_zh_hant(&english, Some(TITLE)).contains(&format!("來源規則 {rule}"))
             );
         }
+    }
+
+    #[test]
+    fn a_microsoft_365_heading_says_the_requirement_was_not_met() {
+        let title = "Legacy authentication is blocked";
+        assert_eq!(
+            finding_headline_english(title, Some(FindingFamily::Microsoft365)),
+            format!("Requirement not met: {title}")
+        );
+        assert_eq!(
+            finding_headline_zh_hant(title, Some(FindingFamily::Microsoft365)),
+            format!("未符合要求：{title}")
+        );
+        for family in [Some(FindingFamily::CloudPosture), None] {
+            assert_eq!(finding_headline_english(title, family), title);
+            assert_eq!(finding_headline_zh_hant(title, family), title);
+        }
+    }
+
+    #[test]
+    fn a_grouped_step_says_whether_the_problems_share_one_fix() {
+        let reason = "Resource limits — High severity, High confidence";
+        assert_eq!(
+            step_group_lead_english(9, true, reason),
+            format!("9 problems name this same fix. The first is {reason}")
+        );
+        assert_eq!(
+            step_group_lead_english(9, false, reason),
+            format!(
+                "9 related problems call for this kind of change; each needs its own fix. The first is {reason}"
+            )
+        );
+        assert_eq!(
+            step_group_lead_zh_hant(9, true, reason),
+            format!("有 9 項問題指向同一個修復方式，第一項是 {reason}")
+        );
+        assert_eq!(
+            step_group_lead_zh_hant(9, false, reason),
+            format!("有 9 項相關問題需要這類處理，每一項都要分別修正；第一項是 {reason}")
+        );
+    }
+
+    #[test]
+    fn confirmation_keeps_one_findings_guidance_and_names_the_scan_for_several() {
+        const TITLE: &str = "S3 Bucket ACL Allows Read Or Write to All Users";
+        let guidance = "Rerun KICS with the same scope after the change and confirm that source rule 38c5ee0d-7f22-4260-ab72-5073048df100 is no longer reported.";
+        assert_eq!(
+            step_confirmation_english(Some(guidance), TITLE, 1),
+            verification_english(guidance, Some(TITLE))
+        );
+        assert_eq!(
+            step_confirmation_zh_hant(Some(guidance), TITLE, 1),
+            verification_zh_hant(guidance, Some(TITLE))
+        );
+        assert_eq!(
+            step_confirmation_english(None, TITLE, 1),
+            "Rerun the same scan after the change and confirm this problem is no longer reported."
+        );
+        assert_eq!(
+            step_confirmation_english(Some("   "), TITLE, 1),
+            "Rerun the same scan after the change and confirm this problem is no longer reported."
+        );
+        assert_eq!(
+            step_confirmation_zh_hant(None, TITLE, 1),
+            "修正後以相同範圍重新掃描，確認這項問題不再被回報。"
+        );
+        assert_eq!(
+            step_confirmation_zh_hant(Some("   "), TITLE, 1),
+            "修正後以相同範圍重新掃描，確認這項問題不再被回報。"
+        );
+        assert_eq!(
+            step_confirmation_english(Some(guidance), TITLE, 4),
+            "Rerun the same scan after the changes and confirm these problems are no longer reported."
+        );
+        assert_eq!(
+            step_confirmation_zh_hant(Some(guidance), TITLE, 4),
+            "修正後以相同範圍重新掃描，確認這些問題不再被回報。"
+        );
     }
 
     #[test]

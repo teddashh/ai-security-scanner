@@ -5072,7 +5072,9 @@ test("one instruction several findings share is listed once and says how many it
   const steps = Array.from(container.querySelectorAll("ol.detail-list li"))
     .filter((item) => item.textContent?.includes("Narrow policy AdminPolicy."));
   expect(steps).toHaveLength(1);
-  expect(steps[0]!.textContent).toContain("Problems this step covers: 3");
+  expect(steps[0]!.textContent).toContain(
+    "3 related problems call for this kind of change; each needs its own fix. The first is Over-broad permission 1 in policy AdminPolicy",
+  );
   expect(steps[0]!.textContent).not.toContain("Review the problem and its evidence.");
   // The three findings stay three problems everywhere else in the report.
   const problemMetric = Array.from(container.querySelectorAll<HTMLElement>(".metric-card"))
@@ -5129,6 +5131,403 @@ test("a merged step survives when only a later finding it covers is a security f
   expect(steps.some((item) =>
     item.textContent?.includes("Review the problem and its evidence."))).toBe(false);
   expect(container.textContent).not.toContain("No additional action is listed for this scan.");
+});
+
+const kubeFindings = (titles: string[]) => titles.map((title, index) => frozenFinding({
+  findingId: `finding-kube-${index}`,
+  fingerprint: `fp-kube-${index}`,
+  title,
+  family: "kubernetes" as const,
+  evidenceReferences: [evidenceOnTask("kube-bench-task", {
+    evidenceId: `evidence-kube-${index}`,
+    engineId: "kube-bench",
+  })],
+}));
+
+const kubeReport = (
+  titles: string[],
+  sharedFix?: true,
+) => {
+  const findings = kubeFindings(titles);
+  return report("complete", {
+    actual: completedCoverage("kube-bench-task", "kube-bench"),
+    findings,
+    nextSteps: [{
+      priority: 0,
+      code: "review_finding" as const,
+      action: "Correct the workload or cluster setting named by this check.",
+      reason: titles[0] ?? "",
+      findingId: findings[0]?.findingId,
+      family: "kubernetes" as const,
+      recommendedExpertType: "Kubernetes specialist",
+      alsoResolves: findings.slice(1).map((finding) => finding.findingId),
+      ...(sharedFix ? { sharedFix } : {}),
+    }],
+  });
+};
+
+const nextStepItem = (container: HTMLElement, action: string): HTMLElement => {
+  const item = Array.from(container.querySelectorAll("ol.detail-list li"))
+    .find((candidate) => candidate.querySelector("strong")?.textContent === action);
+  if (!item) throw new Error(`no next step whose action is "${action}"`);
+  return item;
+};
+
+test("a merged family-level step names the lead problem and not one shared fix", () => {
+  const lead = "Privileged containers are allowed";
+  const { container } = renderReport(kubeReport([
+    lead,
+    "Host path volumes are allowed",
+    "The default service account is mounted",
+  ]));
+
+  const step = nextStepItem(container, "Correct the workload or cluster setting named by this check.");
+  expect(step.textContent).toContain(
+    `3 related problems call for this kind of change; each needs its own fix. The first is ${lead}`,
+  );
+  expect(step.textContent).not.toContain("name this same fix");
+  expect(step.textContent).not.toContain("Problems this step covers");
+});
+
+test("a merged step that shares one fix says so", () => {
+  const lead = "Privileged containers are allowed";
+  const { container } = renderReport(kubeReport([
+    lead,
+    "Host path volumes are allowed",
+    "The default service account is mounted",
+  ], true));
+
+  const step = nextStepItem(container, "Correct the workload or cluster setting named by this check.");
+  expect(step.textContent).toContain(`3 problems name this same fix. The first is ${lead}`);
+  expect(step.textContent).not.toContain("each needs its own fix");
+});
+
+test("a single next step names the place and how to confirm the fix", () => {
+  const title = "S3 bucket is public";
+  const guidance = "Rerun Checkov with the same scope after the change and confirm that source rule CKV_AWS_20 is no longer reported.";
+  const { container } = renderReport(report("complete", {
+    actual: completedCoverage("checkov-task", "checkov"),
+    findings: [frozenFinding({
+      title,
+      family: "cloud_posture",
+      verificationGuidance: guidance,
+      evidenceReferences: [
+        evidenceOnTask("checkov-task", { evidenceId: "e1", engineId: "checkov", location: "deploy/main.tf:line=12" }),
+        evidenceOnTask("checkov-task", { evidenceId: "e2", engineId: "checkov", location: "   " }),
+        evidenceOnTask("checkov-task", { evidenceId: "e3", engineId: "checkov", location: "[redacted location]" }),
+        evidenceOnTask("checkov-task", { evidenceId: "e4", engineId: "checkov", location: "deploy/main.tf:line=12" }),
+        evidenceOnTask("checkov-task", { evidenceId: "e5", engineId: "checkov", location: "pkg:lodash" }),
+      ],
+    })],
+    nextSteps: [{
+      priority: 0,
+      code: "review_finding",
+      action: "Correct the cloud setting or policy named by this check.",
+      reason: title,
+      findingId: "finding-1",
+      family: "cloud_posture",
+    }],
+  }));
+
+  const step = nextStepItem(container, "Correct the cloud setting or policy named by this check.");
+  expect(step.textContent).toContain(title);
+  expect(step.textContent).toContain("Location: deploy/main.tf · line 12 and 1 more");
+  expect(step.textContent).not.toContain("[redacted location]");
+  expect(step.textContent).not.toContain("pkg:lodash");
+  expect(step.textContent).toContain(`To confirm: ${guidance}`);
+});
+
+test("a merged next step names every place it covers, the lead's first", () => {
+  const action = "Correct the workload or cluster setting named by this check.";
+  const placed = (index: number, location: string) => frozenFinding({
+    findingId: `finding-placed-${index}`,
+    fingerprint: `fp-placed-${index}`,
+    title: `Workload setting ${index}`,
+    family: "kubernetes",
+    evidenceReferences: [evidenceOnTask("kube-bench-task", {
+      evidenceId: `evidence-placed-${index}`,
+      engineId: "kube-bench",
+      location,
+    })],
+  });
+  const findings = [
+    placed(0, "apps/v1/production/StatefulSet/ledger-db"),
+    placed(1, "apps/v1/production/Deployment/web"),
+    placed(2, "apps/v1/production/StatefulSet/ledger-db"),
+  ];
+  const { container } = renderReport(report("complete", {
+    actual: completedCoverage("kube-bench-task", "kube-bench"),
+    findings,
+    nextSteps: [{
+      priority: 0,
+      code: "review_finding",
+      action,
+      reason: "Workload setting 0",
+      findingId: findings[0]!.findingId,
+      family: "kubernetes",
+      alsoResolves: findings.slice(1).map((finding) => finding.findingId),
+    }],
+  }));
+
+  const step = nextStepItem(container, action);
+  expect(step.textContent).toContain("Location: apps/v1/production/StatefulSet/ledger-db and 1 more");
+  expect(step.textContent).toContain(
+    "To confirm: Rerun the same scan after the changes and confirm these problems are no longer reported.",
+  );
+});
+
+test("an incomplete-check step does not add a separate confirmation line", () => {
+  const title = "The synthetic public site's HSTS status remains unconfirmed";
+  const guidance = "Rerun httpx with the same scope after the change and confirm that source rule hsts-missing is no longer reported.";
+  const finding = frozenFinding({
+    title,
+    family: "network_exposure",
+    verificationGuidance: guidance,
+    evidenceReferences: [evidenceOnTask("httpx-task", {
+      engineId: "httpx",
+      location: "https://example.test/",
+    })],
+  });
+  const { container } = renderReport(report("partial", {
+    actual: {
+      checks: [{
+        taskId: "httpx-task",
+        checkId: "httpx",
+        targetAssetIds: ["asset-1"],
+        status: "timed_out",
+        testedDimensions: [],
+      }],
+      networkScopes: [],
+      unavailableDimensions: [],
+    },
+    findings: [finding],
+    nextSteps: [{
+      priority: 0,
+      code: "confirm_finding_after_incomplete_check",
+      action: INCOMPLETE_CHECK_CONFIRM_ACTION,
+      reason: title,
+      findingId: finding.findingId,
+      family: "network_exposure",
+    }],
+  }));
+
+  const step = nextStepItem(container, INCOMPLETE_CHECK_CONFIRM_ACTION);
+  expect(step.textContent).toContain(title);
+  expect(step.textContent).toContain("Location: https://example.test/");
+  expect(step.textContent).not.toContain("To confirm");
+  expect(step.textContent).not.toContain("hsts-missing");
+});
+
+test("a zh-TW next step names related problems, the place, and how to confirm", () => {
+  window.localStorage.setItem(localeStorageKey, "zh-TW");
+  const lead = "Privileged containers are allowed";
+  const single = "S3 bucket is public";
+  const guidance = "Rerun Checkov with the same scope after the change and confirm that source rule CKV_AWS_20 is no longer reported.";
+  const merged = kubeReport([lead, "Host path volumes are allowed"]);
+  const { container } = renderReport(report("complete", {
+    actual: completedCoverage("kube-bench-task", "kube-bench"),
+    findings: [
+      ...merged.findings,
+      frozenFinding({
+        findingId: "finding-s3",
+        fingerprint: "fp-s3",
+        title: single,
+        family: "cloud_posture",
+        verificationGuidance: guidance,
+        evidenceReferences: [
+          evidenceOnTask("kube-bench-task", { evidenceId: "e-s3-a", engineId: "checkov", location: "deploy/main.tf:line=12" }),
+          evidenceOnTask("kube-bench-task", { evidenceId: "e-s3-b", engineId: "checkov", location: "pkg:lodash" }),
+        ],
+      }),
+    ],
+    nextSteps: [
+      ...merged.nextSteps,
+      {
+        priority: 1,
+        code: "review_finding",
+        action: "Correct the cloud setting or policy named by this check.",
+        reason: single,
+        findingId: "finding-s3",
+        family: "cloud_posture",
+      },
+    ],
+  }));
+
+  const related = nextStepItem(container, "調整這項檢查所指出的工作負載或叢集設定。");
+  expect(related.textContent).toContain(
+    `有 2 項相關問題需要這類處理，每一項都要分別修正；第一項是 ${lead}`,
+  );
+  expect(related.textContent).not.toContain("指向同一個修復方式");
+  expect(related.textContent).not.toContain("這一步涵蓋的問題");
+
+  const alone = nextStepItem(container, "調整這項檢查所指出的雲端設定或政策。");
+  expect(alone.textContent).toContain("位置：deploy/main.tf · 第 12 行，另有 1 處");
+  expect(alone.textContent).toContain(
+    "確認方式：變更後以相同範圍重新執行 Checkov，並確認來源規則 CKV_AWS_20 不再被回報。",
+  );
+});
+
+test("a Microsoft 365 finding is named as an unmet requirement", () => {
+  const legacy = "Legacy authentication is blocked";
+  const mfa = "Privileged accounts use phishing-resistant MFA";
+  const modern = "Modern authentication for Exchange Online is enabled";
+  const bucket = "Public S3 bucket";
+  const groupTitle = "Sign-in requirements need attention";
+  const { container } = renderReport(report("complete", {
+    actual: completedCoverage("m365-task", "scubagear"),
+    findings: [
+      frozenFinding({
+        findingId: "finding-legacy",
+        fingerprint: "fp-legacy",
+        title: legacy,
+        family: "microsoft365",
+        priority: 4,
+        evidenceReferences: [evidenceOnTask("m365-task", { evidenceId: "e-legacy", engineId: "scubagear" })],
+      }),
+      frozenFinding({
+        findingId: "finding-mfa",
+        fingerprint: "fp-mfa",
+        title: mfa,
+        family: "microsoft365",
+        priority: 5,
+        evidenceReferences: [evidenceOnTask("m365-task", { evidenceId: "e-mfa", engineId: "scubagear" })],
+      }),
+      frozenFinding({
+        findingId: "finding-modern",
+        fingerprint: "fp-modern",
+        title: modern,
+        family: "microsoft365",
+        priority: 1,
+        evidenceReferences: [evidenceOnTask("m365-task", { evidenceId: "e-modern", engineId: "scubagear" })],
+      }),
+      frozenFinding({
+        findingId: "finding-bucket",
+        fingerprint: "fp-bucket",
+        title: bucket,
+        family: "cloud_posture",
+        priority: 1,
+        evidenceReferences: [evidenceOnTask("m365-task", { evidenceId: "e-bucket", engineId: "checkov" })],
+      }),
+    ],
+    problemGroups: [{
+      groupId: "m365-signin",
+      ruleVersion: "test",
+      kind: "iam_password_policy",
+      title: groupTitle,
+      targetAssetId: "asset-1",
+      representativeFindingId: "finding-mfa",
+      findingIds: ["finding-mfa", "finding-modern"],
+    }],
+  }));
+
+  expect([...container.querySelectorAll(".priority-card h3")].map((node) => node.textContent)).toEqual([
+    `Requirement not met: ${legacy}`,
+    groupTitle,
+    bucket,
+  ]);
+  expect([...container.querySelectorAll(".finding-list .finding-row strong")].map((node) => node.textContent)).toEqual([
+    `Requirement not met: ${legacy}`,
+    groupTitle,
+    bucket,
+  ]);
+  expect(container.querySelector(".affected-asset-row small")?.textContent).toContain(
+    `First issue · Requirement not met: ${legacy}`,
+  );
+  const choices = [...container.querySelectorAll(".check-card span")].map((node) => node.textContent ?? "");
+  expect(choices.some((text) => text.startsWith(`Requirement not met: ${legacy}`))).toBe(true);
+  expect(choices.some((text) => text.startsWith(`Requirement not met: ${mfa}`))).toBe(true);
+  expect(choices.some((text) => text.startsWith(`Requirement not met: ${modern}`))).toBe(true);
+  expect(choices.some((text) => text.startsWith(bucket) && !text.startsWith("Requirement not met:"))).toBe(true);
+
+  openFirstFinding(container);
+  expect(container.querySelector(".finding-detail h2")?.textContent).toBe(`Requirement not met: ${legacy}`);
+
+  const groupRow = [...container.querySelectorAll<HTMLButtonElement>(".finding-row")]
+    .find((row) => row.querySelector("strong")?.textContent === groupTitle);
+  if (!groupRow) throw new Error("the grouped row did not render");
+  fireEvent.click(groupRow);
+  expect(container.querySelector(".finding-detail h2")?.textContent).toBe(`Requirement not met: ${mfa}`);
+  expect([...container.querySelectorAll(".problem-group-members button")].map((button) => button.textContent)).toEqual([
+    `Requirement not met: ${mfa}`,
+    `Requirement not met: ${modern}`,
+  ]);
+});
+
+test("a zh-TW Microsoft 365 finding is named as an unmet requirement", () => {
+  window.localStorage.setItem(localeStorageKey, "zh-TW");
+  const legacy = "Legacy authentication is blocked";
+  const mfa = "Privileged accounts use phishing-resistant MFA";
+  const bucket = "Public S3 bucket";
+  const { container } = renderReport(report("complete", {
+    actual: completedCoverage("m365-task", "scubagear"),
+    findings: [
+      frozenFinding({
+        findingId: "finding-legacy",
+        fingerprint: "fp-legacy",
+        title: legacy,
+        family: "microsoft365",
+        priority: 4,
+        evidenceReferences: [evidenceOnTask("m365-task", { evidenceId: "e-legacy", engineId: "scubagear" })],
+      }),
+      frozenFinding({
+        findingId: "finding-mfa",
+        fingerprint: "fp-mfa",
+        title: mfa,
+        family: "microsoft365",
+        priority: 5,
+        evidenceReferences: [evidenceOnTask("m365-task", { evidenceId: "e-mfa", engineId: "scubagear" })],
+      }),
+      frozenFinding({
+        findingId: "finding-modern",
+        fingerprint: "fp-modern",
+        title: "Modern authentication for Exchange Online is enabled",
+        family: "microsoft365",
+        priority: 1,
+        evidenceReferences: [evidenceOnTask("m365-task", { evidenceId: "e-modern", engineId: "scubagear" })],
+      }),
+      frozenFinding({
+        findingId: "finding-bucket",
+        fingerprint: "fp-bucket",
+        title: bucket,
+        family: "cloud_posture",
+        priority: 1,
+        evidenceReferences: [evidenceOnTask("m365-task", { evidenceId: "e-bucket", engineId: "checkov" })],
+      }),
+    ],
+    problemGroups: [{
+      groupId: "m365-signin",
+      ruleVersion: "test",
+      kind: "iam_password_policy",
+      title: "Sign-in requirements need attention",
+      targetAssetId: "asset-1",
+      representativeFindingId: "finding-mfa",
+      findingIds: ["finding-mfa", "finding-modern"],
+    }],
+  }));
+
+  expect([...container.querySelectorAll(".priority-card h3")].map((node) => node.textContent)).toEqual([
+    `未符合要求：${legacy}`,
+    "IAM 密碼政策需要調整",
+    bucket,
+  ]);
+  expect([...container.querySelectorAll(".finding-list .finding-row strong")].map((node) => node.textContent)).toEqual([
+    `未符合要求：${legacy}`,
+    "IAM 密碼政策需要調整",
+    bucket,
+  ]);
+  expect(container.querySelector(".affected-asset-row small")?.textContent).toContain(
+    `優先問題 · 未符合要求：${legacy}`,
+  );
+  openFirstFinding(container);
+  expect(container.querySelector(".finding-detail h2")?.textContent).toBe(`未符合要求：${legacy}`);
+  const groupRow = [...container.querySelectorAll<HTMLButtonElement>(".finding-row")]
+    .find((row) => row.querySelector("strong")?.textContent === "IAM 密碼政策需要調整");
+  if (!groupRow) throw new Error("the grouped row did not render");
+  fireEvent.click(groupRow);
+  expect([...container.querySelectorAll(".problem-group-members button")].map((button) => button.textContent)).toEqual([
+    `未符合要求：${mfa}`,
+    "未符合要求：Modern authentication for Exchange Online is enabled",
+  ]);
 });
 
 test("the asset board is read in attention order, not in the order targets were declared", () => {

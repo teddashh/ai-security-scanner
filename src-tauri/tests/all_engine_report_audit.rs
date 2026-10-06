@@ -1530,6 +1530,201 @@ fn dispatchable_engine_ids(engines: &EngineRegistry) -> BTreeSet<&'static str> {
         .collect()
 }
 
+fn section_between<'a>(html: &'a str, start: &str, end: &str) -> &'a str {
+    let start_at = html
+        .find(start)
+        .unwrap_or_else(|| panic!("missing {start}"));
+    let rest = &html[start_at + start.len()..];
+    let end_at = rest
+        .find(end)
+        .unwrap_or_else(|| panic!("missing {end} after {start}"));
+    &rest[..end_at]
+}
+
+fn list_item_containing<'a>(html: &'a str, needle: &str) -> &'a str {
+    let mut rest = html;
+    while let Some(start) = rest.find("<li>") {
+        let item_rest = &rest[start..];
+        let Some(end) = item_rest.find("</li>") else {
+            break;
+        };
+        let item = &item_rest[..end + "</li>".len()];
+        if item.contains(needle) {
+            return item;
+        }
+        rest = &item_rest[end + "</li>".len()..];
+    }
+    panic!("no list item contains {needle}: {html}");
+}
+
+fn first_strong(item: &str) -> &str {
+    let start = item.find("<strong>").expect("a step action") + "<strong>".len();
+    let end = item[start..]
+        .find("</strong>")
+        .expect("a step action closes");
+    &item[start..start + end]
+}
+
+/// A family-level instruction repeated across different findings is the same
+/// kind of change, not one fix. A typed IAM policy action is one fix. A
+/// Microsoft 365 control is titled for the state it was checking, so a failed
+/// control's heading says the requirement was not met.
+fn assert_next_steps_distinguish_one_fix_from_the_same_kind_of_change(
+    english: &str,
+    chinese: &str,
+) {
+    let english_steps = section_between(
+        english,
+        "<h2>What to do next</h2>",
+        "<h2>Problems found</h2>",
+    );
+    let chinese_steps = section_between(chinese, "<h2>下一步怎麼做</h2>", "<h2>發現的問題</h2>");
+    for title in [
+        "Resource limits",
+        "Vulnerable package example-package (CVE-2025-0002)",
+        "Password Policy Lacks Uppercase Requirement",
+        "Content Security Policy (CSP) Header Not Set",
+    ] {
+        let step = list_item_containing(english_steps, title);
+        assert!(
+            step.contains("related problems call for this kind of change"),
+            "{title} must say each problem needs its own fix: {step}"
+        );
+        assert!(
+            !step.contains(&format!(
+                "problems name this same fix. The first is {title}"
+            )),
+            "{title} must not be called one shared fix: {step}"
+        );
+        let zh = list_item_containing(chinese_steps, title);
+        assert!(
+            zh.contains("需要這類處理"),
+            "{title} must say each problem needs its own fix in Chinese: {zh}"
+        );
+        assert!(
+            !zh.contains("指向同一個修復方式"),
+            "{title} must not be called one shared fix in Chinese: {zh}"
+        );
+    }
+
+    for policy in [
+        "IAMFullAccess",
+        "InlinePolicyForAdminGroup",
+        "InsecurePolicy",
+    ] {
+        let step = list_item_containing(english_steps, policy);
+        assert!(
+            step.contains("problems name this same fix"),
+            "{policy} is one change and must stay one fix: {step}"
+        );
+        let zh = list_item_containing(chinese_steps, policy);
+        assert!(
+            zh.contains("指向同一個修復方式"),
+            "{policy} is one change and must stay one fix in Chinese: {zh}"
+        );
+    }
+
+    // Nine Kubernetes problems sit on three resources. Naming only the lead's
+    // would read as where all nine are.
+    let kubernetes = list_item_containing(english_steps, "Resource limits");
+    assert!(
+        kubernetes.contains(
+            "<strong>Location:</strong> apps/v1/production/StatefulSet/ledger-db and 2 more"
+        ),
+        "a grouped step names the lead's place and counts the others: {kubernetes}"
+    );
+    let kubernetes_zh = list_item_containing(chinese_steps, "Resource limits");
+    assert!(
+        kubernetes_zh
+            .contains("<strong>位置：</strong>apps/v1/production/StatefulSet/ledger-db，另有 2 處"),
+        "a grouped step names the lead's place and counts the others in Chinese: {kubernetes_zh}"
+    );
+
+    let password =
+        list_item_containing(english_steps, "Password Policy Lacks Uppercase Requirement");
+    assert!(
+        !first_strong(password).contains("least privilege"),
+        "the password-policy action must name the setting, not least privilege: {password}"
+    );
+    let password_zh =
+        list_item_containing(chinese_steps, "Password Policy Lacks Uppercase Requirement");
+    assert!(
+        !first_strong(password_zh).contains("最小權限"),
+        "the Chinese password-policy action must name the setting: {password_zh}"
+    );
+
+    let semgrep = list_item_containing(
+        english_steps,
+        "A subprocess launched through a shell can allow command injection",
+    );
+    assert!(
+        semgrep.contains("<strong>Location:</strong> "),
+        "the Semgrep step must name a location: {semgrep}"
+    );
+    assert!(
+        semgrep.contains("src/example.py") && semgrep.contains("line 7"),
+        "the Semgrep location must name the file and the line: {semgrep}"
+    );
+    assert!(
+        semgrep.contains("<strong>To confirm:</strong> ") && semgrep.contains("Semgrep"),
+        "the Semgrep step must say how to confirm it, naming Semgrep: {semgrep}"
+    );
+    let semgrep_zh = list_item_containing(
+        chinese_steps,
+        "A subprocess launched through a shell can allow command injection",
+    );
+    assert!(
+        semgrep_zh.contains("<strong>位置：</strong>") && semgrep_zh.contains("src/example.py"),
+        "the Chinese Semgrep step must name a location: {semgrep_zh}"
+    );
+    assert!(
+        semgrep_zh.contains("第 7 行"),
+        "the Chinese Semgrep location must name the line: {semgrep_zh}"
+    );
+    assert!(
+        semgrep_zh.contains("<strong>確認方式：</strong>") && semgrep_zh.contains("Semgrep"),
+        "the Chinese Semgrep step must say how to confirm it, naming Semgrep: {semgrep_zh}"
+    );
+
+    let raw = "Legacy authentication is blocked";
+    let framed = format!("Requirement not met: {raw}");
+    let index = section_between(english, "<table class=\"finding-index\">", "</table>");
+    assert!(
+        index.contains(&format!("<td>{framed}</td>")),
+        "the problems table must frame the failed control: {index}"
+    );
+    assert!(
+        !index.contains(&format!("<td>{raw}</td>")),
+        "the problems table must not print the unframed control name: {index}"
+    );
+    assert!(
+        english.contains(&format!("<h3>{framed} <span class=\"finding-asset\">")),
+        "the card heading must frame the failed control"
+    );
+    assert!(
+        !english.contains(&format!("<h3>{raw} <span class=\"finding-asset\">")),
+        "the card heading must not print the unframed control name"
+    );
+    let framed_zh = format!("未符合要求：{raw}");
+    let index_zh = section_between(chinese, "<table class=\"finding-index\">", "</table>");
+    assert!(
+        index_zh.contains(&format!("<td>{framed_zh}</td>")),
+        "the Chinese problems table must frame the failed control: {index_zh}"
+    );
+    assert!(
+        !index_zh.contains(&format!("<td>{raw}</td>")),
+        "the Chinese problems table must not print the unframed control name: {index_zh}"
+    );
+    assert!(
+        chinese.contains(&format!("<h3>{framed_zh} <span class=\"finding-asset\">")),
+        "the Chinese card heading must frame the failed control"
+    );
+    assert!(
+        !chinese.contains(&format!("<h3>{raw} <span class=\"finding-asset\">")),
+        "the Chinese card heading must not print the unframed control name"
+    );
+}
+
 /// What the other run cannot show: every detector reporting at once.
 ///
 /// The mixed run spends five checks on terminal states, so Checkov, KICS,
@@ -1804,6 +1999,7 @@ fn every_detector_places_its_finding_on_its_mapped_control() {
             // in the coverage and next-step sections.
             assert!(english.contains("What needs attention"));
             assert!(english.contains("What to do next"));
+            assert_next_steps_distinguish_one_fix_from_the_same_kind_of_change(&english, &chinese);
 
             // The node's remaining checks need an asset-specific step, so its
             // action column is useful even when every process exited zero.
@@ -3209,6 +3405,9 @@ fn every_integrated_engine_lands_in_one_terminal_report() {
                 let (title, asset) = heading
                     .split_once(" <span class=\"finding-asset\">")
                     .expect("heading end");
+                // A Microsoft 365 control is titled for the state it was
+                // checking, so a failed one is framed as an unmet requirement.
+                // Every heading keeps the whole upstream title.
                 assert_eq!(
                     title
                         .replace("&amp;", "&")
@@ -3216,8 +3415,11 @@ fn every_integrated_engine_lands_in_one_terminal_report() {
                         .replace("&gt;", ">")
                         .replace("&quot;", "\"")
                         .replace("&#39;", "'"),
-                    finding.title,
-                    "the upstream title still leads, unchanged"
+                    ai_security_scanner_lib::finding_narrative::finding_headline_english(
+                        &finding.title,
+                        finding.family,
+                    ),
+                    "the upstream title still leads, unchanged apart from the Microsoft 365 frame"
                 );
                 assert!(asset.starts_with("— "), "{asset}");
             }

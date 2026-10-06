@@ -15,6 +15,9 @@ import {
   findingRollbackSentence,
   findingSeverityIsUnrated,
   findingVerificationSentence,
+  findingHeadline,
+  stepConfirmation,
+  stepGroupLead,
   findingImpactSentence,
   findingLocationText,
   findingSummarySentence,
@@ -878,4 +881,67 @@ test("the scanner location reads as a place, not a coordinate string", () => {
     assert.equal(findingLocationText("en", raw), en, raw);
     assert.equal(findingLocationText("zh-TW", raw), zh, raw);
   }
+});
+
+test("only a Microsoft 365 finding is named as an unmet requirement", () => {
+  const title = "Legacy authentication is blocked";
+  assert.equal(findingHeadline("en", title, "microsoft365"), `Requirement not met: ${title}`);
+  assert.equal(findingHeadline("zh-TW", title, "microsoft365"), `未符合要求：${title}`);
+  for (const family of FAMILIES) {
+    if (family === "microsoft365") continue;
+    assert.equal(findingHeadline("en", title, family), title);
+    assert.equal(findingHeadline("zh-TW", title, family), title);
+  }
+  assert.equal(findingHeadline("en", title), title);
+  assert.equal(findingHeadline("zh-TW", title, undefined), title);
+});
+
+test("a grouped next step says whether the problems share one fix", () => {
+  const reason = "Privileged containers are allowed";
+  assert.equal(
+    stepGroupLead("en", 9, true, reason),
+    `9 problems name this same fix. The first is ${reason}`,
+  );
+  assert.equal(
+    stepGroupLead("zh-TW", 9, true, reason),
+    `有 9 項問題指向同一個修復方式，第一項是 ${reason}`,
+  );
+  assert.equal(
+    stepGroupLead("en", 4, false, reason),
+    `4 related problems call for this kind of change; each needs its own fix. The first is ${reason}`,
+  );
+  assert.equal(
+    stepGroupLead("zh-TW", 4, false, reason),
+    `有 4 項相關問題需要這類處理，每一項都要分別修正；第一項是 ${reason}`,
+  );
+});
+
+test("confirmation uses the finding's own sentence for one problem and a rerun for several", () => {
+  const title = "S3 Bucket ACL Allows Read Or Write to All Users";
+  const guidance =
+    "Rerun KICS with the same scope after the change and confirm that source rule CKV_AWS_20 is no longer reported.";
+  assert.equal(
+    stepConfirmation("en", guidance, title, 1),
+    findingVerificationSentence("en", guidance, title),
+  );
+  assert.equal(
+    stepConfirmation("zh-TW", guidance, title, 1),
+    findingVerificationSentence("zh-TW", guidance, title),
+  );
+  assert.equal(
+    stepConfirmation("en", undefined, title, 1),
+    "Rerun the same scan after the change and confirm this problem is no longer reported.",
+  );
+  assert.equal(
+    stepConfirmation("zh-TW", "   ", title, 1),
+    "修正後以相同範圍重新掃描，確認這項問題不再被回報。",
+  );
+  assert.equal(
+    stepConfirmation("en", guidance, title, 2),
+    "Rerun the same scan after the changes and confirm these problems are no longer reported.",
+  );
+  assert.equal(
+    stepConfirmation("zh-TW", guidance, title, 7),
+    "修正後以相同範圍重新掃描，確認這些問題不再被回報。",
+  );
 });

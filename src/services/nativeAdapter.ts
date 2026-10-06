@@ -586,6 +586,7 @@ export interface NativeBeginnerMasterReport {
       discarded_results?: unknown;
     } | null;
     also_resolves?: string[];
+    shared_fix?: boolean;
   }>;
   technical_details: {
     collapsed_by_default: true;
@@ -3299,6 +3300,9 @@ export const adaptBeginnerMasterReport = (
     family: mapFindingFamily(step.family),
     unattributed: mapUnattributed(step.unattributed),
     alsoResolves: step.also_resolves ? [...step.also_resolves] : undefined,
+    // Absent and false are the same claim: this step is not one specific change.
+    // `exactBoolean` would keep false, which this field does not mean.
+    sharedFix: step.shared_fix === true ? true : undefined,
   })),
   technicalDetails: {
     collapsedByDefault: true,

@@ -17193,18 +17193,17 @@ fn html_scanner_remediation_block(
     html
 }
 
-/// Where the finding is, in the words the Results page uses, from the same
-/// evidence locations the technical details print raw.
+/// The places a finding names, in the words the Results page uses, from the
+/// same evidence locations the technical details print raw.
 ///
 /// The Standard-redaction placeholder is skipped: a masked report must not
 /// print "Location: [redacted location]" on every card. Locations are
 /// de-duplicated after formatting, so raw strings that differ only in KICS's
-/// similarity hash name one place. A finding with nothing left renders no
-/// paragraph.
-fn html_finding_location_block(
+/// similarity hash name one place.
+fn html_finding_locations(
     finding: &crate::beginner_report::BeginnerFinding,
     catalog: HtmlReportCatalog,
-) -> String {
+) -> Vec<String> {
     let mut locations: Vec<String> = Vec::new();
     for reference in &finding.evidence_references {
         let Some(raw) = reference.location.as_deref().map(str::trim) else {
@@ -17221,6 +17220,46 @@ fn html_finding_location_block(
             locations.push(formatted);
         }
     }
+    locations
+}
+
+/// The first place, and how many others there are. One place is named on its
+/// own; a longer list stays one line.
+fn html_step_location_summary(locations: &[String], catalog: HtmlReportCatalog) -> Option<String> {
+    let (first, rest) = locations.split_first()?;
+    let extra = rest.len();
+    Some(if extra == 0 {
+        first.clone()
+    } else {
+        match catalog.locale {
+            crate::export::ReportLocale::En => format!("{first} and {extra} more"),
+            crate::export::ReportLocale::ZhHant => format!("{first}，另有 {extra} 處"),
+        }
+    })
+}
+
+/// The last character a reader sees, ignoring tags. `gap_after` uses it so a
+/// confirmation sentence that ends on 。 is not followed by an ASCII space.
+fn last_visible_char(html: &str) -> Option<char> {
+    let mut last = None;
+    let mut inside_tag = false;
+    for character in html.chars() {
+        match character {
+            '<' => inside_tag = true,
+            '>' => inside_tag = false,
+            _ if !inside_tag => last = Some(character),
+            _ => {}
+        }
+    }
+    last
+}
+
+/// Where the finding is. A finding with nothing left renders no paragraph.
+fn html_finding_location_block(
+    finding: &crate::beginner_report::BeginnerFinding,
+    catalog: HtmlReportCatalog,
+) -> String {
+    let locations = html_finding_locations(finding, catalog);
     if locations.is_empty() {
         return String::new();
     }
@@ -18164,7 +18203,14 @@ fn html_problem_title(
     catalog: HtmlReportCatalog,
 ) -> String {
     report.problem_group(&finding.finding_id).map_or_else(
-        || finding.title.clone(),
+        || match catalog.locale {
+            crate::export::ReportLocale::En => {
+                crate::finding_narrative::finding_headline_english(&finding.title, finding.family)
+            }
+            crate::export::ReportLocale::ZhHant => {
+                crate::finding_narrative::finding_headline_zh_hant(&finding.title, finding.family)
+            }
+        },
         |group| match catalog.locale {
             crate::export::ReportLocale::En => group.title_english(),
             crate::export::ReportLocale::ZhHant => group.title_zh_hant(),
@@ -18894,46 +18940,70 @@ fn html_report_bytes_with_attachments(
                     .as_ref()
                     .map(|expert| crate::finding_narrative::expert_type_zh_hant(expert).to_owned()),
             };
-            let reason = match (catalog.locale, step.unattributed.as_ref(), derived_from) {
-                (crate::export::ReportLocale::ZhHant, Some(unattributed), _) => {
-                    let engine_id = step
-                        .reason
-                        .split_once(' ')
-                        .map(|(engine, _)| engine)
-                        .unwrap_or(step.reason.as_str());
-                    let (_, reason, _) = crate::finding_narrative::unattributed_gap_zh_hant(
-                        &engine_named(engine_id),
-                        unattributed,
-                    );
-                    reason
-                }
-                // A finding-derived step's reason is the finding's title and its
-                // two ratings. The title is the engine's own words and stays;
-                // the ratings are labelled from the finding the step points at,
-                // the same way the finding's own section labels them, rather
-                // than parsed back out of the stored English.
-                (crate::export::ReportLocale::ZhHant, None, Some(finding)) => {
-                    format!(
-                        "{} — 嚴重程度：{}；信心程度：{}",
-                        finding.title,
-                        catalog.identifier(&enum_key(&finding.severity)),
-                        crate::finding_narrative::confidence_presentation_zh_hant(
-                            &catalog.identifier(&enum_key(&finding.confidence)),
+            // A finding-derived step's reason is the finding's headline and
+            // its two ratings. A Microsoft 365 title names the passing state,
+            // so the headline says the requirement was not met; every other
+            // title is already the scanner's own words. The ratings are
+            // labelled from the finding the step points at, the same way the
+            // finding's own section labels them, rather than parsed back out
+            // of the stored English. A step with no finding keeps the gap
+            // prose it stored.
+            let reason = if let Some(finding) = derived_from {
+                match catalog.locale {
+                    crate::export::ReportLocale::En => {
+                        let headline = crate::finding_narrative::finding_headline_english(
+                            &finding.title,
+                            finding.family,
+                        );
+                        crate::beginner_report::finding_step_reason(
+                            &headline,
+                            &finding.severity,
+                            &finding.confidence,
                             finding.confidence_basis_code,
                             &finding.priority_reasons,
-                        ),
-                    )
+                        )
+                    }
+                    crate::export::ReportLocale::ZhHant => {
+                        let headline = crate::finding_narrative::finding_headline_zh_hant(
+                            &finding.title,
+                            finding.family,
+                        );
+                        format!(
+                            "{} — 嚴重程度：{}；信心程度：{}",
+                            headline,
+                            catalog.identifier(&enum_key(&finding.severity)),
+                            crate::finding_narrative::confidence_presentation_zh_hant(
+                                &catalog.identifier(&enum_key(&finding.confidence)),
+                                finding.confidence_basis_code,
+                                &finding.priority_reasons,
+                            ),
+                        )
+                    }
                 }
-                // Every other gap-derived step carries the gap's own two
-                // sentences verbatim, so they are looked up the same way the
-                // coverage row above looks them up. An unrecognized one keeps
-                // its stored English.
-                (crate::export::ReportLocale::ZhHant, None, None) => {
-                    crate::finding_narrative::coverage_gap_prose_zh_hant(&step.reason)
-                        .unwrap_or_else(|| step.reason.clone())
+            } else {
+                match (catalog.locale, step.unattributed.as_ref()) {
+                    (crate::export::ReportLocale::ZhHant, Some(unattributed)) => {
+                        let engine_id = step
+                            .reason
+                            .split_once(' ')
+                            .map(|(engine, _)| engine)
+                            .unwrap_or(step.reason.as_str());
+                        let (_, reason, _) = crate::finding_narrative::unattributed_gap_zh_hant(
+                            &engine_named(engine_id),
+                            unattributed,
+                        );
+                        reason
+                    }
+                    // Every other gap-derived step carries the gap's own two
+                    // sentences verbatim, so they are looked up the same way the
+                    // coverage row above looks them up. An unrecognized one keeps
+                    // its stored English.
+                    (crate::export::ReportLocale::ZhHant, None) => {
+                        crate::finding_narrative::coverage_gap_prose_zh_hant(&step.reason)
+                            .unwrap_or_else(|| step.reason.clone())
+                    }
+                    _ => step.reason.clone(),
                 }
-                (crate::export::ReportLocale::En, None, None) => step.reason.clone(),
-                _ => step.reason.clone(),
             };
             // A gap-derived step's stored reason is the coverage row's own
             // sentence, printed one section above this list. Repeating it was
@@ -18949,13 +19019,13 @@ fn html_report_bytes_with_attachments(
                 closes.join(catalog.text("; ", "；"))
             };
             // One instruction, stated once, over the finding that leads the
-            // group. Saying how many name it is the part a beginner acts on:
-            // it is the difference between nine things to do and one.
-            let reason = if step.also_resolves.is_empty() {
-                reason
+            // group. The count is how many distinct problems that instruction
+            // covers. A typed policy change really is one fix; a family-level
+            // instruction is the same kind of change in different places.
+            let count = if step.also_resolves.is_empty() {
+                1
             } else {
-                let count = step
-                    .also_resolves
+                step.also_resolves
                     .iter()
                     .chain(step.finding_id.iter())
                     .map(|id| {
@@ -18965,18 +19035,26 @@ fn html_report_bytes_with_attachments(
                             .unwrap_or(id.as_str())
                     })
                     .collect::<BTreeSet<_>>()
-                    .len();
-                if count > 1 {
-                    match catalog.locale {
-                        crate::export::ReportLocale::En => {
-                            format!("{count} problems name this same fix. The first is {reason}")
-                        }
-                        crate::export::ReportLocale::ZhHant => {
-                            format!("有 {count} 項問題指向同一個修復方式，第一項是 {reason}")
-                        }
+                    .len()
+            };
+            let reason = if step.also_resolves.is_empty() || count <= 1 {
+                reason
+            } else {
+                match catalog.locale {
+                    crate::export::ReportLocale::En => {
+                        crate::finding_narrative::step_group_lead_english(
+                            count,
+                            step.shared_fix,
+                            &reason,
+                        )
                     }
-                } else {
-                    reason
+                    crate::export::ReportLocale::ZhHant => {
+                        crate::finding_narrative::step_group_lead_zh_hant(
+                            count,
+                            step.shared_fix,
+                            &reason,
+                        )
+                    }
                 }
             };
             // Intra-document only: the problems table and finding cards already
@@ -18990,21 +19068,87 @@ fn html_report_bytes_with_attachments(
                 Some(anchor) => format!("<a href=\"#{anchor}\">{}</a>", html_escape(&reason)),
                 None => html_escape(&reason),
             };
+            // Every place the step covers, the lead finding's first. A grouped
+            // step's problems sit in different places, so naming only the
+            // lead's would read as where all of them are.
+            let location_html = derived_from
+                .and_then(|lead| {
+                    let mut locations = html_finding_locations(lead, catalog);
+                    for other in step.also_resolves.iter().filter_map(|id| {
+                        report
+                            .findings
+                            .iter()
+                            .find(|finding| finding.finding_id == *id)
+                    }) {
+                        for location in html_finding_locations(other, catalog) {
+                            if !locations.contains(&location) {
+                                locations.push(location);
+                            }
+                        }
+                    }
+                    html_step_location_summary(&locations, catalog)
+                })
+                .map(|text| {
+                    format!(
+                        "<br>{}{}",
+                        catalog.strong_label(catalog.text("Location", "位置")),
+                        html_escape(&text)
+                    )
+                })
+                .unwrap_or_default();
+            // An unconfirmed finding's step already says to finish the check
+            // first. Confirming the fix comes after that check has a result.
+            let confirmation_html = derived_from
+                .filter(|_| step.code != NextActionCode::ConfirmFindingAfterIncompleteCheck)
+                .map(|finding| {
+                    let text = match catalog.locale {
+                        crate::export::ReportLocale::En => {
+                            crate::finding_narrative::step_confirmation_english(
+                                finding.verification_guidance.as_deref(),
+                                &finding.title,
+                                count,
+                            )
+                        }
+                        crate::export::ReportLocale::ZhHant => {
+                            crate::finding_narrative::step_confirmation_zh_hant(
+                                finding.verification_guidance.as_deref(),
+                                &finding.title,
+                                count,
+                            )
+                        }
+                    };
+                    format!(
+                        "<br>{}{}",
+                        catalog.strong_label(catalog.text("To confirm", "確認方式")),
+                        html_escape(&text)
+                    )
+                })
+                .unwrap_or_default();
             // A Chinese action that ends its own sentence takes no dash: the
             // reason follows it as the next sentence.
             let separator = match catalog.gap_after(&action) {
                 "" => "",
                 _ => " — ",
             };
+            // The expert used to follow the reason. A confirmation sentence
+            // ends on 。, and the same gap rule the action uses keeps an ASCII
+            // space off that mark. English still takes the space.
+            let expert_gap = catalog.gap_after(
+                &last_visible_char(&format!("{reason_html}{location_html}{confirmation_html}"))
+                    .map(|character| character.to_string())
+                    .unwrap_or_default(),
+            );
             format!(
-                "<li><strong>{}</strong>{}{}{}</li>",
+                "<li><strong>{}</strong>{}{}{}{}{}</li>",
                 html_escape(&action),
                 separator,
                 reason_html,
+                location_html,
+                confirmation_html,
                 expert
                     .as_ref()
                     .map(|expert| format!(
-                        " <em>{}{}</em>",
+                        "{expert_gap}<em>{}{}</em>",
                         catalog.label(catalog.text("Suggested expert", "建議諮詢的專家")),
                         html_escape(expert),
                     ))
@@ -19400,6 +19544,14 @@ fn html_report_bytes_with_attachments(
             continue;
         }
         problem_count += 1;
+        let headline = match catalog.locale {
+            crate::export::ReportLocale::En => {
+                crate::finding_narrative::finding_headline_english(&finding.title, finding.family)
+            }
+            crate::export::ReportLocale::ZhHant => {
+                crate::finding_narrative::finding_headline_zh_hant(&finding.title, finding.family)
+            }
+        };
         index_rows.push_str(&format!(
             concat!(
                 "<tr><td class=\"numeric\"><a href=\"#f{}\">{}</a></td>",
@@ -19410,7 +19562,7 @@ fn html_report_bytes_with_attachments(
             catalog.format_number(index + 1),
             severity_slug(&finding.severity),
             html_escape(&severity_label),
-            html_escape(&finding.title),
+            html_escape(&headline),
             targets,
             html_escape(&next_step),
         ));
@@ -19510,7 +19662,7 @@ fn html_report_bytes_with_attachments(
                 "<h4>{}</h4><ul>{}</ul></details></article>"
             ),
             index + 1,
-            html_escape(&finding.title),
+            html_escape(&headline),
             targets,
             severity_slug(&finding.severity),
             catalog.label(catalog.text("Severity", "嚴重程度")),
@@ -19962,10 +20114,29 @@ fn html_report_bytes_with_attachments(
         ));
     }
 
+    // Member names a reader sees. The map key stays the finding id. A
+    // Microsoft 365 title names the passing state, so the value is the
+    // headline rather than that title.
     let report_finding_titles = report
         .findings
         .iter()
-        .map(|finding| (finding.finding_id.as_str(), finding.title.as_str()))
+        .map(|finding| {
+            let headline = match catalog.locale {
+                crate::export::ReportLocale::En => {
+                    crate::finding_narrative::finding_headline_english(
+                        &finding.title,
+                        finding.family,
+                    )
+                }
+                crate::export::ReportLocale::ZhHant => {
+                    crate::finding_narrative::finding_headline_zh_hant(
+                        &finding.title,
+                        finding.family,
+                    )
+                }
+            };
+            (finding.finding_id.as_str(), headline)
+        })
         .collect::<BTreeMap<_, _>>();
     let selected_finding_ids = report_finding_titles
         .keys()
@@ -19979,7 +20150,7 @@ fn html_report_bytes_with_attachments(
             .map(|finding_id| {
                 let title = report_finding_titles
                     .get(finding_id.as_str())
-                    .copied()
+                    .map(String::as_str)
                     .unwrap_or(catalog.text(
                         "Selected-run finding details unavailable",
                         "本輪問題詳細資料無法取得",
@@ -37896,8 +38067,9 @@ mod tests {
 
     /// Two findings with the same recommendation, family and expert on a
     /// completed check, so the beginner report collapses them into one grouped
-    /// next step ("N problems name this same fix. The first is ..."). The
-    /// copy outranks the original, so its title leads the group.
+    /// next step. The family remedy is the same kind of change in two places,
+    /// so the step says each needs its own fix. The copy outranks the
+    /// original, so its title leads the group.
     fn case_for_two_findings_sharing_one_fix() -> AssessmentCase {
         let mut case =
             case_for_rated_httpx_finding(EngineRunStatus::Completed, None, Some("httpx-task"));
@@ -38256,8 +38428,12 @@ mod tests {
 
         let zh = html_from_export_case(&case, crate::export::ReportLocale::ZhHant);
         assert!(
-            zh.contains("指向同一個修復方式"),
+            zh.contains("需要這類處理"),
             "the fixture must actually reach a grouped next step: {zh}"
+        );
+        assert!(
+            !zh.contains("指向同一個修復方式"),
+            "a family remedy shared by two findings is not one fix: {zh}"
         );
         assert!(
             zh.contains(&format!("第一項是 {title}")),
@@ -38267,7 +38443,15 @@ mod tests {
         let en = html_from_export_case(&case, crate::export::ReportLocale::En);
         assert!(
             en.contains(&format!("The first is {title}")),
-            "the English rendering of the same fixture must be unaffected: {en}"
+            "the group lead must keep a space before the untranslated English title: {en}"
+        );
+        assert!(
+            en.contains("related problems call for this kind of change"),
+            "a family remedy shared by two findings is not one fix: {en}"
+        );
+        assert!(
+            !en.contains("problems name this same fix"),
+            "a family remedy shared by two findings is not one fix: {en}"
         );
         // The suggested expert is one italic run, label and value together.
         assert!(
@@ -38275,6 +38459,96 @@ mod tests {
             "{en}"
         );
         assert!(zh.contains("<em>建議諮詢的專家："), "{zh}");
+    }
+
+    #[test]
+    fn html_microsoft_365_problem_says_the_requirement_was_not_met_and_names_where_to_confirm() {
+        let title = "Legacy authentication is blocked";
+        let mut case =
+            case_for_rated_httpx_finding(EngineRunStatus::Completed, None, Some("httpx-task"));
+        let mut finding = case.findings[0].clone();
+        finding.family = Some(crate::domain::FindingFamily::Microsoft365);
+        finding.title = title.into();
+        finding.evidence[0].location = Some("src/tenant.ps1:line=12".into());
+        case.findings[0] = finding.clone();
+        case.finding_observations[0].finding_snapshot = Some(finding.clone());
+
+        let guidance = finding.verification_guidance.as_str();
+        let framed = [
+            (
+                crate::export::ReportLocale::En,
+                format!("Requirement not met: {title}"),
+                format!("Start with \u{201c}Requirement not met: {title}\u{201d}"),
+                "<strong>Location:</strong> ",
+                "src/tenant.ps1 · line 12",
+                "<strong>To confirm:</strong> ",
+                crate::finding_narrative::step_confirmation_english(Some(guidance), title, 1),
+            ),
+            (
+                crate::export::ReportLocale::ZhHant,
+                format!("未符合要求：{title}"),
+                format!("最先處理「未符合要求：{title}」"),
+                "<strong>位置：</strong>",
+                "src/tenant.ps1 · 第 12 行",
+                "<strong>確認方式：</strong>",
+                crate::finding_narrative::step_confirmation_zh_hant(Some(guidance), title, 1),
+            ),
+        ];
+        for (locale, framed, lead, location_label, location, confirm_label, confirmation) in framed
+        {
+            let html = html_from_export_case(&case, locale);
+            let index = html
+                .split("<table class=\"finding-index\">")
+                .nth(1)
+                .expect("problems table")
+                .split("</table>")
+                .next()
+                .expect("problems table ends");
+            assert!(
+                index.contains(&format!("<td>{framed}</td>")),
+                "the problems table must use the framed headline: {index}"
+            );
+            assert!(
+                !index.contains(&format!("<td>{title}</td>")),
+                "the problems table must not print the unframed title: {index}"
+            );
+            assert!(
+                html.contains(&format!("<h3>{framed} <span class=\"finding-asset\">")),
+                "the card heading must use the framed headline: {html}"
+            );
+            assert!(
+                !html.contains(&format!("<h3>{title} <span class=\"finding-asset\">")),
+                "the card heading must not print the unframed title: {html}"
+            );
+            assert!(
+                html.contains(&lead),
+                "the in-short lead lost the headline: {html}"
+            );
+
+            let heading = match locale {
+                crate::export::ReportLocale::ZhHant => "<h2>下一步怎麼做</h2>",
+                _ => "<h2>What to do next</h2>",
+            };
+            let steps = html
+                .split_once(heading)
+                .expect("next-step heading")
+                .1
+                .split_once("<ol>")
+                .expect("next-step list")
+                .1
+                .split_once("</ol>")
+                .expect("next-step list ends")
+                .0;
+            let confirmation = html_escape(&confirmation);
+            assert!(
+                steps.contains(&format!("{location_label}{location}")),
+                "a single-problem step must name the finding's location: {steps}"
+            );
+            assert!(
+                steps.contains(&format!("{confirm_label}{confirmation}")),
+                "a single-problem step must say how to confirm the fix: {steps}"
+            );
+        }
     }
 
     #[test]
@@ -39806,6 +40080,7 @@ mod tests {
             family: finding.family,
             unattributed: None,
             also_resolves: Vec::new(),
+            shared_fix: false,
         }
     }
 

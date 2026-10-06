@@ -637,6 +637,7 @@ test("beginner report adapter preserves the backend's run-bound coverage semanti
     family: "network_exposure",
     unattributed: undefined,
     alsoResolves: ["finding-history"],
+    sharedFix: undefined,
   });
   assert.deepEqual(report.findingGroups, [{
     groupId: "group-1",
@@ -735,6 +736,31 @@ const beginnerStatusReportFixture = (overrides: {
   technical_details: { collapsed_by_default: true, tasks: [] },
   framework_notice: { non_certification: "Not certification.", aidefend_mapping_status: "Not mapped." },
   data_quality_warnings: [],
+});
+
+test("shared_fix is kept only when it is exactly true", () => {
+  const step = (sharedFix: boolean | undefined, include: boolean) => ({
+    priority: 1,
+    code: "review_finding" as const,
+    action: "Remove iam:PassRole from policy Admin.",
+    reason: "The policy grants PassRole.",
+    finding_id: "finding-1",
+    task_id: null,
+    recommended_expert_type: null,
+    family: "cloud_identity",
+    unattributed: null,
+    also_resolves: [] as string[],
+    ...(include ? { shared_fix: sharedFix } : {}),
+  });
+  const adapted = (sharedFix: boolean | undefined, include: boolean) =>
+    adaptBeginnerMasterReport({
+      ...beginnerStatusReportFixture(),
+      next_steps: [step(sharedFix, include)],
+    }).nextSteps[0]?.sharedFix;
+
+  assert.equal(adapted(true, true), true);
+  assert.equal(adapted(false, true), undefined);
+  assert.equal(adapted(undefined, false), undefined);
 });
 
 test("frozen evidence redaction claims only the exact boolean and preserves absence", () => {

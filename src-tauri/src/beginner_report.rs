@@ -710,6 +710,13 @@ pub struct BeginnerNextStep {
     /// the instruction is stated once, and every id it covers stays here.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub also_resolves: Vec<Id>,
+    /// True when every finding in `finding_id` and `also_resolves` is fixed by
+    /// the one specific change `action` names -- today, a typed AWS IAM policy
+    /// action. A family-level instruction ("Correct the workload or cluster
+    /// setting named by this check") is the same kind of change in different
+    /// places, so a step that merged several of those must not call them one fix.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub shared_fix: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -4466,6 +4473,7 @@ fn project_next_steps(
             recommended_expert_type: Some(expert),
             family: finding.family,
             also_resolves: Vec::new(),
+            shared_fix: policy.is_some() && !unconfirmed,
         });
     }
 
@@ -4492,6 +4500,7 @@ fn project_next_steps(
                     None
                 },
                 unattributed: gap.unattributed.clone(),
+                shared_fix: false,
             });
         }
     }
@@ -4521,6 +4530,7 @@ fn project_next_steps(
             finding_id: None,
             task_id: None,
             recommended_expert_type: None,
+            shared_fix: false,
         });
     }
     steps.sort_by(|left, right| {
@@ -8511,6 +8521,100 @@ pub(crate) mod tests {
                 })
                 .all(|step| step.also_resolves.is_empty())
         );
+    }
+
+    #[test]
+    fn a_shared_family_remedy_is_not_one_fix_and_a_typed_policy_action_is() {
+        let mut case = case_with_catalog_tasks(vec![completed_httpx_task("task-1")], true);
+        let first = rated_network_finding(&case, "finding-a", Some("task-1"));
+        let mut second = rated_network_finding(&case, "finding-b", Some("task-1"));
+        second.title = "A different service setting remains open".into();
+        case.findings.push(first.clone());
+        case.findings.push(second.clone());
+        case.finding_observations
+            .push(observation(&first, "run-1", instant(18)));
+        case.finding_observations
+            .push(observation(&second, "run-1", instant(18)));
+
+        let report = build_beginner_master_report(&case, "run-1").unwrap();
+        let family_steps = report
+            .next_steps
+            .iter()
+            .filter(|step| {
+                step.action == "Correct the service or configuration named by this check."
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(family_steps.len(), 1, "one family remedy, one step");
+        assert_eq!(family_steps[0].also_resolves.len(), 1);
+        assert!(!family_steps[0].shared_fix);
+
+        let mut encoded = serde_json::to_value(family_steps[0]).unwrap();
+        assert!(
+            encoded.get("shared_fix").is_none(),
+            "a false flag is omitted so an older reader still opens the step"
+        );
+        encoded.as_object_mut().unwrap().remove("shared_fix");
+        let decoded: BeginnerNextStep = serde_json::from_value(encoded).unwrap();
+        assert!(!decoded.shared_fix);
+
+        // No existing beginner-report fixture merges Cloudsplaining findings
+        // (the assertion above this test keeps two experts apart). Two findings
+        // that carry the same typed policy record do, and that record is the
+        // one change the step names.
+        let mut cloud =
+            case_with_catalog_tasks(vec![completed_engine_task("cloudsplaining")], true);
+        let policy = crate::domain::AwsIamPolicyFindingDetails {
+            policy_source: crate::domain::AwsIamPolicySource::AwsManaged,
+            policy_name: "IAMFullAccess".into(),
+            finding_identity: "PrivilegeEscalation".into(),
+            actions: vec!["iam:CreateAccessKey".into()],
+            actions_complete: true,
+            attached_to: crate::domain::AwsIamAttachedTo {
+                roles: Vec::new(),
+                groups: vec!["AdminGroup".into()],
+                users: Vec::new(),
+                complete: true,
+            },
+        };
+        let mut lead = rated_network_finding(&cloud, "iam-a", Some("cloudsplaining"));
+        let mut follow = rated_network_finding(&cloud, "iam-b", Some("cloudsplaining"));
+        for finding in [&mut lead, &mut follow] {
+            finding.family = Some(FindingFamily::CloudIdentity);
+            finding.recommended_expert_type = "Cloud identity specialist".into();
+            finding.evidence[0].engine_id = "cloudsplaining".into();
+            finding.evidence[0].scanner_details = Some(crate::domain::ScannerFindingDetails {
+                description: None,
+                remediation: None,
+                installed_version: None,
+                fixed_version: None,
+                aws_iam_policy: Some(policy.clone()),
+                cwe_ids: Vec::new(),
+                cvss: Vec::new(),
+            });
+        }
+        follow.title = "A second privilege path in the same policy".into();
+        follow.evidence[0].id = "evidence-iam-b".into();
+        cloud.findings.push(lead.clone());
+        cloud.findings.push(follow.clone());
+        cloud
+            .finding_observations
+            .push(observation(&lead, "run-1", instant(18)));
+        cloud
+            .finding_observations
+            .push(observation(&follow, "run-1", instant(18)));
+
+        let report = build_beginner_master_report(&cloud, "run-1").unwrap();
+        let policy_steps = report
+            .next_steps
+            .iter()
+            .filter(|step| step.action.contains("IAMFullAccess"))
+            .collect::<Vec<_>>();
+        assert_eq!(policy_steps.len(), 1, "one typed policy action, one step");
+        assert_eq!(policy_steps[0].also_resolves.len(), 1);
+        assert!(policy_steps[0].shared_fix);
+        assert!(policy_steps[0].action.contains("group AdminGroup"));
+        let encoded = serde_json::to_value(policy_steps[0]).unwrap();
+        assert_eq!(encoded["shared_fix"], true);
     }
 
     #[test]

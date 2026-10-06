@@ -617,6 +617,70 @@ export const findingVerificationSentence = (
 };
 
 /**
+ * The name a reader sees for one problem.
+ *
+ * ScubaGear and Maester title every control for the state that passes, and
+ * only a failed control becomes a finding. Printed alone, that title reads as
+ * a pass. Other families keep the engine's own title.
+ */
+export const findingHeadline = (
+  locale: "en" | "zh-TW",
+  title: string,
+  family?: FindingFamily,
+): string => {
+  if (family !== "microsoft365") return title;
+  return locale === "en" ? `Requirement not met: ${title}` : `未符合要求：${title}`;
+};
+
+/**
+ * The line under a next step that covers more than one problem.
+ *
+ * Shared means every merged finding is fixed by the one specific change the
+ * action names. Otherwise the action is one kind of change that each problem
+ * still has to receive in its own place.
+ */
+export const stepGroupLead = (
+  locale: "en" | "zh-TW",
+  count: number,
+  sharedFix: boolean,
+  reason: string,
+): string => {
+  if (sharedFix) {
+    return locale === "en"
+      ? `${count} problems name this same fix. The first is ${reason}`
+      : `有 ${count} 項問題指向同一個修復方式，第一項是 ${reason}`;
+  }
+  return locale === "en"
+    ? `${count} related problems call for this kind of change; each needs its own fix. The first is ${reason}`
+    : `有 ${count} 項相關問題需要這類處理，每一項都要分別修正；第一項是 ${reason}`;
+};
+
+/**
+ * How the reader confirms the step.
+ *
+ * One problem uses that finding's own verification sentence when one was
+ * retained. Several problems only share a kind of change, so confirmation is
+ * a rerun of the same scan.
+ */
+export const stepConfirmation = (
+  locale: "en" | "zh-TW",
+  verification: string | undefined,
+  title: string,
+  problems: number,
+): string => {
+  if (problems > 1) {
+    return locale === "en"
+      ? "Rerun the same scan after the changes and confirm these problems are no longer reported."
+      : "修正後以相同範圍重新掃描，確認這些問題不再被回報。";
+  }
+  const guidance = verification?.trim();
+  if (guidance) return findingVerificationSentence(locale, guidance, title);
+  return locale === "en"
+    ? "Rerun the same scan after the change and confirm this problem is no longer reported."
+    : "修正後以相同範圍重新掃描，確認這項問題不再被回報。";
+};
+
+/**
  * The canonical English basis clauses, as the backend writes them.
  *
  * Held here so a stored priority reason can be recognised by shape. Keyed by
