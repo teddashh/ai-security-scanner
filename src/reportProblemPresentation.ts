@@ -28,10 +28,12 @@ export function projectProblemRows<T extends ProblemFinding>(
     if (!ids.includes(group.representativeFindingId) || members.length < 2 || members.some(member =>
       assetsOf(member).length !== 1 || assetsOf(member)[0] !== group.targetAssetId
       || membership.has(idOf(member)))) continue;
-    const finding = [...members].sort((left, right) =>
-      severityOrder.indexOf(left.severity) - severityOrder.indexOf(right.severity)
-      || (right.priority ?? 0) - (left.priority ?? 0)
-      || idOf(left).localeCompare(idOf(right)))[0]!;
+    // The report's representative; a filtered list that hides it shows its highest-ranked listed member.
+    const finding = members.find(member => idOf(member) === group.representativeFindingId)
+      ?? [...members].sort((left, right) =>
+        severityOrder.indexOf(left.severity) - severityOrder.indexOf(right.severity)
+        || (right.priority ?? 0) - (left.priority ?? 0)
+        || idOf(left).localeCompare(idOf(right)))[0]!;
     const row = { finding, members, group };
     for (const member of members) membership.set(idOf(member), row);
   }

@@ -441,7 +441,7 @@ test.each([
           reportFinding("policy-low", "low"),
           reportFinding("policy-critical", "critical"),
         ],
-        problemGroups: [passwordGroup(["policy-low", "policy-critical"], "policy-low")],
+        problemGroups: [passwordGroup(["policy-low", "policy-critical"], "policy-critical")],
       },
       onOpenFinding,
     },
@@ -505,7 +505,7 @@ test.each([
       reportFinding("policy-low", "low"),
       reportFinding("policy-critical", "critical"),
     ],
-    problemGroups: [passwordGroup(["policy-low", "policy-critical"], "policy-low")],
+    problemGroups: [passwordGroup(["policy-low", "policy-critical"], "policy-critical")],
   };
   const { container } = renderVerification(
     summary({

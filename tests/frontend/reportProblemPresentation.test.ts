@@ -36,6 +36,15 @@ test("asset boundaries, missing members and overlapping groups cannot hide origi
   assert.equal(rows.length,2);
   assert.equal(rows[1].finding.id,"third");
 });
+test("a card shows the report's representative, or its best listed member when a filter hides it", () => {
+  // The report breaks a tie by scanner and rule, so its choice need not have the first ID.
+  const tied = {...group,representativeFindingId:"z-rule",findingIds:["a-rule","z-rule"]};
+  const findings = [finding("a-rule","high"),finding("z-rule","high")];
+  assert.equal(projectProblemRows(findings,[tied])[0].finding.id,"z-rule");
+  const three = {...group,findingIds:["low","high","other"]};
+  const visible = [finding("low"),finding("other","medium")];
+  assert.equal(projectProblemRows(visible,[three])[0].finding.id,"other");
+});
 test("group titles translate product wording and keep the recorded policy label", () => {
   assert.equal(problemGroupTitle(group,"zh-TW"),"IAM 密碼政策需要調整");
   assert.equal(problemGroupTitle({...group,kind:"root_account_usage"},"zh-TW"),"最近使用過 root 帳號");

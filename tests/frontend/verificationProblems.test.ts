@@ -62,7 +62,7 @@ const count = (problems: readonly { state: DiffState }[], state: DiffState) =>
 test("a resolved group stays one card beside ungrouped resolved and new problems", () => {
   const baseline = report(
     [finding("low", "low"), finding("high", "critical"), finding("solo", "medium")],
-    [group("password", ["low", "high"], "iam_password_policy", "low")],
+    [group("password", ["low", "high"], "iam_password_policy", "high")],
   );
   const problems = compareProblems([
     diff({
@@ -324,7 +324,7 @@ test("a baseline group stays one problem when the current report groups only one
 test("problems are ordered by their first member diff", () => {
   const baseline = report(
     [finding("high", "critical"), finding("low", "low"), finding("solo", "medium")],
-    [group("password", ["high", "low"], "iam_password_policy", "low")],
+    [group("password", ["high", "low"], "iam_password_policy", "high")],
   );
   const problems = compareProblems([
     diff({ id: "new", state: "new", comparisonStatus: "newly_observed", currentFindingId: "new" }),
@@ -338,12 +338,26 @@ test("problems are ordered by their first member diff", () => {
   assert.equal(problems[1]?.lead.id, "g-high");
 });
 
+test("a tied card leads with the report's representative, not the first finding ID", () => {
+  const side = report(
+    [finding("a-rule", "high"), finding("z-rule", "high")],
+    [group("code", ["a-rule", "z-rule"], "code_weakness", "z-rule")],
+  );
+  const problems = compareProblems([
+    diff({ id: "a", state: "persistent", comparisonStatus: "still_present", baselineFindingId: "a-rule", currentFindingId: "a-rule" }),
+    diff({ id: "z", state: "persistent", comparisonStatus: "still_present", baselineFindingId: "z-rule", currentFindingId: "z-rule" }),
+  ], side, side);
+
+  assert.equal(problems.length, 1);
+  assert.equal(problems[0]?.lead.id, "z");
+});
+
 test("diffs that only meet through the other side stay one problem", () => {
   const baseline = report(
     [finding("c-low", "low"), finding("c-high", "critical"), finding("a-low", "low"), finding("a-high", "high")],
     [
-      group("g-c", ["c-low", "c-high"], "iam_password_policy", "c-low"),
-      group("g-a", ["a-low", "a-high"], "root_account_usage", "a-low"),
+      group("g-c", ["c-low", "c-high"], "iam_password_policy", "c-high"),
+      group("g-a", ["a-low", "a-high"], "root_account_usage", "a-high"),
     ],
   );
   const current = report(
@@ -381,7 +395,7 @@ test("diffs that only meet through the other side stay one problem", () => {
 test("an unverifiable problem with no current side displays from the baseline", () => {
   const baseline = report(
     [finding("first", "medium"), finding("second", "high")],
-    [group("password", ["first", "second"], "iam_password_policy", "first")],
+    [group("password", ["first", "second"], "iam_password_policy", "second")],
   );
   const problems = compareProblems([
     diff({ id: "first", state: "unverifiable", comparisonStatus: "unable_to_verify", baselineFindingId: "first", beforeSeverity: "medium" }),
