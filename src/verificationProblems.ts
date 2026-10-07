@@ -14,8 +14,11 @@ export interface VerificationProblemReport {
   problemGroups?: readonly BeginnerReportProblemGroup[];
 }
 
+/** Filter and list order: each state in turn, as the exported report lists them. */
+export const problemStateOrder: readonly DiffState[] = ["resolved", "persistent", "new", "unverifiable"];
+
 export interface VerificationProblem {
-  /** Id of the earliest member diff. Problems stay in that order. */
+  /** Id of the earliest member diff. */
   id: string;
   state: DiffState;
   moved: boolean;
@@ -35,6 +38,8 @@ interface RenderedGroups {
   groupByFindingId: ReadonlyMap<string, BeginnerReportProblemGroup>;
   rowOrderByGroupId: ReadonlyMap<string, number>;
   representativeIdByGroupId: ReadonlyMap<string, string>;
+  /** Results row of every finding this side lists, grouped or not. */
+  rowOrderByFindingId: ReadonlyMap<string, number>;
 }
 
 // Same order `projectProblemRows` uses. A lower index is a higher severity.
@@ -95,13 +100,15 @@ const renderedGroups = (report: VerificationProblemReport | undefined): Rendered
   const groupByFindingId = new Map<string, BeginnerReportProblemGroup>();
   const rowOrderByGroupId = new Map<string, number>();
   const representativeIdByGroupId = new Map<string, string>();
+  const rowOrderByFindingId = new Map<string, number>();
   rows.forEach((row, index) => {
+    for (const member of row.members) rowOrderByFindingId.set(member.findingId, index);
     if (!row.group) return;
     rowOrderByGroupId.set(row.group.groupId, index);
     representativeIdByGroupId.set(row.group.groupId, row.finding.findingId);
     for (const member of row.members) groupByFindingId.set(member.findingId, row.group);
   });
-  return { groupByFindingId, rowOrderByGroupId, representativeIdByGroupId };
+  return { groupByFindingId, rowOrderByGroupId, representativeIdByGroupId, rowOrderByFindingId };
 };
 
 const nodeKey = (prefix: "B" | "C", findingId: string, side: RenderedGroups | undefined): string =>
@@ -158,6 +165,10 @@ const leadDiff = (
  * One card stays present while any member is observed again. It is no longer
  * observed only when every member was compared and none remains, and new only
  * when every member is new. Every other mix stays unverifiable.
+ *
+ * Each state lists its problems in the Results order of the side they display
+ * from, like the exported report. A lead that side does not list sorts last;
+ * equal positions keep the order of their first member diff.
  */
 export function compareProblems(
   diffs: readonly VerificationDiff[],
@@ -211,27 +222,38 @@ export function compareProblems(
     rootOrder.push(root);
   });
 
-  return rootOrder.flatMap((root) => {
+  const positioned = rootOrder.flatMap((root) => {
     const members = grouped.get(root);
     const first = members?.[0];
     if (!members || !first) return [];
     const state = problemState(members);
     const showsBaseline = state === "resolved" || members.every((member) => !sideFindingId(member, false));
-    const displayed = displayGroup(members, showsBaseline, showsBaseline ? baseline : current);
+    const side = showsBaseline ? baseline : current;
+    const displayed = displayGroup(members, showsBaseline, side);
+    const lead = leadDiff(members, showsBaseline, displayed.representativeId);
+    const leadId = sideFindingId(lead, showsBaseline);
     const beforeSeverity = highestSeverity(members.map((member) => member.beforeSeverity));
     const afterSeverity = highestSeverity(members.map((member) => member.afterSeverity));
-    return [{
+    const problem: VerificationProblem = {
       id: first.id,
       state,
       moved: problemMoved(state, members),
       members,
-      lead: leadDiff(members, showsBaseline, displayed.representativeId),
+      lead,
       displaysBaseline: showsBaseline,
       ...(displayed.group ? { group: displayed.group } : {}),
       ...(beforeSeverity ? { beforeSeverity } : {}),
       ...(afterSeverity ? { afterSeverity } : {}),
-    }];
+    };
+    return [{ problem, position: leadId === undefined ? undefined : side?.rowOrderByFindingId.get(leadId) }];
   });
+
+  const rank = (position: number | undefined): number => position ?? Number.MAX_SAFE_INTEGER;
+  return positioned
+    .sort((left, right) =>
+      problemStateOrder.indexOf(left.problem.state) - problemStateOrder.indexOf(right.problem.state)
+      || rank(left.position) - rank(right.position))
+    .map(({ problem }) => problem);
 }
 
 /** Members this scan reported: still present, changed, or new. */

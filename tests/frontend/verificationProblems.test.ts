@@ -258,26 +258,26 @@ test("native status priority keeps a still-present member ahead of an unverifiab
   assert.equal(problems[1]?.state, "unverifiable");
 });
 
-test("no reports leave one problem per diff in diff order", () => {
+test("no reports leave one problem per diff, each state in diff order", () => {
   const diffs = [
-    diff({ id: "1", state: "resolved", comparisonStatus: "resolved", baselineFindingId: "a" }),
-    diff({ id: "2", state: "resolved", comparisonStatus: "resolved", baselineFindingId: "b" }),
-    diff({ id: "3", state: "persistent", baselineFindingId: "c", currentFindingId: "c" }),
     diff({ id: "4", state: "new", currentFindingId: "d" }),
+    diff({ id: "1", state: "resolved", comparisonStatus: "resolved", baselineFindingId: "a" }),
     diff({ id: "5", state: "unverifiable", comparisonStatus: "unable_to_verify", baselineFindingId: "e" }),
+    diff({ id: "3", state: "persistent", baselineFindingId: "c", currentFindingId: "c" }),
+    diff({ id: "2", state: "resolved", comparisonStatus: "resolved", baselineFindingId: "b" }),
   ];
   const problems = compareProblems(diffs);
 
   assert.equal(problems.length, diffs.length);
-  assert.deepEqual(problems.map((problem) => problem.id), diffs.map((item) => item.id));
-  assert.deepEqual(problems.map((problem) => problem.state), diffs.map((item) => item.state));
+  assert.deepEqual(problems.map((problem) => problem.id), ["1", "2", "3", "4", "5"]);
+  assert.deepEqual(problems.map((problem) => problem.state), ["resolved", "resolved", "persistent", "new", "unverifiable"]);
   assert.deepEqual(problems.map((problem) => problem.members.length), [1, 1, 1, 1, 1]);
   assert.equal(count(problems, "resolved"), 2);
   assert.equal(count(problems, "persistent"), 1);
   assert.equal(count(problems, "new"), 1);
   assert.equal(count(problems, "unverifiable"), 1);
 
-  const grouped = compareProblems(diffs.slice(0, 2), report(
+  const grouped = compareProblems(diffs.filter((item) => item.state === "resolved"), report(
     [finding("a"), finding("b")],
     [group("password", ["a", "b"])],
   ));
@@ -321,19 +321,28 @@ test("a baseline group stays one problem when the current report groups only one
   assert.equal(problems[0]?.lead.assetName, "kept-asset");
 });
 
-test("problems are ordered by their first member diff", () => {
+test("each state lists its problems in the Results order of the side it displays from", () => {
   const baseline = report(
-    [finding("high", "critical"), finding("low", "low"), finding("solo", "medium")],
+    [finding("crit", "critical"), finding("high", "high"), finding("med", "medium"), finding("low", "low")],
     [group("password", ["high", "low"], "iam_password_policy", "high")],
   );
+  const current = report(
+    [finding("new-high", "high"), finding("med", "medium"), finding("new-low", "low")],
+    [],
+  );
   const problems = compareProblems([
-    diff({ id: "new", state: "new", comparisonStatus: "newly_observed", currentFindingId: "new" }),
     diff({ id: "g-low", state: "resolved", comparisonStatus: "resolved", baselineFindingId: "low" }),
-    diff({ id: "solo", state: "resolved", comparisonStatus: "resolved", baselineFindingId: "solo" }),
-    diff({ id: "g-high", state: "resolved", comparisonStatus: "resolved", baselineFindingId: "high", beforeSeverity: "critical" }),
-  ], baseline);
+    diff({ id: "new-low", state: "new", comparisonStatus: "newly_observed", currentFindingId: "new-low" }),
+    diff({ id: "unlisted", state: "resolved", comparisonStatus: "resolved", baselineFindingId: "not-in-results" }),
+    diff({ id: "crit", state: "resolved", comparisonStatus: "resolved", baselineFindingId: "crit" }),
+    diff({ id: "med", state: "persistent", comparisonStatus: "still_present", baselineFindingId: "med", currentFindingId: "med" }),
+    diff({ id: "new-high", state: "new", comparisonStatus: "newly_observed", currentFindingId: "new-high" }),
+    diff({ id: "g-high", state: "resolved", comparisonStatus: "resolved", baselineFindingId: "high" }),
+  ], baseline, current);
 
-  assert.deepEqual(problems.map((problem) => problem.id), ["new", "g-low", "solo"]);
+  // No longer observed follows the before-fix Results, the others the after-fix
+  // Results; a lead Results does not list comes last in its state.
+  assert.deepEqual(problems.map((problem) => problem.id), ["crit", "g-low", "unlisted", "med", "new-high", "new-low"]);
   assert.deepEqual(problems[1]?.members.map((member) => member.id), ["g-low", "g-high"]);
   assert.equal(problems[1]?.lead.id, "g-high");
 });

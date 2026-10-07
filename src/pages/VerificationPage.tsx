@@ -13,6 +13,7 @@ import { isVerificationBaselineRun } from "../runLifecycle.ts";
 import type { Asset, DiffState, Finding, ScanRun, VerificationSummary } from "../types";
 import {
   compareProblems,
+  problemStateOrder,
   reportedMemberCount,
   type VerificationProblem,
   type VerificationProblemReport,
@@ -189,7 +190,7 @@ const redactedSnapshotHash = "[redacted snapshot hash]";
 const shortSnapshotHash = (value: string): string =>
   value === redactedSnapshotHash ? value : value.slice(0, 12);
 
-const states: DiffState[] = ["resolved", "persistent", "new", "unverifiable"];
+const states = problemStateOrder;
 
 const stateSummaryCopy = {
   resolved: {
