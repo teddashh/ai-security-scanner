@@ -43,7 +43,7 @@ You can reopen reports, compare compatible scans and share an English or Traditi
 
 These examples use simulated data: 62 findings and 42 inventory observations across all 25 tools. They show the report format, not the security of a real company. Inventory is listed separately from security problems. [How the examples were made](docs/samples/v0.4.0/README.md).
 
-For a real scan, see [a project fixed and checked again](https://teddashh.github.io/ai-security-scanner/check-fixes-demo.html): 26 problems before the fix, 16 after, and what changed between them.
+For a real scan, see [a project fixed and checked again](https://teddashh.github.io/ai-security-scanner/check-fixes-demo.html): 13 problems before the fix, 8 after, and what changed between them.
 
 ## Get help from Claude Code or Codex
 
