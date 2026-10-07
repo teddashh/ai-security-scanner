@@ -23,6 +23,7 @@ import {
   stepConfirmation,
   stepGroupLead,
   findingImpactSentence,
+  findingLineText,
   findingLocationText,
   findingSummarySentence,
   localizedExpertType,
@@ -967,6 +968,21 @@ test("the scanner location reads as a place, not a coordinate string", () => {
   for (const { raw, en, zh } of rows) {
     assert.equal(findingLocationText("en", raw), en, raw);
     assert.equal(findingLocationText("zh-TW", raw), zh, raw);
+  }
+});
+
+test("a code or secret card's shared place leaves out one finding's column", () => {
+  const rows = [
+    { raw: "app.py:line=21:column=14", en: "app.py · line 21", zh: "app.py · 第 21 行" },
+    { raw: "./deploy/deploy_key:line=1:column=1", en: "deploy/deploy_key · line 1", zh: "deploy/deploy_key · 第 1 行" },
+    { raw: "deploy/deploy_key:line=1", en: "deploy/deploy_key · line 1", zh: "deploy/deploy_key · 第 1 行" },
+    // Without a line there is no shared place to shorten.
+    { raw: "app.py:column=14", en: "app.py · column 14", zh: "app.py · 第 14 欄" },
+    { raw: "requirements.txt", en: "requirements.txt", zh: "requirements.txt" },
+  ];
+  for (const { raw, en, zh } of rows) {
+    assert.equal(findingLineText("en", raw), en, raw);
+    assert.equal(findingLineText("zh-TW", raw), zh, raw);
   }
 });
 

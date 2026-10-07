@@ -207,3 +207,71 @@ test("an exposed secret card shows one revoke step, and a grouped correlation su
     cleanup();
   }
 });
+
+test("code and secret cards name their shared file and line; a package card names none", () => {
+  const codeTitle = "A subprocess launched through a shell can allow command injection.";
+  for (const locale of ["en", "zh-TW"] as const) {
+    window.localStorage.setItem(localeStorageKey, locale);
+    const value = report();
+    const at = (id: string, location: string, family: BeginnerReportFinding["family"]): BeginnerReportFinding => {
+      const base = finding(id, "high");
+      return {
+        ...base,
+        family,
+        evidenceReferences: base.evidenceReferences.map((reference) => ({ ...reference, location })),
+      };
+    };
+    value.findings = [
+      at("code-a", "app.py:line=21:column=14", "source_code"),
+      at("code-b", "app.py:line=21:column=56", "source_code"),
+      at("key-a", "deploy/deploy_key:line=1:column=1", "secret"),
+      at("key-b", "deploy/deploy_key:line=1", "secret"),
+      at("dep-a", "requirements.txt", "vulnerable_component"),
+      at("dep-b", "requirements.txt", "vulnerable_component"),
+    ];
+    value.problemGroups = [
+      {
+        groupId: "code",
+        ruleVersion: "code-line-weakness-1",
+        kind: "code_weakness",
+        title: codeTitle,
+        targetAssetId: "aws",
+        representativeFindingId: "code-a",
+        findingIds: ["code-a", "code-b"],
+      },
+      {
+        groupId: "secret",
+        ruleVersion: "secret-location-1",
+        kind: "exposed_secret",
+        title: "Secret found in a file",
+        targetAssetId: "aws",
+        representativeFindingId: "key-a",
+        findingIds: ["key-a", "key-b"],
+      },
+      {
+        groupId: "package",
+        ruleVersion: "dependency-advisory-1",
+        kind: "vulnerable_dependency",
+        title: "Vulnerable package pyyaml 5.3.1 (CVE-2020-14343 / GHSA-8q59-q68h-6hv4)",
+        targetAssetId: "aws",
+        representativeFindingId: "dep-a",
+        findingIds: ["dep-a", "dep-b"],
+        packageName: "pyyaml",
+        installedVersion: "5.3.1",
+        advisoryIds: ["CVE-2020-14343", "GHSA-8q59-q68h-6hv4"],
+      },
+    ];
+    const {container} = page(value);
+    const target = (title: string) => [...container.querySelectorAll(".priority-card")]
+      .find((card) => card.querySelector("h3")?.textContent?.includes(title))
+      ?.querySelector(".priority-card__target")?.textContent;
+    const label = locale === "en" ? "Location" : "位置";
+    expect(target(codeTitle)).toContain(`${label}${locale === "en" ? "app.py · line 21" : "app.py · 第 21 行"}`);
+    expect(target(codeTitle)).not.toContain(locale === "en" ? "column" : "欄");
+    expect(target(locale === "en" ? "Secret found in a file" : "檔案中發現機密"))
+      .toContain(`${label}${locale === "en" ? "deploy/deploy_key · line 1" : "deploy/deploy_key · 第 1 行"}`);
+    expect(target("pyyaml 5.3.1")).toBeDefined();
+    expect(target("pyyaml 5.3.1")).not.toContain(label);
+    cleanup();
+  }
+});

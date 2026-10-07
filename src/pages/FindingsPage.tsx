@@ -35,6 +35,7 @@ import {
   stepConfirmation,
   stepGroupLead,
   findingImpactSentence,
+  findingLineText,
   findingLocationText,
   isEvidenceOnlyPriorityReason,
   findingSeverityIsUnrated,
@@ -2666,6 +2667,12 @@ export function FindingsPage({
       .filter((location): location is string => Boolean(location))
       .map((location) => findingLocationText(locale, location))),
   ];
+  const linesFor = (finding: Finding): string[] => [
+    ...new Set(finding.evidence
+      .map((evidence) => evidence.location?.trim())
+      .filter((location): location is string => Boolean(location))
+      .map((location) => findingLineText(locale, location))),
+  ];
   const criticalCount = orderedProblems.filter(({finding}) => finding.severity === "critical").length;
   const highCount = orderedProblems.filter(({finding}) => finding.severity === "high").length;
   const needsReview = orderedProblems.filter(({members}) => members.some(finding => ["unreviewed", "unconfirmed", "expert_review_requested"].includes(finding.workflowState))).length;
@@ -3208,7 +3215,12 @@ export function FindingsPage({
             {topFindings.map(({finding, group, members}, index) => {
               const scannerRemediations = group ? [] : uniqueScannerRemediations(finding.evidence);
               const scannerFixedVersions = group ? [] : uniqueScannerFixedVersions(finding.evidence);
-              const locations = group ? [] : locationsFor(finding);
+              // A code or secret card's findings share one file and starting line.
+              const locations = !group
+                ? locationsFor(finding)
+                : group.kind === "code_weakness" || group.kind === "exposed_secret"
+                  ? linesFor(finding)
+                  : [];
               // A partly lowered password-policy group already says what comes first.
               const orderReason = (
                 group?.lowerPriorityMembers === "partial"

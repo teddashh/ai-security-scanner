@@ -2876,3 +2876,14 @@ export const findingLocationText = (locale: "en" | "zh-TW", raw: string): string
   }
   return parts.join(" · ");
 };
+
+/**
+ * The file and starting line of a stored location, for a code or secret
+ * problem card whose findings all share them. A column belongs to one of the
+ * card's findings, so it is left out. Any other location reads as in
+ * `findingLocationText`.
+ */
+export const findingLineText = (locale: "en" | "zh-TW", raw: string): string => {
+  const [, path, line] = LOCATION_COORDINATE_FORM.exec(raw.trim()) ?? [];
+  return findingLocationText(locale, path && line ? `${path}:line=${line}` : raw);
+};
