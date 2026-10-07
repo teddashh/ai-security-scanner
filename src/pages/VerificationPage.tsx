@@ -13,6 +13,7 @@ import { isVerificationBaselineRun } from "../runLifecycle.ts";
 import type { Asset, DiffState, Finding, ScanRun, VerificationSummary } from "../types";
 import {
   compareProblems,
+  reportedMemberCount,
   type VerificationProblem,
   type VerificationProblemReport,
 } from "../verificationProblems.ts";
@@ -160,6 +161,7 @@ const copy = {
   unknown: { en: "Unknown", zhTW: "未知" },
   openEvidence: { en: "Open finding evidence", zhTW: "查看問題證據" },
   originalFindingCount: { en: "{count} original findings", zhTW: "{count} 筆原始發現" },
+  originalFindingsFound: { en: "{found} of {count} original findings found this time", zhTW: "{count} 筆原始發現中，這次找到 {found} 筆" },
   originalFindingsCompared: { en: "Original findings compared", zhTW: "比較的原始發現" },
   baselineMissing: {
     en: "The baseline finding is no longer in the current list. Its complete technical history remains in the case package.",
@@ -225,6 +227,7 @@ function GroupedComparisonArticle({
   const { locale, text, formatNumber } = useI18n();
   const meta = diffMeta[problem.state];
   const displaySeverity = problem.afterSeverity ?? problem.beforeSeverity;
+  const found = reportedMemberCount(problem);
   const findingId = (problem.displaysBaseline ? problem.lead.baselineFindingId : problem.lead.currentFindingId)
     ?? problem.lead.findingId;
   const findingAvailable = Boolean(findingId && findings.some((finding) => finding.id === findingId));
@@ -244,7 +247,9 @@ function GroupedComparisonArticle({
         <div className="diff-row__meta">
           <StatusPill label={meta.label} tone={meta.tone} />
           {displaySeverity && <StatusPill label={severityMeta[displaySeverity].label} tone={severityMeta[displaySeverity].tone} />}
-          <span className="diff-row__count">{text(copy.originalFindingCount, { count: formatNumber(problem.members.length) })}</span>
+          <span className="diff-row__count">{problem.state === "persistent" && found < problem.members.length
+            ? text(copy.originalFindingsFound, { found: formatNumber(found), count: formatNumber(problem.members.length) })
+            : text(copy.originalFindingCount, { count: formatNumber(problem.members.length) })}</span>
         </div>
         <h3>{title}</h3>
         <p>{text(summaryCopy)}</p>

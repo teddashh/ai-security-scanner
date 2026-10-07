@@ -233,3 +233,11 @@ export function compareProblems(
     }];
   });
 }
+
+/** Members this scan reported: still present, changed, or new. */
+export function reportedMemberCount(problem: VerificationProblem): number {
+  return problem.members.filter((member) => {
+    const status = nativeStatus(member);
+    return status === "still_present" || status === "changed" || status === "newly_observed";
+  }).length;
+}

@@ -488,6 +488,104 @@ test.each([
 });
 
 test.each([
+  ["en", {
+    title: "IAM password policy needs attention",
+    partlyFixedCount: "1 of 2 original findings found this time",
+    fullCount: "2 original findings",
+  }],
+  ["zh-TW", {
+    title: "IAM 密碼政策需要調整",
+    partlyFixedCount: "2 筆原始發現中，這次找到 1 筆",
+    fullCount: "2 筆原始發現",
+  }],
+] as const)("a partly fixed grouped problem says how many findings were found this time (%s)", (locale, phrase) => {
+  window.localStorage.setItem(localeStorageKey, locale);
+  const report: VerificationProblemReport = {
+    findings: [
+      reportFinding("policy-low", "low"),
+      reportFinding("policy-critical", "critical"),
+    ],
+    problemGroups: [passwordGroup(["policy-low", "policy-critical"], "policy-low")],
+  };
+  const { container } = renderVerification(
+    summary({
+      diffs: [
+        diff({
+          id: "high",
+          state: "persistent",
+          comparisonStatus: "still_present",
+          findingId: "policy-critical",
+          baselineFindingId: "policy-critical",
+          currentFindingId: "policy-critical",
+          beforeSeverity: "critical",
+          afterSeverity: "critical",
+          title: "Minimum length",
+        }),
+        diff({
+          id: "low",
+          state: "resolved",
+          comparisonStatus: "resolved",
+          findingId: "policy-low",
+          baselineFindingId: "policy-low",
+          beforeSeverity: "low",
+          title: "Symbol requirement",
+        }),
+      ],
+    }),
+    bothRunsCompleted,
+    [],
+    {
+      baselineReport: report,
+      currentReport: report,
+    },
+  );
+
+  expect(container.querySelectorAll(".diff-row")).toHaveLength(1);
+  const row = diffRow(container, phrase.title);
+  expect(row.querySelector(".diff-row__count")?.textContent).toBe(phrase.partlyFixedCount);
+  cleanup();
+
+  const { container: allPresentContainer } = renderVerification(
+    summary({
+      diffs: [
+        diff({
+          id: "high",
+          state: "persistent",
+          comparisonStatus: "still_present",
+          findingId: "policy-critical",
+          baselineFindingId: "policy-critical",
+          currentFindingId: "policy-critical",
+          beforeSeverity: "critical",
+          afterSeverity: "critical",
+          title: "Minimum length",
+        }),
+        diff({
+          id: "low",
+          state: "persistent",
+          comparisonStatus: "still_present",
+          findingId: "policy-low",
+          baselineFindingId: "policy-low",
+          currentFindingId: "policy-low",
+          beforeSeverity: "low",
+          afterSeverity: "low",
+          title: "Symbol requirement",
+        }),
+      ],
+    }),
+    bothRunsCompleted,
+    [],
+    {
+      baselineReport: report,
+      currentReport: report,
+    },
+  );
+
+  expect(allPresentContainer.querySelectorAll(".diff-row")).toHaveLength(1);
+  const allPresentRow = diffRow(allPresentContainer, phrase.title);
+  expect(allPresentRow.querySelector(".diff-row__count")?.textContent).toBe(phrase.fullCount);
+});
+
+test.each([
   ["en", "only its line moved", "The same problem is still present"],
   ["zh-TW", "只是行號改變", "相同問題仍然存在"],
 ] as const)("a grouped problem uses the moved summary only when every observed member moved (%s)", (locale, moved, persistent) => {

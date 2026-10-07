@@ -19342,13 +19342,39 @@ fn html_compared_original_findings(
                 html_escape(compared_member_status_label(&diff.status, catalog)),
             ));
         }
+        // A card that is still present but only partly fixed says how many of its
+        // original findings this scan found.
+        let found = problem
+            .diffs
+            .iter()
+            .filter(|diff| {
+                is_still_observed(diff) || diff.status == FindingDiffStatus::NewlyObserved
+            })
+            .count();
+        let partly_fixed = if problem.status == ComparedProblemStatus::StillPresent
+            && found < problem.diffs.len()
+        {
+            let count = catalog.format_number(problem.diffs.len());
+            let found = catalog.format_number(found);
+            match catalog.locale {
+                crate::export::ReportLocale::En => {
+                    format!(" \u{b7} {found} of {count} original findings found this time")
+                }
+                crate::export::ReportLocale::ZhHant => {
+                    format!(" \u{b7} {count} 筆原始發現中，這次找到 {found} 筆")
+                }
+            }
+        } else {
+            String::new()
+        };
         items.push_str(&format!(
-            "<li>{}<ul>{members}</ul></li>",
+            "<li>{}{}<ul>{members}</ul></li>",
             html_escape(&compared_problem_title(
                 problem,
                 display_side(problem, baseline, current),
                 catalog
             )),
+            html_escape(&partly_fixed),
         ));
     }
     if items.is_empty() {
@@ -51059,6 +51085,134 @@ mod tests {
             "{technical}"
         );
         assert_eq!(technical.matches("· 新出現").count(), 2, "{technical}");
+    }
+
+    #[test]
+    fn html_fix_check_comparison_says_how_many_findings_a_partly_fixed_card_still_has() {
+        use crate::report_problem_groups::ReportProblemKind;
+        let mut case = crate::report_problem_groups::tests::demo_like_case();
+        let report = build_beginner_master_report(&case, "run-1").expect("report");
+        let rendered = report.rendered_problem_membership();
+        let members_of = |kind: ReportProblemKind, title: &str| {
+            let group = report
+                .problem_groups
+                .iter()
+                .find(|group| {
+                    group.kind == kind
+                        && group.title_english() == title
+                        && rendered.contains_key(group.representative_finding_id.as_str())
+                })
+                .unwrap_or_else(|| panic!("rendered {title}"));
+            group
+                .finding_ids
+                .iter()
+                .map(|id| member_record(&report, id))
+                .collect::<Vec<_>>()
+        };
+        let secret = members_of(ReportProblemKind::ExposedSecret, "Secret found in a file");
+        let package = members_of(
+            ReportProblemKind::VulnerableDependency,
+            "Vulnerable package pyyaml 5.3.1 (CVE-2020-14343 / GHSA-8q59-q68h-6hv4)",
+        );
+        assert_eq!(secret.len(), 5);
+        assert_eq!(package.len(), 2);
+        // Three secret findings are reported again and two are gone. Both
+        // package findings are reported again.
+        let mut diffs = Vec::new();
+        for (index, (id, _, severity)) in secret.iter().enumerate() {
+            let (current, status, current_severity) = if index < 3 {
+                (
+                    Some(id.as_str()),
+                    FindingDiffStatus::StillPresent,
+                    Some(severity.clone()),
+                )
+            } else {
+                (None, FindingDiffStatus::Resolved, None)
+            };
+            diffs.push(fix_check_diff(
+                &format!("fp-secret-{index}"),
+                Some(id),
+                current,
+                status,
+                Some(severity.clone()),
+                current_severity,
+                false,
+            ));
+        }
+        for (index, (id, _, severity)) in package.iter().enumerate() {
+            diffs.push(fix_check_diff(
+                &format!("fp-package-{index}"),
+                Some(id),
+                Some(id),
+                FindingDiffStatus::StillPresent,
+                Some(severity.clone()),
+                Some(severity.clone()),
+                false,
+            ));
+        }
+        push_same_run_comparison(&mut case, diffs);
+
+        let english = html_for_run(
+            &case,
+            "run-1",
+            RedactionProfile::None,
+            crate::export::ReportLocale::En,
+        );
+        let section = verification_comparison_section(&english);
+        assert!(
+            section.contains(&comparison_kpis(false, [0, 2, 0, 0])),
+            "{section}"
+        );
+        let technical = section
+            .split_once("Original findings compared")
+            .expect("technical block")
+            .1;
+        assert!(
+            technical.contains(
+                "Secret found in a file \u{b7} 3 of 5 original findings found this time<ul>"
+            ),
+            "{technical}"
+        );
+        assert!(
+            technical.contains("GHSA-8q59-q68h-6hv4)<ul>"),
+            "the fully present package card keeps its plain title: {technical}"
+        );
+        assert_eq!(
+            technical.matches("found this time").count(),
+            1,
+            "{technical}"
+        );
+        assert_eq!(
+            technical.matches("· Still present").count(),
+            5,
+            "{technical}"
+        );
+        assert_eq!(
+            technical.matches("· No longer observed").count(),
+            2,
+            "{technical}"
+        );
+
+        let chinese = html_for_run(
+            &case,
+            "run-1",
+            RedactionProfile::None,
+            crate::export::ReportLocale::ZhHant,
+        );
+        let section = verification_comparison_section(&chinese);
+        assert!(
+            section.contains(&comparison_kpis(true, [0, 2, 0, 0])),
+            "{section}"
+        );
+        let technical = section
+            .split_once("比較的原始發現")
+            .expect("technical block")
+            .1;
+        assert!(
+            technical.contains("檔案中發現機密 \u{b7} 5 筆原始發現中，這次找到 3 筆<ul>"),
+            "{technical}"
+        );
+        assert_eq!(technical.matches("這次找到").count(), 1, "{technical}");
     }
 
     #[test]

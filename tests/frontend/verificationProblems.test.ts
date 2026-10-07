@@ -9,7 +9,11 @@ import type {
   Severity,
   VerificationDiff,
 } from "../../src/types.ts";
-import { compareProblems, type VerificationProblemReport } from "../../src/verificationProblems.ts";
+import {
+  compareProblems,
+  reportedMemberCount,
+  type VerificationProblemReport,
+} from "../../src/verificationProblems.ts";
 
 const finding = (id: string, severity: Severity = "low"): BeginnerReportFinding => ({
   findingId: id,
@@ -391,4 +395,71 @@ test("an unverifiable problem with no current side displays from the baseline", 
   assert.equal(problems[0]?.lead.id, "second");
   assert.equal(problems[0]?.beforeSeverity, "high");
   assert.equal(problems[0]?.afterSeverity, undefined);
+});
+
+test("reportedMemberCount counts members still present, changed, or new", () => {
+  const baseline = report(
+    [finding("m1"), finding("m2")],
+    [group("before", ["m1", "m2"])],
+  );
+  const current = report(
+    [finding("m1"), finding("m3")],
+    [group("after", ["m1", "m3"])],
+  );
+  const problems = compareProblems([
+    diff({
+      id: "m1",
+      state: "persistent",
+      comparisonStatus: "still_present",
+      baselineFindingId: "m1",
+      currentFindingId: "m1",
+    }),
+    diff({
+      id: "m2",
+      state: "resolved",
+      comparisonStatus: "resolved",
+      baselineFindingId: "m2",
+    }),
+    diff({
+      id: "m3",
+      state: "new",
+      comparisonStatus: "newly_observed",
+      currentFindingId: "m3",
+    }),
+  ], baseline, current);
+
+  assert.equal(problems.length, 1);
+  assert.equal(problems[0]?.state, "persistent");
+  assert.equal(reportedMemberCount(problems[0]!), 2);
+
+  const bothReport = report(
+    [finding("m1"), finding("m2"), finding("m3")],
+    [group("all", ["m1", "m2", "m3"])],
+  );
+  const allPresent = compareProblems([
+    diff({
+      id: "m1",
+      state: "persistent",
+      comparisonStatus: "still_present",
+      baselineFindingId: "m1",
+      currentFindingId: "m1",
+    }),
+    diff({
+      id: "m2",
+      state: "persistent",
+      comparisonStatus: "still_present",
+      baselineFindingId: "m2",
+      currentFindingId: "m2",
+    }),
+    diff({
+      id: "m3",
+      state: "persistent",
+      comparisonStatus: "still_present",
+      baselineFindingId: "m3",
+      currentFindingId: "m3",
+    }),
+  ], bothReport, bothReport);
+
+  assert.equal(allPresent.length, 1);
+  assert.equal(reportedMemberCount(allPresent[0]!), 3);
 });
