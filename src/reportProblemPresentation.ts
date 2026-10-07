@@ -54,6 +54,8 @@ export function problemGroupTitle(group: BeginnerReportProblemGroup, locale: Loc
     case "vulnerable_dependency":
       return `有已知弱點的套件 ${group.packageName ?? ""} ${group.installedVersion ?? ""}（${(group.advisoryIds ?? []).join(" / ")}）`;
     case "exposed_secret": return "檔案中發現機密";
+    // The representative finding's own title, as on a single card.
+    case "code_weakness": return group.title;
   }
 }
 
@@ -74,6 +76,7 @@ export function problemGroupAction(group: BeginnerReportProblemGroup | undefined
       : "檢查各掃描工具記錄的 root 使用時間範圍，日常工作改用 IAM role。";
     case "exposed_secret": return exposedCredentialNextStep(locale);
     case "vulnerable_dependency": return undefined;
+    case "code_weakness": return undefined;
     default: return undefined;
   }
 }
@@ -91,7 +94,8 @@ export function problemGroupImpact(group: BeginnerReportProblemGroup | undefined
       ? "Root-account activity uses permissions with broad control of this AWS account."
       : "root 帳號的活動會使用可廣泛控制此 AWS 帳號的權限。";
     case "vulnerable_dependency":
-    case "exposed_secret": return undefined;
+    case "exposed_secret":
+    case "code_weakness": return undefined;
     default: return undefined;
   }
 }

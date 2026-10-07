@@ -1427,7 +1427,8 @@ export interface BeginnerReportProblemGroup {
     | "root_account_usage"
     | "iam_policy_permissions"
     | "vulnerable_dependency"
-    | "exposed_secret";
+    | "exposed_secret"
+    | "code_weakness";
   title: string;
   targetAssetId: string;
   representativeFindingId: string;

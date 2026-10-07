@@ -570,7 +570,8 @@ export interface NativeBeginnerMasterReport {
       | "root_account_usage"
       | "iam_policy_permissions"
       | "vulnerable_dependency"
-      | "exposed_secret";
+      | "exposed_secret"
+      | "code_weakness";
     title: string;
     target_asset_id: string;
     representative_finding_id: string;

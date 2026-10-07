@@ -1591,7 +1591,19 @@ fn redact_beginner_master_report(report: &mut BeginnerMasterReport, case: &Asses
                     })
                 });
         }
-        group.title = group.title_english();
+        group.title = match group.kind {
+            // A code card's title is its representative finding's own title,
+            // which the findings loop above already redacted.
+            crate::report_problem_groups::ReportProblemKind::CodeWeakness => report
+                .findings
+                .iter()
+                .find(|finding| finding.finding_id == group.representative_finding_id)
+                .map_or_else(
+                    || "[redacted finding group]".to_owned(),
+                    |finding| finding.title.clone(),
+                ),
+            _ => group.title_english(),
+        };
     }
     let redacted_finding_steps = report
         .findings
@@ -5957,5 +5969,40 @@ mod tests {
             redacted_group.title,
             "Vulnerable package Organization-lib Organization-1.2.3 (CVE-2024-1111 / GHSA-abcd-efgh-ijkl)"
         );
+    }
+
+    #[test]
+    fn standard_redaction_rewrites_a_code_card_title_from_its_redacted_finding() {
+        let case = crate::report_problem_groups::tests::code_title_redaction_case();
+        let plain = beginner_report_for_export(&case, "run-1", RedactionProfile::None).unwrap();
+        let redacted =
+            beginner_report_for_export(&case, "run-1", RedactionProfile::Standard).unwrap();
+
+        let plain_group = plain
+            .problem_groups
+            .iter()
+            .find(|group| {
+                group.kind == crate::report_problem_groups::ReportProblemKind::CodeWeakness
+            })
+            .unwrap();
+        assert_eq!(
+            plain_group.title,
+            "Shell call in the acmecorp billing handler"
+        );
+
+        let redacted_group = redacted
+            .problem_groups
+            .iter()
+            .find(|group| {
+                group.kind == crate::report_problem_groups::ReportProblemKind::CodeWeakness
+            })
+            .unwrap();
+        assert!(!redacted_group.title.to_lowercase().contains("acmecorp"));
+        let redacted_finding = redacted
+            .findings
+            .iter()
+            .find(|finding| finding.finding_id == redacted_group.representative_finding_id)
+            .unwrap();
+        assert_eq!(redacted_group.title, redacted_finding.title);
     }
 }

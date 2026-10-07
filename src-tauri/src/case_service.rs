@@ -39612,13 +39612,14 @@ mod tests {
         let secret_zh = "檔案中發現機密";
         let secret_action_en = crate::finding_narrative::EXPOSED_SECRET_NEXT_STEP_ENGLISH;
         let secret_action_zh = crate::finding_narrative::EXPOSED_SECRET_NEXT_STEP_ZH_HANT;
-        for (locale, package_title, secret_title, secret_action, counted, expert) in [
+        for (locale, package_title, secret_title, secret_action, code_action, counted, expert) in [
             (
                 crate::export::ReportLocale::En,
                 package_en,
                 secret_en,
                 secret_action_en,
-                "5 related problems call for this kind of change; each needs its own fix.",
+                "Change the code to remove the reported unsafe pattern",
+                "13 problems \u{b7} 26 original findings",
                 "Secrets-response specialist",
             ),
             (
@@ -39626,7 +39627,8 @@ mod tests {
                 package_zh,
                 secret_zh,
                 secret_action_zh,
-                "有 5 項相關問題需要這類處理，每一項都要分別修正",
+                "修改程式碼以移除回報的不安全寫法",
+                "13 項問題 \u{b7} 26 筆原始發現",
                 "機密外洩應變專家",
             ),
         ] {
@@ -39657,6 +39659,17 @@ mod tests {
                 "{secret_item}"
             );
             assert!(secret_item.contains(expert), "{secret_item}");
+            // The five CWE-78 findings on one line are one code card, so the
+            // code-change step covers one problem and has no count in front.
+            let code_item = html
+                .split("<li><strong>")
+                .find(|item| item.starts_with(code_action))
+                .unwrap_or_else(|| panic!("missing code step: {code_action}"));
+            let code_item = code_item.split("</li>").next().unwrap();
+            assert!(
+                !(code_item.contains("related") || code_item.contains("項相關問題")),
+                "{code_item}"
+            );
             println!("rendered card title: {package_title}");
             println!("rendered card title: {secret_title}");
             println!("rendered secret step: {secret_action}");

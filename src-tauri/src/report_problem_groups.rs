@@ -13,6 +13,7 @@ use std::collections::{BTreeMap, BTreeSet};
 const RULE_VERSION: &str = "aws-related-checks-1";
 const DEPENDENCY_RULE_VERSION: &str = "dependency-advisory-1";
 const SECRET_RULE_VERSION: &str = "secret-location-1";
+const CODE_RULE_VERSION: &str = "code-line-weakness-1";
 
 fn rule_version(kind: ReportProblemKind) -> &'static str {
     match kind {
@@ -21,6 +22,7 @@ fn rule_version(kind: ReportProblemKind) -> &'static str {
         | ReportProblemKind::IamPolicyPermissions => RULE_VERSION,
         ReportProblemKind::VulnerableDependency => DEPENDENCY_RULE_VERSION,
         ReportProblemKind::ExposedSecret => SECRET_RULE_VERSION,
+        ReportProblemKind::CodeWeakness => CODE_RULE_VERSION,
     }
 }
 
@@ -32,6 +34,7 @@ pub enum ReportProblemKind {
     IamPolicyPermissions,
     VulnerableDependency,
     ExposedSecret,
+    CodeWeakness,
 }
 
 /// How many members of a problem group this product ordered lower than their
@@ -86,9 +89,9 @@ impl ReportProblemGroup {
             ReportProblemKind::RootAccountUsage => Some(
                 "Review each scanner's root-usage window and use an IAM role for routine work.",
             ),
-            ReportProblemKind::IamPolicyPermissions | ReportProblemKind::VulnerableDependency => {
-                None
-            }
+            ReportProblemKind::IamPolicyPermissions
+            | ReportProblemKind::VulnerableDependency
+            | ReportProblemKind::CodeWeakness => None,
             ReportProblemKind::ExposedSecret => Some(EXPOSED_SECRET_NEXT_STEP_ENGLISH),
         }
     }
@@ -107,9 +110,9 @@ impl ReportProblemGroup {
             ReportProblemKind::RootAccountUsage => {
                 Some("檢查各掃描工具記錄的 root 使用時間範圍，日常工作改用 IAM role。")
             }
-            ReportProblemKind::IamPolicyPermissions | ReportProblemKind::VulnerableDependency => {
-                None
-            }
+            ReportProblemKind::IamPolicyPermissions
+            | ReportProblemKind::VulnerableDependency
+            | ReportProblemKind::CodeWeakness => None,
             ReportProblemKind::ExposedSecret => Some(EXPOSED_SECRET_NEXT_STEP_ZH_HANT),
         }
     }
@@ -129,7 +132,8 @@ impl ReportProblemGroup {
             ),
             ReportProblemKind::IamPolicyPermissions
             | ReportProblemKind::VulnerableDependency
-            | ReportProblemKind::ExposedSecret => None,
+            | ReportProblemKind::ExposedSecret
+            | ReportProblemKind::CodeWeakness => None,
         }
     }
 
@@ -148,10 +152,12 @@ impl ReportProblemGroup {
             }
             ReportProblemKind::IamPolicyPermissions
             | ReportProblemKind::VulnerableDependency
-            | ReportProblemKind::ExposedSecret => None,
+            | ReportProblemKind::ExposedSecret
+            | ReportProblemKind::CodeWeakness => None,
         }
     }
 
+    // A code card shows its representative finding's own title; see presented_group.
     pub fn title_english(&self) -> String {
         match self.kind {
             ReportProblemKind::IamPasswordPolicy => "IAM password policy needs attention".into(),
@@ -167,6 +173,7 @@ impl ReportProblemGroup {
                 self.advisory_ids.join(" / ")
             ),
             ReportProblemKind::ExposedSecret => "Secret found in a file".into(),
+            ReportProblemKind::CodeWeakness => self.title.clone(),
         }
     }
 
@@ -185,6 +192,7 @@ impl ReportProblemGroup {
                 self.advisory_ids.join(" / ")
             ),
             ReportProblemKind::ExposedSecret => "檔案中發現機密".into(),
+            ReportProblemKind::CodeWeakness => self.title.clone(),
         }
     }
 }
@@ -478,7 +486,26 @@ fn classified_as_hard_coded_credential(finding: &BeginnerFinding) -> bool {
     })
 }
 
-fn agreed_secret_place(finding: &BeginnerFinding) -> Option<(String, u32)> {
+/// The finding's CWE identifiers as `CWE-<digits>`, uppercased. Other values are ignored.
+fn code_weakness_ids(finding: &BeginnerFinding) -> BTreeSet<String> {
+    let mut ids = BTreeSet::new();
+    for evidence in &finding.evidence_references {
+        let Some(details) = evidence.scanner_details.as_ref() else {
+            continue;
+        };
+        for cwe in &details.cwe_ids {
+            let upper = cwe.trim().to_ascii_uppercase();
+            if upper.strip_prefix("CWE-").is_some_and(|digits| {
+                !digits.is_empty() && digits.bytes().all(|byte| byte.is_ascii_digit())
+            }) {
+                ids.insert(upper);
+            }
+        }
+    }
+    ids
+}
+
+fn agreed_source_place(finding: &BeginnerFinding) -> Option<(String, u32)> {
     let mut agreed = None;
     for evidence in &finding.evidence_references {
         let place =
@@ -561,7 +588,10 @@ fn presented_group(
         installed_version: presented.installed_version,
         advisory_ids: presented.advisory_ids,
     };
-    group.title = group.title_english();
+    group.title = match kind {
+        ReportProblemKind::CodeWeakness => representative.title.clone(),
+        _ => group.title_english(),
+    };
     Some(group)
 }
 
@@ -659,7 +689,7 @@ fn secret_groups(findings: &[BeginnerFinding], run: &ScanRun) -> Vec<ReportProbl
         let Some(asset_id) = presentation_asset_id(finding, run) else {
             continue;
         };
-        let Some((path, line)) = agreed_secret_place(finding) else {
+        let Some((path, line)) = agreed_source_place(finding) else {
             continue;
         };
         buckets
@@ -689,6 +719,81 @@ fn secret_groups(findings: &[BeginnerFinding], run: &ScanRun) -> Vec<ReportProbl
             )
         })
         .collect()
+}
+
+fn code_groups(findings: &[BeginnerFinding], run: &ScanRun) -> Vec<ReportProblemGroup> {
+    struct Candidate<'a> {
+        finding: &'a BeginnerFinding,
+        ids: BTreeSet<String>,
+    }
+    let mut buckets = BTreeMap::<(Id, String, u32), Vec<Candidate<'_>>>::new();
+    for finding in findings {
+        if finding.family != Some(FindingFamily::SourceCode) {
+            continue;
+        }
+        if classified_as_hard_coded_credential(finding) {
+            continue;
+        }
+        let ids = code_weakness_ids(finding);
+        if ids.is_empty()
+            || ids
+                .iter()
+                .any(|id| HARD_CODED_CREDENTIAL_CWES.contains(&id.as_str()))
+        {
+            continue;
+        }
+        let Some(asset_id) = presentation_asset_id(finding, run) else {
+            continue;
+        };
+        let Some((path, line)) = agreed_source_place(finding) else {
+            continue;
+        };
+        buckets
+            .entry((asset_id, path, line))
+            .or_default()
+            .push(Candidate { finding, ids });
+    }
+
+    let mut groups = Vec::new();
+    for ((asset_id, path, line), candidates) in buckets {
+        let sets = candidates
+            .iter()
+            .map(|candidate| candidate.ids.clone())
+            .collect::<Vec<_>>();
+        for component in intersecting_components(&sets) {
+            if component.len() < 2 {
+                continue;
+            }
+            let members = component
+                .iter()
+                .map(|index| candidates[*index].finding)
+                .collect::<Vec<_>>();
+            let mut union_ids = BTreeSet::new();
+            for index in &component {
+                union_ids.extend(candidates[*index].ids.clone());
+            }
+            let Some(first) = union_ids.first() else {
+                continue;
+            };
+            let resource = format!("{path}:{line}#{first}");
+            if let Some(group) = presented_group(
+                ReportProblemKind::CodeWeakness,
+                asset_id.clone(),
+                &resource,
+                &members,
+                run,
+                PresentedFields {
+                    policy_name: None,
+                    package_name: None,
+                    installed_version: None,
+                    advisory_ids: Vec::new(),
+                },
+            ) {
+                groups.push(group);
+            }
+        }
+    }
+    groups
 }
 
 pub(crate) fn build_problem_groups(
@@ -726,6 +831,7 @@ pub(crate) fn build_problem_groups(
         .collect::<Vec<_>>();
     groups.extend(dependency_groups(findings, run, package_by_finding));
     groups.extend(secret_groups(findings, run));
+    groups.extend(code_groups(findings, run));
     groups
 }
 
@@ -1573,6 +1679,47 @@ pub(crate) mod tests {
         case
     }
 
+    pub(crate) fn code_title_redaction_case() -> AssessmentCase {
+        let mut case = local_folder_case(&["semgrep"]);
+        case.profile.organization_name = "AcmeCorp".into();
+        let default_record = |id: &'static str, severity: Severity| Record {
+            id,
+            engine: "semgrep",
+            rule: "test-rule",
+            family: Some(FindingFamily::SourceCode),
+            severity,
+            location: "app.py:line=19",
+            version: None,
+            aliases: &[],
+            cwes: &["CWE-78"],
+            packages: &[],
+            asset_id: "localhost-asset",
+            task_id: "semgrep",
+            expert: "Application security engineer",
+        };
+        add_record(&mut case, default_record("left", Severity::High));
+        add_record(&mut case, default_record("right", Severity::Medium));
+
+        let title = "Shell call in the acmecorp billing handler";
+        for finding in case
+            .findings
+            .iter_mut()
+            .filter(|finding| finding.id.as_str() == "left")
+        {
+            finding.title = title.to_owned();
+        }
+        for snapshot in case
+            .finding_observations
+            .iter_mut()
+            .filter(|observation| observation.finding_id.as_str() == "left")
+            .filter_map(|observation| observation.finding_snapshot.as_mut())
+        {
+            snapshot.title = title.to_owned();
+        }
+
+        case
+    }
+
     fn covered_ids(step: &crate::beginner_report::BeginnerNextStep) -> BTreeSet<String> {
         step.finding_id
             .iter()
@@ -1599,10 +1746,10 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn demo_like_report_collapses_26_findings_to_17_problem_cards() {
+    fn demo_like_report_collapses_26_findings_to_13_problem_cards() {
         let report = build_beginner_master_report(&demo_like_case(), "run-1").unwrap();
         assert_eq!(report.findings.len(), 26);
-        assert_eq!(report.problem_findings().len(), 17);
+        assert_eq!(report.problem_findings().len(), 13);
         let dependencies = report
             .problem_groups
             .iter()
@@ -1750,10 +1897,10 @@ pub(crate) mod tests {
                 .collect::<BTreeSet<_>>()
                 .len()
         };
-        // The five secret findings are one revoke step. The five CWE-78
-        // findings stay on the code-change step, each as its own problem.
+        // The five secret findings are one revoke step. The five CWE-78 findings on one
+        // line are one code card on the code-change step.
         assert_eq!(rendered_count(secret_step), 1);
-        assert_eq!(rendered_count(code_step), 5);
+        assert_eq!(rendered_count(code_step), 1);
         assert_eq!(
             finding_next_action_english(&code_step.action, code_step.family, None, false),
             "Change the code to remove the reported unsafe pattern."
@@ -1763,7 +1910,33 @@ pub(crate) mod tests {
             .iter()
             .filter(|finding| finding.finding_id.starts_with("code-"))
             .count();
-        assert_eq!(code_rules, 5);
+        assert_eq!(code_rules, 1);
+
+        let code_groups = report
+            .problem_groups
+            .iter()
+            .filter(|group| group.kind == ReportProblemKind::CodeWeakness)
+            .collect::<Vec<_>>();
+        assert_eq!(code_groups.len(), 1);
+        let code_group = code_groups[0];
+        assert_eq!(code_group.rule_version, CODE_RULE_VERSION);
+        assert_eq!(
+            code_group
+                .finding_ids
+                .iter()
+                .cloned()
+                .collect::<BTreeSet<_>>(),
+            (1..=5)
+                .map(|index| format!("code-{index}"))
+                .collect::<BTreeSet<_>>()
+        );
+        assert_eq!(code_group.representative_finding_id, "code-1");
+        assert_eq!(code_group.title, "Frozen code-1");
+        assert_eq!(code_group.title_english(), "Frozen code-1");
+        assert_eq!(code_group.title_zh_hant(), "Frozen code-1");
+        assert!(code_group.next_step_english().is_none());
+        assert!(code_group.next_step_zh_hant().is_none());
+        assert!(code_group.impact_english().is_none());
     }
 
     fn pair_case(left_alias: &[&str], right_alias: &[&str]) -> AssessmentCase {
@@ -2178,4 +2351,140 @@ pub(crate) mod tests {
             Severity::High
         );
     }
+
+    #[test]
+    fn code_cards_share_one_line_and_a_cwe() {
+        let mut case = local_folder_case(&["semgrep", "kics"]);
+        let default_record = |id: &'static str,
+                              location: &'static str,
+                              severity: Severity,
+                              cwes: &'static [&'static str]| Record {
+            id,
+            engine: "semgrep",
+            rule: "test-rule",
+            family: Some(FindingFamily::SourceCode),
+            severity,
+            location,
+            version: None,
+            aliases: &[],
+            cwes,
+            packages: &[],
+            asset_id: "localhost-asset",
+            task_id: "semgrep",
+            expert: "Application security engineer",
+        };
+
+        add_record(
+            &mut case,
+            default_record("a", "app.py:line=19:column=14", Severity::High, &["CWE-78"]),
+        );
+        add_record(
+            &mut case,
+            default_record(
+                "b",
+                "./app.py:line=19:column=56",
+                Severity::Medium,
+                &["cwe-78", "CWE-88"],
+            ),
+        );
+        add_record(
+            &mut case,
+            default_record("c", "app.py:line=19:column=29", Severity::Low, &["CWE-88"]),
+        );
+        add_record(
+            &mut case,
+            default_record("d", "app.py:line=19", Severity::Medium, &["CWE-502"]),
+        );
+        add_record(
+            &mut case,
+            default_record("d2", "app.py:line=19", Severity::Low, &["CWE-502"]),
+        );
+        add_record(
+            &mut case,
+            default_record("e", "app.py:line=19", Severity::High, &[]),
+        );
+        add_record(
+            &mut case,
+            default_record("f", "app.py:line=20", Severity::High, &["CWE-78"]),
+        );
+        add_record(
+            &mut case,
+            default_record("g", "other.py:line=19", Severity::High, &["CWE-78"]),
+        );
+
+        let mut h = default_record("h", "app.py:line=19", Severity::High, &["CWE-78"]);
+        h.engine = "kics";
+        h.task_id = "kics";
+        h.family = Some(FindingFamily::InfrastructureAsCode);
+        add_record(&mut case, h);
+
+        add_record(
+            &mut case,
+            default_record(
+                "i",
+                "app.py:line=19",
+                Severity::High,
+                &["CWE-78", "CWE-798"],
+            ),
+        );
+
+        let report = build_beginner_master_report(&case, "run-1").unwrap();
+
+        let code_groups = report
+            .problem_groups
+            .iter()
+            .filter(|g| g.kind == ReportProblemKind::CodeWeakness)
+            .collect::<Vec<_>>();
+        assert_eq!(code_groups.len(), 2);
+
+        let group_abc = code_groups
+            .iter()
+            .find(|g| g.representative_finding_id == "a")
+            .unwrap();
+        assert_eq!(
+            group_abc
+                .finding_ids
+                .iter()
+                .cloned()
+                .collect::<BTreeSet<_>>(),
+            ["a", "b", "c"]
+                .into_iter()
+                .map(String::from)
+                .collect::<BTreeSet<_>>()
+        );
+        assert_eq!(group_abc.title, "Frozen a");
+
+        let group_d = code_groups
+            .iter()
+            .find(|g| g.representative_finding_id == "d")
+            .unwrap();
+        assert_eq!(
+            group_d.finding_ids.iter().cloned().collect::<BTreeSet<_>>(),
+            ["d", "d2"]
+                .into_iter()
+                .map(String::from)
+                .collect::<BTreeSet<_>>()
+        );
+
+        assert_ne!(group_abc.group_id, group_d.group_id);
+        assert!(group_abc.group_id.starts_with("report-problem:"));
+        assert!(group_d.group_id.starts_with("report-problem:"));
+
+        let problem_findings = report
+            .problem_findings()
+            .iter()
+            .map(|f| f.finding_id.as_str())
+            .collect::<BTreeSet<_>>();
+        assert!(problem_findings.contains("a"));
+        assert!(problem_findings.contains("d"));
+        assert!(!problem_findings.contains("b"));
+        assert!(!problem_findings.contains("c"));
+        assert!(!problem_findings.contains("d2"));
+        assert!(problem_findings.contains("e"));
+        assert!(problem_findings.contains("f"));
+        assert!(problem_findings.contains("g"));
+        assert!(problem_findings.contains("h"));
+        assert!(problem_findings.contains("i"));
+    }
+
 }

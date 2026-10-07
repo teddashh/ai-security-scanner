@@ -120,3 +120,16 @@ test("package and secret cards use the recorded fields and the secret remedy", (
   assert.equal(problemGroupAction(secret, "en"), "Revoke and rotate the exposed credential, then remove it from the source and every retained history entry.");
   assert.equal(problemGroupAction(secret, "zh-TW"), "先撤銷並輪替這組已外洩的憑證，再從原始碼以及仍保留它的歷史紀錄中移除。");
 });
+
+test("code weakness cards use the recorded title and omit card-level next step and impact", () => {
+  const weakness = {
+    ...group,
+    kind: "code_weakness" as const,
+    title: "A subprocess launched through a shell can allow command injection.",
+  };
+  for (const locale of ["en", "zh-TW"] as const) {
+    assert.equal(problemGroupTitle(weakness, locale), weakness.title);
+    assert.equal(problemGroupAction(weakness, locale), undefined);
+    assert.equal(problemGroupImpact(weakness, locale), undefined);
+  }
+});
