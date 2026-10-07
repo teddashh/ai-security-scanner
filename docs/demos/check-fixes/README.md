@@ -18,7 +18,7 @@ The reports show related findings as one problem; for example, five tools' detec
 - **Scan times:** Scan 1 ran from 01:11:59 to 01:24:36 UTC, Scan 2 from 01:26:25 to 01:38:04 UTC, on October 7, 2026. The screenshots show the test computer's local time (UTC−4), the evening of October 6.
 - **Project:** a small Flask service written for this demo, with five planted problems. The fix commit removed the deploy key, switched to `yaml.safe_load`, upgraded PyYAML from 5.3.1 to 6.0.2, ran the container as a non-root user and turned on Flask debug mode on purpose. The project is not published, because it contains the planted private key. That key was created for this demo and never used anywhere.
 - **Reports:** saved with the app's HTML exporter and the `standard` redaction profile (**Hide sensitive identifiers**), using commit [`e663b0a`](https://github.com/teddashh/ai-security-scanner/commit/e663b0a). The files are unchanged exports; [SHA256SUMS.txt](SHA256SUMS.txt) lists their hashes.
-- **Screenshots:** taken from the app window, built from commit `e663b0a`, after both scans had finished; then cropped and converted to WebP. Nothing else was edited.
+- **Screenshots:** taken from the app window, built from commit `e663b0a` (the comparison screenshot from `dff42c2`), after both scans had finished; then cropped and converted to WebP. Nothing else was edited.
 
 ## Not covered
 
