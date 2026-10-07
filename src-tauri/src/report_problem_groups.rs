@@ -537,10 +537,17 @@ fn presented_group(
     if members.len() < 2 {
         return None;
     }
+    // Equal severity and priority fall back to the scanner and its rule, which a
+    // later scan reports again; finding IDs change when a line moves, so a card
+    // keeps its representative, and a code card its title, across scans.
     let representative = members.iter().min_by_key(|finding| {
         (
             std::cmp::Reverse(severity_rank(&finding.severity)),
             std::cmp::Reverse(finding.priority.unwrap_or(0)),
+            finding
+                .evidence_references
+                .first()
+                .map(|evidence| (evidence.engine_id.as_str(), evidence.source_rule.as_deref())),
             &finding.finding_id,
         )
     })?;
@@ -2487,4 +2494,43 @@ pub(crate) mod tests {
         assert!(problem_findings.contains("i"));
     }
 
+    #[test]
+    fn a_tied_card_keeps_its_rule_as_representative_when_finding_ids_change() {
+        // A moved line gives every finding a new ID in the next scan. Between
+        // equal members the representative follows the scanner and rule.
+        for (shell_id, injection_id) in [("m-1", "m-2"), ("m-2", "m-1")] {
+            let mut case = local_folder_case(&["semgrep"]);
+            for (id, rule) in [
+                (shell_id, "python.audit.shell-true"),
+                (injection_id, "python.injection.subprocess"),
+            ] {
+                add_record(
+                    &mut case,
+                    Record {
+                        id,
+                        engine: "semgrep",
+                        rule,
+                        family: Some(FindingFamily::SourceCode),
+                        severity: Severity::High,
+                        location: "app.py:line=21:column=14",
+                        version: None,
+                        aliases: &[],
+                        cwes: &["CWE-78"],
+                        packages: &[],
+                        asset_id: "localhost-asset",
+                        task_id: "semgrep",
+                        expert: "Application security engineer",
+                    },
+                );
+            }
+            let report = build_beginner_master_report(&case, "run-1").unwrap();
+            let group = report
+                .problem_groups
+                .iter()
+                .find(|group| group.kind == ReportProblemKind::CodeWeakness)
+                .unwrap();
+            assert_eq!(group.representative_finding_id, shell_id);
+            assert_eq!(group.title, format!("Frozen {shell_id}"));
+        }
+    }
 }
