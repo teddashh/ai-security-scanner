@@ -10,12 +10,20 @@
 
 ## 完成第一次掃描
 
-1. [下載 v0.4.1](https://github.com/teddashh/ai-security-scanner/releases/tag/v0.4.1)，依你的 Windows、macOS 或 Linux 電腦[完成安裝](docs/getting-started.zh-TW.md#安裝)。程式會準備掃描工具，不需要另外安裝 Docker。
+1. [下載 v0.5.0](https://github.com/teddashh/ai-security-scanner/releases/tag/v0.5.0)，依你的 Windows、macOS 或 Linux 電腦[完成安裝](docs/getting-started.zh-TW.md#安裝)。程式會準備掃描工具，不需要另外安裝 Docker。
 2. 開啟程式，選擇**掃描公司環境**、**檢查網站**或**檢查程式碼或 AI 專案**，加入想檢查的資料夾、網址或內部系統。
 3. 確認畫面列出的目標與檢查內容。網站及內部系統必須是你有權檢查的對象，再從應用程式視窗開始掃描。
 4. 掃描結束後，打開**掃描結果**。按**保存或分享報告**，再儲存 **HTML 報告**，就能用瀏覽器閱讀。
 
 第一次可能需要等候工具下載，之後可以重複使用。每個畫面的操作方式都在[開始使用](docs/getting-started.zh-TW.md#從開始新掃描到-html-報告)。
+
+## v0.5.0 更新
+
+- 相關發現合併成一張問題卡，展開細節仍可查看原始證據。
+- 用**確認修復**重新選取修改後的資料夾，比對這次沒有再看到、仍然存在與新增的問題，也能看出部分修復的情況。
+- 改善雲端說明、進度與工具版本資訊，補齊中英文指南及[真實修復前後範例](https://teddashh.github.io/ai-security-scanner/check-fixes-demo.html?lang=zh-TW)。
+
+本版收納 v0.4.1 之後所有已完成更新，並包含 Linux 建置與依賴安全修正。[查看完整更新](docs/release/v0.5.0.zh-TW.md)。
 
 ## 可以檢查什麼？
 
@@ -145,7 +153,7 @@
 - [掃描範圍](docs/scanning-scope.zh-TW.md)
 - [閱讀與分享結果](docs/results-and-exports.zh-TW.md)
 - [目前開發狀態](docs/development-status.zh-TW.md)
-- [v0.4.1 更新](docs/release/v0.4.1.zh-TW.md) · [v0.3.1 更新](docs/release/v0.3.1.md)
+- [v0.5.0 更新](docs/release/v0.5.0.zh-TW.md) · [v0.3.1 更新](docs/release/v0.3.1.md)
 - [參與開發](CONTRIBUTING.md) · [貢獻者](CONTRIBUTORS.md) · [安全政策](SECURITY.md)
 
 ## 開發

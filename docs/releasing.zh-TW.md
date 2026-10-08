@@ -6,11 +6,11 @@
 
 ## 目前發布版本
 
-[v0.4.1](https://github.com/teddashh/ai-security-scanner/releases/tag/v0.4.1) 是目前的 **stable／latest** 桌面版本，於 2026-10-05 發布，涵蓋 **Linux、macOS、Windows**。[候選 37333229133](https://github.com/teddashh/ai-security-scanner/actions/runs/37333229133) 建置精確來源 `94ef7be18e83630553d9a72746b0533695df1ee2`；[Promotion 37341283323](https://github.com/teddashh/ai-security-scanner/actions/runs/37341283323) 經 `release-publication` environment 正常核准後，不重新建置即發布凍結檔案。全部 49 個公開檔案已匿名下載並符合凍結檢查碼，來源 provenance 與更新簽章亦獨立驗證通過。見[中英文交付紀錄](release/v0.4.1.zh-TW.md)。
+[v0.5.0](https://github.com/teddashh/ai-security-scanner/releases/tag/v0.5.0) 是目前的 **stable／latest** 桌面版本，於 2026-10-08 發布，涵蓋 **Linux、macOS、Windows**。[候選 37811175599](https://github.com/teddashh/ai-security-scanner/actions/runs/37811175599) 建置精確來源 `66f2b71980cacfeff75ee7c1ad8ced70e01f3007`；[發布流程 37817750645](https://github.com/teddashh/ai-security-scanner/actions/runs/37817750645) 經 `release-publication` 正常核准後，直接發布凍結檔案。全部 49 個公開檔案已匿名下載並符合凍結檢查碼；來源證明與更新簽章均獨立驗證通過。見[交付紀錄](release/v0.5.0.zh-TW.md)。
 
-GitHub 記錄 `prerelease: false`；凍結 metadata 記錄 `releaseChannel: stable`、`stableTarget: 0.4.1`。macOS 與 Windows NSIS 有更新目標，Debian 與 MSI 沒有。Windows 安裝檔未簽章，macOS 未經公證；Windows 生命週期／資料保留與 exact-candidate 新手真人操作均未觀察，macOS qualification 主機也未觀察 managed runtime 執行。不提供 AppImage 與 RPM。各安裝檔證據與檢查碼見交付紀錄。
+GitHub 記錄 `prerelease: false`；metadata 記錄 `releaseChannel: stable`、`stableTarget: 0.5.0`。macOS 與 Windows NSIS 有更新目標，Debian 與 MSI 沒有。Windows 安裝檔未簽章，macOS 未公證；Windows 生命週期／資料保留與精確候選新手真人操作仍未觀察，macOS qualification 主機也未觀察 managed runtime 執行。不提供 AppImage 與 RPM。各安裝檔證據與檢查碼見交付紀錄。
 
-前一個正式版 [v0.4.0](release/v0.4.0.zh-TW.md) 與更早版本保留原始檔案及觀察。
+前一個正式版 [v0.4.1](release/v0.4.1.zh-TW.md) 與更早版本保留原始檔案及觀察。
 
 ## 版本身分
 

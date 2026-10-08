@@ -10,12 +10,20 @@ Choose what to check in the desktop app. It selects suitable security tools and 
 
 ## Run your first scan
 
-1. [Download v0.4.1](https://github.com/teddashh/ai-security-scanner/releases/tag/v0.4.1) for Windows, macOS or Linux and [follow the install steps](docs/getting-started.md#install). The app prepares its scanning tools; you do not need to install Docker.
+1. [Download v0.5.0](https://github.com/teddashh/ai-security-scanner/releases/tag/v0.5.0) for Windows, macOS or Linux and [follow the install steps](docs/getting-started.md#install). The app prepares its scanning tools; you do not need to install Docker.
 2. Open the app and choose **Scan my environment**, **Check a website**, or **Check code or an AI project**. Add the folders, URLs or internal systems you want to check.
 3. Review the listed targets and checks. Confirm that you may scan any network targets, then start the scan in the app window.
 4. When the scan ends, open **Results**. Choose **Save or share report**, then **Save HTML report** to save a report you can open in a browser.
 
 The first scan may take longer while tools download. Later scans can use those tools again. The [walkthrough](docs/getting-started.md#from-new-scan-to-an-html-report) shows each screen.
+
+## New in v0.5.0
+
+- Read related findings as one problem card, with the original evidence available in its details.
+- Choose your updated folders again with **Check fixes** and compare problems that no longer appear, remain or are new, including partial fixes.
+- Get clearer cloud guidance, progress and scanner version information, plus bilingual guides and a [real before-and-after example](https://teddashh.github.io/ai-security-scanner/check-fixes-demo.html).
+
+This release brings together the completed updates since v0.4.1 and includes Linux build and dependency security fixes. [Read the full changes](docs/release/v0.5.0.md).
 
 ## What can it check?
 
@@ -145,7 +153,7 @@ Tools still under evaluation are tracked separately and are not available for sc
 - [Scan coverage](docs/scanning-scope.md)
 - [Reading and sharing results](docs/results-and-exports.md)
 - [Current development status](docs/development-status.md)
-- [Changes in v0.4.1](docs/release/v0.4.1.md) · [Earlier changes in v0.3.1](docs/release/v0.3.1.md)
+- [Changes in v0.5.0](docs/release/v0.5.0.md) · [Earlier changes in v0.3.1](docs/release/v0.3.1.md)
 - [Contributing](CONTRIBUTING.md) · [Contributors](CONTRIBUTORS.md) · [Security policy](SECURITY.md)
 
 ## Development

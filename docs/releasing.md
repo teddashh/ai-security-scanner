@@ -6,11 +6,11 @@ The product owner selects the version, channel, source commit, supported install
 
 ## Current release
 
-[v0.4.1](https://github.com/teddashh/ai-security-scanner/releases/tag/v0.4.1) is the current **stable/latest** desktop release for **Linux, macOS and Windows**, published on 2026-10-05. [Candidate 37333229133](https://github.com/teddashh/ai-security-scanner/actions/runs/37333229133) built exact source `94ef7be18e83630553d9a72746b0533695df1ee2`; [Promotion 37341283323](https://github.com/teddashh/ai-security-scanner/actions/runs/37341283323) published the frozen files without rebuilding after normal approval in the `release-publication` environment. All 49 public assets were anonymously downloaded and matched the frozen checksums; source-bound provenance and updater signatures were independently verified. See the [bilingual delivery record](release/v0.4.1.md).
+[v0.5.0](https://github.com/teddashh/ai-security-scanner/releases/tag/v0.5.0) is the current **stable/latest** desktop release for **Linux, macOS and Windows**, published on 2026-10-08. [Candidate 37811175599](https://github.com/teddashh/ai-security-scanner/actions/runs/37811175599) built exact source `66f2b71980cacfeff75ee7c1ad8ced70e01f3007`; [promotion 37817750645](https://github.com/teddashh/ai-security-scanner/actions/runs/37817750645) published the frozen files without rebuilding after normal `release-publication` approval. All 49 public assets were downloaded anonymously and matched the frozen checksums; source provenance and updater signatures were independently verified. See the [delivery record](release/v0.5.0.md).
 
-GitHub records `prerelease: false`; frozen metadata records `releaseChannel: stable` and `stableTarget: 0.4.1`. macOS and Windows NSIS have updater targets; Debian and MSI do not. Windows installers are unsigned; macOS is not notarized. Windows lifecycle/data-preservation and exact-candidate beginner human-path observations remain absent; macOS managed-runtime execution was not observed on the qualification host. AppImage and RPM are not offered. Installer-specific evidence and checksums are in the delivery record.
+GitHub records `prerelease: false`; metadata records `releaseChannel: stable` and `stableTarget: 0.5.0`. macOS and Windows NSIS have updater targets; Debian and MSI do not. Windows installers are unsigned; macOS is not notarized. Windows lifecycle/data-preservation and exact-candidate beginner human-path observations remain absent; macOS managed-runtime execution was not observed on the qualification host. AppImage and RPM are not offered. Installer-specific evidence and checksums are in the delivery record.
 
-The previous stable [v0.4.0](release/v0.4.0.md) and earlier releases retain their original files and observations.
+The previous stable [v0.4.1](release/v0.4.1.md) and earlier releases retain their original files and observations.
 
 ## Release identity
 
