@@ -177,5 +177,26 @@
     60,
     61
   ],
-  "supersededLocalBranch": "semgrep-combined-local"
+  "supersededLocalBranch": "semgrep-combined-local",
+  "packagePreparation": {
+    "linuxBuildPins": {
+      "zlib-dev": "1.3.2-r1",
+      "zlib-static": "1.3.2-r1",
+      "libseccomp-static": "2.6.1-r0"
+    },
+    "securityDependencyUpdates": [
+      {
+        "package": "rustls",
+        "version": "0.23.45",
+        "scope": "runtime",
+        "advisory": "GHSA-2mjx-qc3c-rqvc"
+      },
+      {
+        "package": "source-map-js",
+        "version": "1.2.2",
+        "scope": "development",
+        "advisory": "GHSA-68fv-2mgg-jv7q"
+      }
+    ]
+  }
 }
