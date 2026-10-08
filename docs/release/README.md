@@ -8,6 +8,8 @@ The [2026-10-03 desktop delivery record](desktop-readiness-2026-10-03.md) record
 
 The current stable release is [v0.4.1](v0.4.1.md).
 
+[v0.5.0 consolidated package](v0.5.0.md) ([繁體中文](v0.5.0.zh-TW.md)) collects all completed updates since v0.4.1 and is being prepared for installer verification.
+
 This directory contains historical release records, exact delivery observations, artifact references, and schemas. It is not the product roadmap.
 
 ## Version records

@@ -1,0 +1,181 @@
+{
+  "schemaVersion": 1,
+  "version": "0.5.0",
+  "reviewedOn": "2026-10-08",
+  "previousVersion": "0.4.1",
+  "baseSourceCommit": "94ef7be18e83630553d9a72746b0533695df1ee2",
+  "includedThroughCommit": "c5a0a6693a1ad9997ee16b9a3d690d38a44b7406",
+  "commitCount": 32,
+  "commits": [
+    {
+      "commit": "f7754cc6c2f75f3cf8cf41a9962b0d348a28c58d",
+      "committedAt": "2026-10-05T12:45:43-04:00",
+      "subject": "Publish v0.4.1 delivery records and update desktop downloads"
+    },
+    {
+      "commit": "0a0b42da5216c24bef40caf42bc56a6146732a61",
+      "committedAt": "2026-10-06T01:16:20-04:00",
+      "subject": "Say when a scan partly completed or failed, and stop asking inventory checks for updates"
+    },
+    {
+      "commit": "84b0d00576eb3e1f75a9e86e7b6bff870d9ed5ce",
+      "committedAt": "2026-10-06T01:16:24-04:00",
+      "subject": "Give cloud configuration findings a fitting next step and label identities and cloud resources"
+    },
+    {
+      "commit": "191e4242808fab52741d23a4e97da0cc0f39cec1",
+      "committedAt": "2026-10-06T01:16:28-04:00",
+      "subject": "Correct engine docs, catalog output formats and demo versions to match what ships"
+    },
+    {
+      "commit": "1cdec395be218fb7e4d1399ad332bd9ae65332de",
+      "committedAt": "2026-10-06T02:28:17-04:00",
+      "subject": "Show each scanner's version and last-updated date instead of calling its knowledge expired"
+    },
+    {
+      "commit": "64c8e201977d620179283e99ca9ab671898df3ea",
+      "committedAt": "2026-10-06T04:03:43-04:00",
+      "subject": "Show source-built scanners by the version they report and a short commit"
+    },
+    {
+      "commit": "8933ea223b7f3a0c23b2844f457dba14b1f9d292",
+      "committedAt": "2026-10-06T06:37:22-04:00",
+      "subject": "Introduce each scanner by what it is, how it works and why it is included"
+    },
+    {
+      "commit": "a86790d25240fa09d96e7078defd2b301bae94bc",
+      "committedAt": "2026-10-06T06:37:22-04:00",
+      "subject": "Say whether grouped next steps share one fix, and where and how to confirm each"
+    },
+    {
+      "commit": "24bc38811bb7070731aad4f752254c99b2cd59ee",
+      "committedAt": "2026-10-06T08:46:17-04:00",
+      "subject": "Keep the scanner's severity apart from its benchmark and this product's order"
+    },
+    {
+      "commit": "054e716c724f40cbb2b30f6adc7b7c42facc900a",
+      "committedAt": "2026-10-06T11:30:47-04:00",
+      "subject": "Let Check fixes read a local folder chosen again"
+    },
+    {
+      "commit": "85d753bf49a93f3fa99b4c8cd35877cd98b1f722",
+      "committedAt": "2026-10-06T12:06:48-04:00",
+      "subject": "Publish a real fix-and-check-again demo"
+    },
+    {
+      "commit": "077c1b7ea0265e2e7c50218ae025ce16b4b347db",
+      "committedAt": "2026-10-06T13:15:24-04:00",
+      "subject": "Add animated diagrams that explain scans, routing, trust, rechecks, reports, and model limits (#62)"
+    },
+    {
+      "commit": "760e4c5d78a59d6d225654ace6d10ffc29cdd040",
+      "committedAt": "2026-10-06T14:01:10-04:00",
+      "subject": "Count Problems found on My scans from the latest finished scan"
+    },
+    {
+      "commit": "f02a30dd23ad12cd369c5192fc35a893c8a11c6b",
+      "committedAt": "2026-10-06T14:01:10-04:00",
+      "subject": "Show what changed since the earlier scan in a Check fixes report"
+    },
+    {
+      "commit": "b5f4ca2e54ba49d3db641e19454c14dff2037a0d",
+      "committedAt": "2026-10-06T14:03:40-04:00",
+      "subject": "Open the demo's Scan 2 report with the comparison"
+    },
+    {
+      "commit": "bd700ca7c8b760900eca25aecc74b02dc8182324",
+      "committedAt": "2026-10-06T14:07:11-04:00",
+      "subject": "Keep scanner and asset IDs out of a moved problem's Chinese explanation"
+    },
+    {
+      "commit": "520dc5ca914988d84d51e3d5109bea75388ec623",
+      "committedAt": "2026-10-06T14:20:24-04:00",
+      "subject": "List a Check fixes report's changes in the report's own order"
+    },
+    {
+      "commit": "219896fd09d9c7222a4c87ffcd5665955a817b7a",
+      "committedAt": "2026-10-06T14:32:41-04:00",
+      "subject": "List the demo's Scan 2 changes in the report's own order"
+    },
+    {
+      "commit": "27583312ad98156de243001ff5b32368d2cb75e3",
+      "committedAt": "2026-10-06T16:26:34-04:00",
+      "subject": "Call the demo a real scan example and link it from the header"
+    },
+    {
+      "commit": "7278569faedcc4daaff6a92746388a45c09fa1a8",
+      "committedAt": "2026-10-06T19:24:20-04:00",
+      "subject": "Rewrite the diagram text in plain language (#63)"
+    },
+    {
+      "commit": "e67b555069654eb98d2519e2efb57dc09cc43019",
+      "committedAt": "2026-10-06T21:06:32-04:00",
+      "subject": "Show the same vulnerable package and the same exposed secret as one card"
+    },
+    {
+      "commit": "83e516e1aae3b4c06e11fdb32ea0f46e7d9d04bb",
+      "committedAt": "2026-10-06T21:06:32-04:00",
+      "subject": "Count Check fixes by problem card"
+    },
+    {
+      "commit": "bca90a892fa6ff84743c1493f0f6a7355be958f9",
+      "committedAt": "2026-10-06T21:06:32-04:00",
+      "subject": "Show a card's original-findings count in the card's small text"
+    },
+    {
+      "commit": "861843df945dcc9a62375fc08373b50a9eeb655a",
+      "committedAt": "2026-10-06T21:59:35-04:00",
+      "subject": "Show code findings on one line that share a CWE as one card"
+    },
+    {
+      "commit": "c01cb61fc8699e1c9f572bc64b1d747025227347",
+      "committedAt": "2026-10-06T21:59:45-04:00",
+      "subject": "Keep a card's representative when the next scan moves its line"
+    },
+    {
+      "commit": "ebdfd9f648eb35672efbd2bf55551bd5fcb0cbe9",
+      "committedAt": "2026-10-06T21:59:46-04:00",
+      "subject": "Say how many original findings a partly fixed card still has"
+    },
+    {
+      "commit": "e663b0a8d7f1a09fb73e1a1a04605acb99ac34de",
+      "committedAt": "2026-10-06T22:07:45-04:00",
+      "subject": "Name the file and line on a code or secret card in Start here"
+    },
+    {
+      "commit": "f76249a2be6bdde79d1af154dacb6b8b23487a70",
+      "committedAt": "2026-10-06T22:23:51-04:00",
+      "subject": "Refresh the real scan example with problem cards"
+    },
+    {
+      "commit": "9f9c255cf0a9f1ea8cbb94cb73db7cab81edaae7",
+      "committedAt": "2026-10-06T22:57:58-04:00",
+      "subject": "Specify same-line code cards and partly fixed counts"
+    },
+    {
+      "commit": "171033dbd1d87a2fa5040219fc13a2c99f7e18a3",
+      "committedAt": "2026-10-06T23:16:40-04:00",
+      "subject": "Show the representative the report chose on a problem card"
+    },
+    {
+      "commit": "dff42c237a83b8fec9386fa77f34cad94b12083b",
+      "committedAt": "2026-10-06T23:16:55-04:00",
+      "subject": "List Check fixes problems in the order Results shows them"
+    },
+    {
+      "commit": "c5a0a6693a1ad9997ee16b9a3d690d38a44b7406",
+      "committedAt": "2026-10-06T23:20:32-04:00",
+      "subject": "Retake the real scan example's comparison screenshots"
+    }
+  ],
+  "unmergedDependencyPullRequests": [
+    36,
+    53,
+    54,
+    58,
+    59,
+    60,
+    61
+  ],
+  "supersededLocalBranch": "semgrep-combined-local"
+}

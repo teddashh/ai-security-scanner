@@ -331,6 +331,42 @@ const RELEASE_COPY = new Map([
     },
   ],
   [
+    "0.5.0",
+    {
+      updaterNotes:
+        "Clearer problem cards, reliable Check fixes comparisons, local-folder reselection, and scanner version details. 問題卡合併、修復後重掃比對、重新選取本機資料夾與工具版本資訊全面整合。",
+      releaseNotes: [
+        "ai-security-scanner 0.5.0 brings together the desktop and report updates since 0.4.1 for Linux, macOS, and Windows.",
+        "",
+        "- Results group the same vulnerable package, exposed secret, or same-line code issue into one problem card, while retaining original findings, scanner evidence and provenance.",
+        "- Check fixes compares problem cards, keeps their representative when a code line moves, and shows how many original findings remain in a partly fixed problem. The app and HTML report use the same problem order.",
+        "- Reselect a local project folder before checking fixes; the scan uses a fresh read-only snapshot within the approved scope. My scans shows the latest finished scan's problem count.",
+        "- Cloud configuration and identity findings have fitting labels and next steps. Reports distinguish upstream severity, benchmark classifications and the product's priority order, and explain whether grouped next steps share one fix.",
+        "- Progress clearly distinguishes partial completion and failure. Scanner details show versions and update dates, and inventory checks no longer request irrelevant vulnerability-data updates.",
+        "- The bilingual real scan example includes before/after reports and refreshed screenshots. Animated guides explain scans, routing, trust, rechecks, reports and model-check limits; scanner guides explain each tool's purpose and boundaries.",
+        "",
+        "### 繁體中文",
+        "",
+        "0.5.0 整合 v0.4.1 之後的桌面與報告更新，提供 Linux、macOS 與 Windows 安裝包。",
+        "",
+        "- 相同弱點套件、相同外洩秘密，以及同一行且同一 CWE 的程式碼問題合併成一張問題卡，保留原始發現、工具證據與來源。",
+        "- 修復後重掃以問題卡比對，程式碼行號移動時保留代表發現；部分修復會顯示尚存的原始發現數。介面與 HTML 報告採用一致的問題排序。",
+        "- 重掃前可重新選取本機專案資料夾，以核准範圍內的新唯讀快照檢查；我的掃描顯示最近完成掃描的問題數。",
+        "- 雲端設定與身分發現採用合適的標籤和下一步；區分上游嚴重度、基準分類與產品處理順序，說明合併建議是否共用一項修正。",
+        "- 進度清楚區分部分完成與失敗；工具詳細資訊顯示版本和更新日期，盤點工具不再要求不適用的弱點資料更新。",
+        "- 中英文真實掃描範例更新前後報告與截圖；動畫圖解說明掃描、派送、信任邊界、重掃、報告與模型檢查限制，工具指南補齊各工具用途與範圍。",
+        "",
+        "Windows installers are unsigned; macOS is not notarized. / Windows 安裝檔未簽章，macOS 尚未公證。",
+        "",
+        "On macOS, drag the app to Applications, then remove quarantine from this app if macOS blocks it:",
+        "macOS 請先將程式拖入 Applications；若系統阻擋開啟，再針對此程式移除隔離標記：",
+        "",
+        "    xattr -dr com.apple.quarantine /Applications/ai-security-scanner.app",
+        "",
+      ],
+    },
+  ],
+  [
     "1.0.0",
     {
       updaterNotes:
