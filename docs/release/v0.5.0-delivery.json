@@ -1,0 +1,120 @@
+{
+  "schemaVersion": 1,
+  "version": "0.5.0",
+  "preparedOn": "2026-10-08",
+  "publicationMode": "commit-bound-qc",
+  "published": false,
+  "sourceCommit": "c0d66904c27c13833ef9ec9a7e01dfe397256507",
+  "includedProductCommits": 32,
+  "candidateRun": {
+    "id": 37795210363,
+    "url": "https://github.com/teddashh/ai-security-scanner/actions/runs/37795210363",
+    "conclusion": "success"
+  },
+  "frozenArtifact": {
+    "id": 11560219305,
+    "name": "release-finalized",
+    "runId": 37795210363,
+    "bytes": 575712016,
+    "sha256": "88b4282f9204f02245783c66003a996ba87501e8d075c82186432e190be5c5ed",
+    "fileCount": 49,
+    "localVerification": "passed"
+  },
+  "sourceArchive": {
+    "name": "ai-security-scanner-0.5.0-source.tar.gz",
+    "sizeBytes": 6545828,
+    "sha256": "d8a00fecc66a934a00dd2eee7ca95c513420f25ceec839e0a5da909ec18b0e9d"
+  },
+  "sourceCi": {
+    "runId": 37795211544,
+    "sourceCommit": "c0d66904c27c13833ef9ec9a7e01dfe397256507",
+    "status": "passed",
+    "url": "https://github.com/teddashh/ai-security-scanner/actions/runs/37795211544"
+  },
+  "sourceCodeql": {
+    "runId": 37795211390,
+    "sourceCommit": "c0d66904c27c13833ef9ec9a7e01dfe397256507",
+    "status": "passed",
+    "url": "https://github.com/teddashh/ai-security-scanner/actions/runs/37795211390"
+  },
+  "installers": [
+    {
+      "platform": "linux-x86_64",
+      "installerType": "deb",
+      "file": "ai-security-scanner_0.5.0_amd64.deb",
+      "bytes": 81972946,
+      "sha256": "7e621967d1e4d59d118494d10f2831da52174fa58c2e4c4a081eabdd7afa0fad",
+      "technicalQualification": "passed",
+      "knownLimitations": [
+        "beginner-human-path-not-observed",
+        "operating-system-signing-not-configured",
+        "updater-not-offered-for-this-artifact"
+      ]
+    },
+    {
+      "platform": "macos-universal",
+      "installerType": "dmg",
+      "file": "ai-security-scanner_0.5.0_universal.dmg",
+      "bytes": 123410606,
+      "sha256": "95f5166c04c3175b8022a851c0893739b76a23b9a0b35cf05323bc1418bf5076",
+      "technicalQualification": "installer-passed-runtime-not-observed",
+      "knownLimitations": [
+        "beginner-human-path-not-observed",
+        "operating-system-signing-not-configured",
+        "apple-notarization-not-configured",
+        "managed-runtime-not-observed-on-qualification-host"
+      ]
+    },
+    {
+      "platform": "windows-x86_64",
+      "installerType": "msi",
+      "file": "ai-security-scanner_0.5.0_x64_en-US.msi",
+      "bytes": 55177216,
+      "sha256": "74f8396df78b60219023cfd9ecdd88c0a9b1b86d47e9d3b87d7a5e399d6a2a14",
+      "technicalQualification": "passed",
+      "knownLimitations": [
+        "beginner-human-path-not-observed",
+        "operating-system-signing-not-configured",
+        "windows-lifecycle-not-observed",
+        "windows-data-preservation-not-observed",
+        "updater-not-offered-for-this-artifact"
+      ]
+    },
+    {
+      "platform": "windows-x86_64",
+      "installerType": "nsis",
+      "file": "ai-security-scanner_0.5.0_x64-setup.exe",
+      "bytes": 42176478,
+      "sha256": "6f2276cf170143addb68e1f212326a3162c3e91429445c7703dd31debc93f479",
+      "technicalQualification": "passed",
+      "knownLimitations": [
+        "beginner-human-path-not-observed",
+        "operating-system-signing-not-configured",
+        "windows-lifecycle-not-observed",
+        "windows-data-preservation-not-observed"
+      ]
+    }
+  ],
+  "verification": {
+    "localRustAndGatewayPassed": 2213,
+    "localComponentPassed": 569,
+    "ciFrontendPassed": 935,
+    "ciFrontendSkipped": 0,
+    "releaseEvidencePassed": 203,
+    "ciContractsPassed": 91,
+    "nativeLinuxRuntimeFilesVerified": 114,
+    "renderedAppViews": 16,
+    "packagedCliReportViews": 6,
+    "packagedCliSmokeUsesSyntheticData": true,
+    "dependencyAlertsOpenAfterUpdate": 0
+  },
+  "remainingDependencyProposals": [
+    36,
+    53,
+    54,
+    58,
+    60,
+    61,
+    65
+  ]
+}

@@ -10,7 +10,7 @@ product behavior, and the [current product review](product-audit.md) tracks the 
 
 ## At a glance
 
-- [v0.5.0 package preparation](release/v0.5.0.md) consolidates all 32 commits after the v0.4.1 source: problem-card grouping, Check fixes comparisons, local-folder reselection, latest-scan counts, clearer cloud guidance and scanner details, plus bilingual guides and the real scan example. The published stable release remains v0.4.1 until a separate publication completes.
+- [v0.5.0 validation package](release/v0.5.0.md) consolidates all 32 commits after the v0.4.1 source: problem-card grouping, Check fixes comparisons, local-folder reselection, latest-scan counts, clearer cloud guidance and scanner details, plus bilingual guides and the real scan example. Linux build fixes and two dependency security updates are included. Three-platform packaging, exact-source CI and CodeQL passed; the published stable release remains v0.4.1 until a separate publication completes.
 
 - The current release, [v0.4.1](https://github.com/teddashh/ai-security-scanner/releases/tag/v0.4.1), is on the stable channel for Linux, macOS, and Windows. See the [release record](release/v0.4.1.md) for exact installer and updater observations.
 - The released desktop includes Prowler failure headlines, approved AWS report grouping, reconnect-and-rescan, blocked-scan continuations, Semgrep `1.174.0-4`, and explicit kube-bench/KICS incomplete-coverage handling.
