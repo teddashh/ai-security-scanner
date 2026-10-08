@@ -22,8 +22,8 @@ RUN test "$TARGETPLATFORM" = "linux/amd64" \
       py3-setuptools=80.9.0-r2 \
       py3-wheel=0.46.3-r0 \
       python3=3.12.15-r0 \
-      zlib-dev=1.3.2-r0 \
-      zlib-static=1.3.2-r0
+      zlib-dev=1.3.2-r1 \
+      zlib-static=1.3.2-r1
 
 COPY . /src/
 COPY --from=launcher /qemu-launcher.c /src/ass-qemu-launcher.c
